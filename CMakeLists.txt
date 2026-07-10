@@ -13,6 +13,7 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(ThirdParty/glfw)
+add_subdirectory(ThirdParty/glm)
 
 add_executable(Halcyon Source/main.cpp)
 
@@ -20,7 +21,7 @@ add_executable(Halcyon Source/main.cpp)
 #target_compile_definitions(glfw PRIVATE GLFW_INCLUDE_VULKAN)
 
 # 链接到你的目标
-target_link_libraries(Halcyon PRIVATE glfw)
+target_link_libraries(Halcyon PRIVATE glfw glm::glm)
 
 
 

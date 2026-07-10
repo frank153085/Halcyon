@@ -1,9 +1,22 @@
-#define GLFW_INCLUDE_NONE   // 禁止GLFW自动包含任何图形API头文件（OpenGL/Vulkan都不要）
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <cstdio>
 
 int main()
 {
+    // ---- GLM基本测试：向量与矩阵运算 ----
+    glm::vec3 a(1.0f, 2.0f, 3.0f);
+    glm::vec3 b(4.0f, 5.0f, 6.0f);
+    glm::vec3 sum = a + b;
+
+    printf("GLM测试: (%.1f, %.1f, %.1f)\n", sum.x, sum.y, sum.z);
+
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    printf("GLM矩阵测试: model[3][0] = %.1f (应为1.0)\n", model[3][0]);
+
+    // ---- 原GLFW测试逻辑 ----
     if (!glfwInit())
     {
         printf("GLFW初始化失败\n");
@@ -12,10 +25,8 @@ int main()
 
     printf("GLFW版本: %s\n", glfwGetVersionString());
 
-    // 不创建任何图形上下文，纯窗口测试
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Halcyon - GLFW Test", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "Halcyon - GLFW+GLM Test", nullptr, nullptr);
     if (!window)
     {
         printf("窗口创建失败\n");
