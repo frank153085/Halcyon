@@ -1,0 +1,64 @@
+### CLion / JetBrains IDE ###
+.idea/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-*/
+
+### CMake ###
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+_deps/
+CMakeUserPresets.json
+Testing/
+Makefile
+compile_commands.json
+install_manifest.txt
+
+### 构建输出目录 ###
+build/
+out/
+bin/
+lib/
+
+### 编译产物 ###
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.so.*
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.map
+
+### Vulkan / Shader编译中间产物 ###
+*.spv
+*.spirv
+
+### 第三方库（如通过FetchContent/子模块自动下载，可选择性忽略） ###
+# ThirdParty/*/build/
+
+### 操作系统相关 ###
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+### VS Code（如果偶尔用VSCode打开） ###
+.vscode/
+
+### 日志/临时文件 ###
+*.log
+*.tmp
+*.bak
+
+### Conan / vcpkg（如果用了包管理器，按需保留） ###
+conan.lock
+conaninfo.txt
+conanbuildinfo.*
+vcpkg_installed/
