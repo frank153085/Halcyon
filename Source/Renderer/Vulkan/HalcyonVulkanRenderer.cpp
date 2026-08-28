@@ -1563,6 +1563,13 @@ struct Renderer::Impl {
             glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
         }
         if (!initialized || device == VK_NULL_HANDLE || deviceLost) {
+            if (deviceLost) {
+                // Device loss is not recoverable for this renderer instance;
+                // make the public state agree with the documented policy even
+                // when the loss was observed while waiting for a resize.
+                initialized = false;
+                fatalError = true;
+            }
             if (initialized && !deviceLost && swapchain == VK_NULL_HANDLE &&
                 framebufferWidth > 0 && framebufferHeight > 0) {
                 framebufferResized = true;
@@ -1589,6 +1596,11 @@ struct Renderer::Impl {
             if (!resizeResult) {
                 setError(resizeResult.error().describe());
                 stats.deviceLost = deviceLost;
+                if (deviceLost) {
+                    initialized = false;
+                    fatalError = true;
+                }
+                stats.fatalError = fatalError;
                 stats.cpuFrameMs = elapsedMilliseconds(begin);
                 return stats;
             }
@@ -1648,10 +1660,16 @@ struct Renderer::Impl {
             const VoidResult recreateResult = recreateSwapchain();
             if (!recreateResult) {
                 setError(recreateResult.error().describe());
+                if (deviceLost) {
+                    initialized = false;
+                    fatalError = true;
+                }
             } else {
                 lastError.clear();
             }
             stats.recreatedSwapchain = true;
+            stats.deviceLost = deviceLost;
+            stats.fatalError = fatalError;
             stats.cpuFrameMs = elapsedMilliseconds(begin);
             return stats;
         }
@@ -2005,28 +2023,39 @@ VoidResult Renderer::Impl::recordFrame(FrameContext& frame, std::uint32_t imageI
         return fail("Depth resources are not available for the active swapchain",
                     Halcyon::ErrorCode::InvalidState);
     }
-    if (!depthImageInitialized) {
-        VkImageMemoryBarrier2 depthBarrier{};
-        depthBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        depthBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-        depthBarrier.srcAccessMask = VK_ACCESS_2_NONE;
-        depthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-        depthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        depthBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        depthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        depthBarrier.image = depthImage;
-        depthBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        depthBarrier.subresourceRange.baseMipLevel = 0;
-        depthBarrier.subresourceRange.levelCount = 1;
-        depthBarrier.subresourceRange.baseArrayLayer = 0;
-        depthBarrier.subresourceRange.layerCount = 1;
-        dependency.pImageMemoryBarriers = &depthBarrier;
-        vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
-    }
+    // The depth target is shared by the frames-in-flight.  Queue submission
+    // order prevents simultaneous execution, but a submission boundary is
+    // not itself a memory dependency.  Emit a same-layout barrier on every
+    // frame so a previous attachment write is visible before the next clear
+    // and depth test; the first use still performs the UNDEFINED transition.
+    VkImageMemoryBarrier2 depthBarrier{};
+    depthBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    depthBarrier.srcStageMask = depthImageInitialized
+                                    ? (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT)
+                                    : VK_PIPELINE_STAGE_2_NONE;
+    depthBarrier.srcAccessMask = depthImageInitialized
+                                     ? (VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                                     : VK_ACCESS_2_NONE;
+    depthBarrier.dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    depthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depthBarrier.oldLayout = depthImageInitialized
+                                 ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+                                 : VK_IMAGE_LAYOUT_UNDEFINED;
+    depthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    depthBarrier.image = depthImage;
+    depthBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthBarrier.subresourceRange.baseMipLevel = 0;
+    depthBarrier.subresourceRange.levelCount = 1;
+    depthBarrier.subresourceRange.baseArrayLayer = 0;
+    depthBarrier.subresourceRange.layerCount = 1;
+    dependency.pImageMemoryBarriers = &depthBarrier;
+    vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
 
     VkClearValue clearValue{};
     clearValue.color.float32[0] = 0.018f;
