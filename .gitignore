@@ -16,13 +16,13 @@ Makefile
 compile_commands.json
 install_manifest.txt
 
-### 构建输出目录 ###
+### Build output directories ###
 build/
 out/
 bin/
 lib/
 
-### 编译产物 ###
+### Compiler outputs ###
 *.o
 *.obj
 *.exe
@@ -37,27 +37,27 @@ lib/
 *.exp
 *.map
 
-### Vulkan / Shader编译中间产物 ###
+### Vulkan and shader compiler intermediates ###
 *.spv
 *.spirv
 
-### 第三方库（如通过FetchContent/子模块自动下载，可选择性忽略） ###
+### Third-party libraries downloaded through FetchContent or submodules ###
 # ThirdParty/*/build/
 
-### 操作系统相关 ###
+### Operating-system files ###
 .DS_Store
 Thumbs.db
 Desktop.ini
 
-### VS Code（如果偶尔用VSCode打开） ###
+### VS Code ###
 .vscode/
 
-### 日志/临时文件 ###
+### Logs and temporary files ###
 *.log
 *.tmp
 *.bak
 
-### Conan / vcpkg（如果用了包管理器，按需保留） ###
+### Conan and vcpkg package-manager outputs ###
 conan.lock
 conaninfo.txt
 conanbuildinfo.*
