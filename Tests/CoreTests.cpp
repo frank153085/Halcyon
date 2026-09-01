@@ -31,13 +31,16 @@ public:
         std::cerr << "FAILED line " << line << ": " << expression << '\n';
     }
 
-    [[nodiscard]] int failures() const noexcept { return failures_; }
+    [[nodiscard]] int failures() const noexcept
+    {
+        return failures_;
+    }
 
 private:
     int failures_ = 0;
 };
 
-#define HALCYON_EXPECT(context, expression) \
+#define HALCYON_EXPECT(context, expression)                                                        \
     (context).expect(static_cast<bool>(expression), #expression, __LINE__)
 
 void resultTests(TestContext& context)
@@ -105,9 +108,11 @@ void loggerTests(TestContext& context)
     std::vector<std::string> messages;
     auto& logger = Halcyon::Logger::instance();
     logger.setLevel(Halcyon::LogLevel::Info);
-    logger.setSink([&messages](Halcyon::LogLevel, std::string_view message) {
-        messages.emplace_back(message);
-    });
+    logger.setSink(
+        [&messages](Halcyon::LogLevel, std::string_view message)
+        {
+            messages.emplace_back(message);
+        });
     logger.debug("hidden");
     logger.info("visible ", 7);
     logger.resetSink();

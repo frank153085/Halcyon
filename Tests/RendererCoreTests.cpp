@@ -21,13 +21,16 @@ public:
         std::cerr << "FAILED line " << line << ": " << expression << '\n';
     }
 
-    [[nodiscard]] int failures() const noexcept { return failures_; }
+    [[nodiscard]] int failures() const noexcept
+    {
+        return failures_;
+    }
 
 private:
     int failures_ = 0;
 };
 
-#define HALCYON_EXPECT(context, expression) \
+#define HALCYON_EXPECT(context, expression)                                                        \
     (context).expect(static_cast<bool>(expression), #expression, __LINE__)
 
 void renderGraphDependencyAndCullingTests(TestContext& context)
@@ -90,8 +93,7 @@ void renderGraphCycleAndGenerationTests(TestContext& context)
 
     const Graph::CompileResult compiled = graph.compile();
     HALCYON_EXPECT(context, !compiled);
-    HALCYON_EXPECT(context,
-                   compiled.error.code == Graph::GraphErrorCode::CycleDetected);
+    HALCYON_EXPECT(context, compiled.error.code == Graph::GraphErrorCode::CycleDetected);
     HALCYON_EXPECT(context, !compiled.error.cycle.empty());
 }
 
@@ -112,8 +114,7 @@ void frameBudgetDowngradeAndUpgradeTests(TestContext& context)
 
     HALCYON_EXPECT(context, update.adjusted);
     HALCYON_EXPECT(context, update.decision.has_value());
-    HALCYON_EXPECT(context,
-                   update.decision->direction == Quality::AdjustmentDirection::Downgrade);
+    HALCYON_EXPECT(context, update.decision->direction == Quality::AdjustmentDirection::Downgrade);
     HALCYON_EXPECT(context, controller.quality() != initial);
     HALCYON_EXPECT(context, controller.decisionLog().size() == 1);
 
@@ -125,9 +126,8 @@ void frameBudgetDowngradeAndUpgradeTests(TestContext& context)
         if (underBudget.adjusted)
         {
             HALCYON_EXPECT(context, underBudget.decision.has_value());
-            HALCYON_EXPECT(context,
-                           underBudget.decision->direction ==
-                               Quality::AdjustmentDirection::Upgrade);
+            HALCYON_EXPECT(
+                context, underBudget.decision->direction == Quality::AdjustmentDirection::Upgrade);
             upgraded = true;
             break;
         }

@@ -12,9 +12,11 @@
 #include <string>
 #include <vector>
 
-namespace Halcyon::Renderer::Quality {
+namespace Halcyon::Renderer::Quality
+{
 
-enum class RayTracingMode : std::uint8_t {
+enum class RayTracingMode : std::uint8_t
+{
     Off = 0,
     HalfResolution = 1,
     FullResolution = 2,
@@ -26,7 +28,8 @@ using RayTracingQuality = RayTracingMode;
 
 // Levels are ordered from lowest quality (0) to highest quality.  Keeping the
 // order explicit lets the controller move exactly one notch at a time.
-enum class QualityKnob : std::uint8_t {
+enum class QualityKnob : std::uint8_t
+{
     InternalResolution = 0,
     ShadowResolution = 1,
     ShadowUpdatePeriod = 2,
@@ -39,50 +42,62 @@ enum class QualityKnob : std::uint8_t {
     RT = RayTracing,
 };
 
-enum class AdjustmentDirection : std::uint8_t {
+enum class AdjustmentDirection : std::uint8_t
+{
     Downgrade,
     Upgrade,
 };
 
-[[nodiscard]] constexpr const char* toString(QualityKnob knob) noexcept {
-    switch (knob) {
-    case QualityKnob::InternalResolution: return "internal resolution";
-    case QualityKnob::ShadowResolution: return "shadow resolution";
-    case QualityKnob::ShadowUpdatePeriod: return "shadow update period";
-    case QualityKnob::GeometryLod: return "geometry LOD";
-    case QualityKnob::RayTracing: return "ray tracing";
-    case QualityKnob::Count: break;
+[[nodiscard]] constexpr const char* toString(QualityKnob knob) noexcept
+{
+    switch (knob)
+    {
+        case QualityKnob::InternalResolution:
+            return "internal resolution";
+        case QualityKnob::ShadowResolution:
+            return "shadow resolution";
+        case QualityKnob::ShadowUpdatePeriod:
+            return "shadow update period";
+        case QualityKnob::GeometryLod:
+            return "geometry LOD";
+        case QualityKnob::RayTracing:
+            return "ray tracing";
+        case QualityKnob::Count:
+            break;
     }
     return "unknown quality knob";
 }
 
-[[nodiscard]] constexpr const char* toString(AdjustmentDirection direction) noexcept {
+[[nodiscard]] constexpr const char* toString(AdjustmentDirection direction) noexcept
+{
     return direction == AdjustmentDirection::Downgrade ? "downgrade" : "upgrade";
 }
 
-[[nodiscard]] constexpr const char* toString(RayTracingMode mode) noexcept {
-    switch (mode) {
-    case RayTracingMode::Off: return "off";
-    case RayTracingMode::HalfResolution: return "half resolution";
-    case RayTracingMode::FullResolution: return "full resolution";
+[[nodiscard]] constexpr const char* toString(RayTracingMode mode) noexcept
+{
+    switch (mode)
+    {
+        case RayTracingMode::Off:
+            return "off";
+        case RayTracingMode::HalfResolution:
+            return "half resolution";
+        case RayTracingMode::FullResolution:
+            return "full resolution";
     }
     return "unknown";
 }
 
 // Canonical quality ladders.  They are public so a UI can present the exact
 // values used by the controller rather than rounded labels.
-inline constexpr std::array<float, 5> kInternalResolutionScales{
-    0.60f, 0.70f, 0.80f, 0.90f, 1.00f};
-inline constexpr std::array<float, 3> kShadowResolutionScales{
-    0.50f, 0.75f, 1.00f};
-inline constexpr std::array<std::uint32_t, 3> kShadowUpdatePeriods{
-    4u, 2u, 1u};
-inline constexpr std::array<float, 4> kGeometryLodBiases{
-    2.00f, 1.00f, 0.50f, 0.00f};
+inline constexpr std::array<float, 5> kInternalResolutionScales{0.60f, 0.70f, 0.80f, 0.90f, 1.00f};
+inline constexpr std::array<float, 3> kShadowResolutionScales{0.50f, 0.75f, 1.00f};
+inline constexpr std::array<std::uint32_t, 3> kShadowUpdatePeriods{4u, 2u, 1u};
+inline constexpr std::array<float, 4> kGeometryLodBiases{2.00f, 1.00f, 0.50f, 0.00f};
 inline constexpr std::array<RayTracingMode, 3> kRayTracingModes{
     RayTracingMode::Off, RayTracingMode::HalfResolution, RayTracingMode::FullResolution};
 
-struct QualityState {
+struct QualityState
+{
     // Public level fields make the state cheap to copy into a FramePacket and
     // straightforward to serialise.  Use the accessors below when a physical
     // value is needed.
@@ -92,50 +107,79 @@ struct QualityState {
     std::uint8_t geometryLodLevel = 3;
     std::uint8_t rayTracingLevel = 0; // RT is conservatively disabled by default.
 
-    [[nodiscard]] float internalResolutionScale() const noexcept {
+    [[nodiscard]] float internalResolutionScale() const noexcept
+    {
         return kInternalResolutionScales[internalResolutionLevel < kInternalResolutionScales.size()
                                              ? internalResolutionLevel
                                              : kInternalResolutionScales.size() - 1u];
     }
-    [[nodiscard]] float resolutionScale() const noexcept { return internalResolutionScale(); }
-    [[nodiscard]] float renderScale() const noexcept { return internalResolutionScale(); }
-    [[nodiscard]] float shadowResolutionScale() const noexcept {
+    [[nodiscard]] float resolutionScale() const noexcept
+    {
+        return internalResolutionScale();
+    }
+    [[nodiscard]] float renderScale() const noexcept
+    {
+        return internalResolutionScale();
+    }
+    [[nodiscard]] float shadowResolutionScale() const noexcept
+    {
         return kShadowResolutionScales[shadowResolutionLevel < kShadowResolutionScales.size()
                                            ? shadowResolutionLevel
                                            : kShadowResolutionScales.size() - 1u];
     }
-    [[nodiscard]] float shadowScale() const noexcept { return shadowResolutionScale(); }
-    [[nodiscard]] std::uint32_t shadowUpdatePeriod() const noexcept {
+    [[nodiscard]] float shadowScale() const noexcept
+    {
+        return shadowResolutionScale();
+    }
+    [[nodiscard]] std::uint32_t shadowUpdatePeriod() const noexcept
+    {
         return kShadowUpdatePeriods[shadowUpdateLevel < kShadowUpdatePeriods.size()
                                         ? shadowUpdateLevel
                                         : kShadowUpdatePeriods.size() - 1u];
     }
-    [[nodiscard]] float geometryLodBias() const noexcept {
+    [[nodiscard]] float geometryLodBias() const noexcept
+    {
         return kGeometryLodBiases[geometryLodLevel < kGeometryLodBiases.size()
                                       ? geometryLodLevel
                                       : kGeometryLodBiases.size() - 1u];
     }
-    [[nodiscard]] float lod() const noexcept { return geometryLodBias(); }
-    [[nodiscard]] float lodBias() const noexcept { return geometryLodBias(); }
-    [[nodiscard]] RayTracingMode rayTracing() const noexcept {
+    [[nodiscard]] float lod() const noexcept
+    {
+        return geometryLodBias();
+    }
+    [[nodiscard]] float lodBias() const noexcept
+    {
+        return geometryLodBias();
+    }
+    [[nodiscard]] RayTracingMode rayTracing() const noexcept
+    {
         return kRayTracingModes[rayTracingLevel < kRayTracingModes.size()
                                     ? rayTracingLevel
                                     : kRayTracingModes.size() - 1u];
     }
-    [[nodiscard]] RayTracingMode rayTracingMode() const noexcept { return rayTracing(); }
-    [[nodiscard]] RayTracingMode rtMode() const noexcept { return rayTracing(); }
-
-    [[nodiscard]] static constexpr QualityState highestQuality() noexcept {
-        return QualityState{static_cast<std::uint8_t>(kInternalResolutionScales.size() - 1u),
-                             static_cast<std::uint8_t>(kShadowResolutionScales.size() - 1u),
-                             static_cast<std::uint8_t>(kShadowUpdatePeriods.size() - 1u),
-                             static_cast<std::uint8_t>(kGeometryLodBiases.size() - 1u),
-                             static_cast<std::uint8_t>(kRayTracingModes.size() - 1u)};
+    [[nodiscard]] RayTracingMode rayTracingMode() const noexcept
+    {
+        return rayTracing();
     }
-    [[nodiscard]] static constexpr QualityState conservative() noexcept {
+    [[nodiscard]] RayTracingMode rtMode() const noexcept
+    {
+        return rayTracing();
+    }
+
+    [[nodiscard]] static constexpr QualityState highestQuality() noexcept
+    {
+        return QualityState{static_cast<std::uint8_t>(kInternalResolutionScales.size() - 1u),
+            static_cast<std::uint8_t>(kShadowResolutionScales.size() - 1u),
+            static_cast<std::uint8_t>(kShadowUpdatePeriods.size() - 1u),
+            static_cast<std::uint8_t>(kGeometryLodBiases.size() - 1u),
+            static_cast<std::uint8_t>(kRayTracingModes.size() - 1u)};
+    }
+    [[nodiscard]] static constexpr QualityState conservative() noexcept
+    {
         return QualityState{};
     }
-    [[nodiscard]] static constexpr QualityState lowestQuality() noexcept {
+    [[nodiscard]] static constexpr QualityState lowestQuality() noexcept
+    {
         return QualityState{0, 0, 0, 0, 0};
     }
 
@@ -146,7 +190,8 @@ struct QualityState {
 // milliseconds; scores are arbitrary monotonic units.  The controller uses
 // differences between adjacent levels, so a project can replace this model
 // with measurements from its own scenes.
-struct QualityCostModel {
+struct QualityCostModel
+{
     std::array<double, 5> internalResolutionGpuMs{5.0, 6.2, 7.7, 9.5, 12.0};
     std::array<double, 5> internalResolutionQuality{0.55, 0.68, 0.81, 0.92, 1.00};
 
@@ -163,7 +208,8 @@ struct QualityCostModel {
     std::array<double, 3> rayTracingQuality{0.64, 0.84, 1.00};
 };
 
-struct FrameBudgetConfig {
+struct FrameBudgetConfig
+{
     double targetFrameTimeMs = 16.667;
     double gpuBudgetFraction = 0.90; // 90% of target is reserved for GPU work.
     double upgradeHeadroomFraction = 0.80;
@@ -175,7 +221,8 @@ struct FrameBudgetConfig {
     QualityCostModel costModel{};
 };
 
-struct QualityDecision {
+struct QualityDecision
+{
     std::uint64_t decisionId = 0;
     std::uint64_t frameIndex = 0;
     AdjustmentDirection direction = AdjustmentDirection::Downgrade;
@@ -200,7 +247,8 @@ struct QualityDecision {
     std::string reason;
 };
 
-struct FrameBudgetUpdate {
+struct FrameBudgetUpdate
+{
     std::uint64_t frameIndex = 0;
     double measuredGpuMs = 0.0;
     double gpuBudgetMs = 0.0;
@@ -211,7 +259,8 @@ struct FrameBudgetUpdate {
     std::optional<QualityDecision> decision;
 };
 
-class FrameBudgetController {
+class FrameBudgetController
+{
 public:
     FrameBudgetController();
     explicit FrameBudgetController(FrameBudgetConfig config);
@@ -219,39 +268,69 @@ public:
     void reset();
     void reset(QualityState state);
     void setConfig(FrameBudgetConfig config);
-    [[nodiscard]] const FrameBudgetConfig& config() const noexcept { return config_; }
+    [[nodiscard]] const FrameBudgetConfig& config() const noexcept
+    {
+        return config_;
+    }
 
-    [[nodiscard]] double gpuBudgetMs() const noexcept { return gpuBudgetMs_; }
-    [[nodiscard]] const QualityState& quality() const noexcept { return quality_; }
+    [[nodiscard]] double gpuBudgetMs() const noexcept
+    {
+        return gpuBudgetMs_;
+    }
+    [[nodiscard]] const QualityState& quality() const noexcept
+    {
+        return quality_;
+    }
     [[nodiscard]] std::uint8_t currentLevel(QualityKnob knob) const noexcept;
     [[nodiscard]] bool canDowngrade(QualityKnob knob) const noexcept;
     [[nodiscard]] bool canUpgrade(QualityKnob knob) const noexcept;
     [[nodiscard]] bool isCoolingDown(QualityKnob knob) const noexcept;
-    [[nodiscard]] std::uint64_t frameIndex() const noexcept { return frameIndex_; }
-    [[nodiscard]] std::uint32_t overBudgetStreak() const noexcept { return overBudgetStreak_; }
-    [[nodiscard]] std::uint32_t underBudgetStreak() const noexcept { return underBudgetStreak_; }
+    [[nodiscard]] std::uint64_t frameIndex() const noexcept
+    {
+        return frameIndex_;
+    }
+    [[nodiscard]] std::uint32_t overBudgetStreak() const noexcept
+    {
+        return overBudgetStreak_;
+    }
+    [[nodiscard]] std::uint32_t underBudgetStreak() const noexcept
+    {
+        return underBudgetStreak_;
+    }
 
     // update(gpuMs) advances an internal frame counter.  The overload with an
     // explicit frame index is useful when a capture/replay supplies its own
     // frame numbering.
     [[nodiscard]] FrameBudgetUpdate update(double gpuFrameMs);
     [[nodiscard]] FrameBudgetUpdate update(std::uint64_t frameIndex, double gpuFrameMs);
-    [[nodiscard]] FrameBudgetUpdate observe(double gpuFrameMs) { return update(gpuFrameMs); }
+    [[nodiscard]] FrameBudgetUpdate observe(double gpuFrameMs)
+    {
+        return update(gpuFrameMs);
+    }
 
     void setQuality(QualityState state);
     void setCostModel(QualityCostModel model);
-    [[nodiscard]] const QualityCostModel& costModel() const noexcept { return config_.costModel; }
+    [[nodiscard]] const QualityCostModel& costModel() const noexcept
+    {
+        return config_.costModel;
+    }
 
-    [[nodiscard]] const std::vector<QualityDecision>& decisionLog() const noexcept {
+    [[nodiscard]] const std::vector<QualityDecision>& decisionLog() const noexcept
+    {
         return decisionLog_;
     }
-    [[nodiscard]] const std::vector<QualityDecision>& decisions() const noexcept {
+    [[nodiscard]] const std::vector<QualityDecision>& decisions() const noexcept
+    {
         return decisionLog_;
     }
-    void clearDecisionLog() noexcept { decisionLog_.clear(); }
+    void clearDecisionLog() noexcept
+    {
+        decisionLog_.clear();
+    }
 
 private:
-    struct Candidate {
+    struct Candidate
+    {
         QualityKnob knob = QualityKnob::InternalResolution;
         std::uint8_t from = 0;
         std::uint8_t to = 0;
@@ -261,8 +340,7 @@ private:
         double score = -std::numeric_limits<double>::infinity();
     };
 
-    [[nodiscard]] FrameBudgetUpdate updateInternal(std::uint64_t frameIndex,
-                                                   double gpuFrameMs);
+    [[nodiscard]] FrameBudgetUpdate updateInternal(std::uint64_t frameIndex, double gpuFrameMs);
     [[nodiscard]] std::optional<Candidate> chooseCandidate(AdjustmentDirection direction) const;
     [[nodiscard]] std::uint8_t level(QualityKnob knob) const noexcept;
     void setLevel(QualityKnob knob, std::uint8_t value) noexcept;

@@ -23,13 +23,16 @@ public:
         }
     }
 
-    [[nodiscard]] int failures() const noexcept { return failures_; }
+    [[nodiscard]] int failures() const noexcept
+    {
+        return failures_;
+    }
 
 private:
     int failures_ = 0;
 };
 
-#define HALCYON_EXPECT(context, expression) \
+#define HALCYON_EXPECT(context, expression)                                                        \
     (context).expect(static_cast<bool>(expression), #expression, __LINE__)
 
 void orderingAndTimelineTest(TestContext& context)
@@ -37,9 +40,21 @@ void orderingAndTimelineTest(TestContext& context)
     std::vector<int> order;
     Queue queue;
 
-    queue.enqueue(10, [&order] { order.push_back(10); });
-    queue.enqueue(3, [&order] { order.push_back(3); });
-    queue.enqueue(3, [&order] { order.push_back(4); });
+    queue.enqueue(10,
+        [&order]
+        {
+            order.push_back(10);
+        });
+    queue.enqueue(3,
+        [&order]
+        {
+            order.push_back(3);
+        });
+    queue.enqueue(3,
+        [&order]
+        {
+            order.push_back(4);
+        });
 
     HALCYON_EXPECT(context, queue.size() == 3);
     const auto collectedBeforeReady = queue.collect(2);
@@ -59,11 +74,21 @@ void moveOnlyAndExceptionTest(TestContext& context)
     int destroyed = 0;
     Queue queue;
 
-    queue.enqueue(1, [owner = std::make_unique<int>(7), &destroyed]() mutable {
-        destroyed += *owner;
-    });
-    queue.enqueue(1, [] { throw std::runtime_error("first callback failure"); });
-    queue.enqueue(1, [] { throw std::runtime_error("last callback failure"); });
+    queue.enqueue(1,
+        [owner = std::make_unique<int>(7), &destroyed]() mutable
+        {
+            destroyed += *owner;
+        });
+    queue.enqueue(1,
+        []
+        {
+            throw std::runtime_error("first callback failure");
+        });
+    queue.enqueue(1,
+        []
+        {
+            throw std::runtime_error("last callback failure");
+        });
 
     const auto collected = queue.collect(1);
     HALCYON_EXPECT(context, collected == 3);
@@ -82,8 +107,7 @@ void moveOnlyAndExceptionTest(TestContext& context)
         catch (const std::runtime_error& error)
         {
             caughtRuntimeError = true;
-            HALCYON_EXPECT(context,
-                           std::string_view{error.what()} == "last callback failure");
+            HALCYON_EXPECT(context, std::string_view{error.what()} == "last callback failure");
         }
         catch (...)
         {

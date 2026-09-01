@@ -56,8 +56,7 @@ template <typename Enum>
 [[nodiscard]] constexpr Enum operator|(Enum lhs, Enum rhs) noexcept
 {
     using Underlying = std::underlying_type_t<Enum>;
-    return static_cast<Enum>(static_cast<Underlying>(lhs) |
-                             static_cast<Underlying>(rhs));
+    return static_cast<Enum>(static_cast<Underlying>(lhs) | static_cast<Underlying>(rhs));
 }
 
 template <typename Enum>
@@ -65,8 +64,7 @@ template <typename Enum>
 [[nodiscard]] constexpr Enum operator&(Enum lhs, Enum rhs) noexcept
 {
     using Underlying = std::underlying_type_t<Enum>;
-    return static_cast<Enum>(static_cast<Underlying>(lhs) &
-                             static_cast<Underlying>(rhs));
+    return static_cast<Enum>(static_cast<Underlying>(lhs) & static_cast<Underlying>(rhs));
 }
 
 template <typename Enum>
@@ -97,8 +95,8 @@ struct UsageInfo
     bool writes = false;
 };
 
-[[nodiscard]] UsageInfo describeUsage(ResourceKind kind, ResourceUsage usage,
-                                      AccessMode mode) noexcept;
+[[nodiscard]] UsageInfo describeUsage(
+    ResourceKind kind, ResourceUsage usage, AccessMode mode) noexcept;
 
 struct BarrierState
 {
@@ -132,10 +130,12 @@ public:
     void begin() noexcept;
     [[nodiscard]] std::vector<ResourceBarrier> plan(
         std::span<const ResourceAccess> accesses, QueueClass queue);
-    [[nodiscard]] const BarrierState* state(ResourceKind kind,
-                                             std::uint32_t index,
-                                             std::uint32_t generation) const noexcept;
-    [[nodiscard]] std::size_t trackedResourceCount() const noexcept { return states_.size(); }
+    [[nodiscard]] const BarrierState* state(
+        ResourceKind kind, std::uint32_t index, std::uint32_t generation) const noexcept;
+    [[nodiscard]] std::size_t trackedResourceCount() const noexcept
+    {
+        return states_.size();
+    }
 
 private:
     struct Key

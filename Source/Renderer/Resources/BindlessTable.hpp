@@ -14,12 +14,16 @@
 #include <optional>
 #include <vector>
 
-namespace Halcyon::Renderer::Resources {
+namespace Halcyon::Renderer::Resources
+{
 
-struct DescriptorSlotTag {};
+struct DescriptorSlotTag
+{
+};
 using DescriptorHandle = Halcyon::Core::Handle<DescriptorSlotTag>;
 
-enum class DescriptorType : std::uint8_t {
+enum class DescriptorType : std::uint8_t
+{
     SampledImage = 0,
     StorageImage,
     UniformBuffer,
@@ -28,65 +32,89 @@ enum class DescriptorType : std::uint8_t {
     Count,
 };
 
-inline constexpr std::size_t kDescriptorTypeCount =
-    static_cast<std::size_t>(DescriptorType::Count);
+inline constexpr std::size_t kDescriptorTypeCount = static_cast<std::size_t>(DescriptorType::Count);
 
 // Optional type-carrying wrapper for call sites that want compile/runtime
 // protection against passing a sampled-image handle to a storage-buffer slot.
 // The underlying generation-checked DescriptorHandle remains available for
 // low-level allocators and compact FramePacket storage.
-struct BindlessHandle {
+struct BindlessHandle
+{
     DescriptorType type = DescriptorType::Count;
     DescriptorHandle slot{};
 
-    [[nodiscard]] bool valid() const noexcept {
+    [[nodiscard]] bool valid() const noexcept
+    {
         return type != DescriptorType::Count && slot.valid();
     }
-    [[nodiscard]] explicit operator bool() const noexcept { return valid(); }
-    [[nodiscard]] std::uint32_t index() const noexcept { return slot.index(); }
-    [[nodiscard]] std::uint32_t generation() const noexcept { return slot.generation(); }
-    [[nodiscard]] DescriptorHandle descriptor() const noexcept { return slot; }
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return valid();
+    }
+    [[nodiscard]] std::uint32_t index() const noexcept
+    {
+        return slot.index();
+    }
+    [[nodiscard]] std::uint32_t generation() const noexcept
+    {
+        return slot.generation();
+    }
+    [[nodiscard]] DescriptorHandle descriptor() const noexcept
+    {
+        return slot;
+    }
 
-    friend constexpr bool operator==(const BindlessHandle&, const BindlessHandle&) noexcept =
-        default;
+    friend constexpr bool operator==(
+        const BindlessHandle&, const BindlessHandle&) noexcept = default;
 };
 
-[[nodiscard]] constexpr const char* toString(DescriptorType type) noexcept {
-    switch (type) {
-    case DescriptorType::SampledImage: return "sampled image";
-    case DescriptorType::StorageImage: return "storage image";
-    case DescriptorType::UniformBuffer: return "uniform buffer";
-    case DescriptorType::StorageBuffer: return "storage buffer";
-    case DescriptorType::Sampler: return "sampler";
-    case DescriptorType::Count: break;
+[[nodiscard]] constexpr const char* toString(DescriptorType type) noexcept
+{
+    switch (type)
+    {
+        case DescriptorType::SampledImage:
+            return "sampled image";
+        case DescriptorType::StorageImage:
+            return "storage image";
+        case DescriptorType::UniformBuffer:
+            return "uniform buffer";
+        case DescriptorType::StorageBuffer:
+            return "storage buffer";
+        case DescriptorType::Sampler:
+            return "sampler";
+        case DescriptorType::Count:
+            break;
     }
     return "unknown descriptor type";
 }
 
-enum class DescriptorSlotState : std::uint8_t {
+enum class DescriptorSlotState : std::uint8_t
+{
     Default,
     Free,
     Live,
     PendingRelease,
 };
 
-struct DescriptorSlotAllocatorConfig {
+struct DescriptorSlotAllocatorConfig
+{
     // Capacity includes slot zero.  A capacity of one is valid and gives a
     // table containing only the default descriptor.
     std::uint32_t capacity = 1024;
     bool reserveDefaultSlot = true;
 };
 
-class DescriptorSlotAllocator {
+class DescriptorSlotAllocator
+{
 public:
     DescriptorSlotAllocator() = default;
-    explicit DescriptorSlotAllocator(std::uint32_t capacity,
-                                     bool reserveDefaultSlot = true);
+    explicit DescriptorSlotAllocator(std::uint32_t capacity, bool reserveDefaultSlot = true);
     explicit DescriptorSlotAllocator(DescriptorSlotAllocatorConfig config);
 
     [[nodiscard]] Halcyon::Result<void> initialize(DescriptorSlotAllocatorConfig config);
-    [[nodiscard]] Halcyon::Result<void> initialize(std::uint32_t capacity,
-                                                   bool reserveDefaultSlot = true) {
+    [[nodiscard]] Halcyon::Result<void> initialize(
+        std::uint32_t capacity, bool reserveDefaultSlot = true)
+    {
         return initialize(DescriptorSlotAllocatorConfig{capacity, reserveDefaultSlot});
     }
 
@@ -97,12 +125,13 @@ public:
 
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocate();
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocate(std::uint64_t completedTimeline);
-    [[nodiscard]] Halcyon::Result<void> release(DescriptorHandle handle,
-                                                std::uint64_t retireTimeline);
-    [[nodiscard]] Halcyon::Result<void> touch(DescriptorHandle handle,
-                                              std::uint64_t submittedTimeline);
-    [[nodiscard]] Halcyon::Result<void> markUsed(DescriptorHandle handle,
-                                                 std::uint64_t submittedTimeline) {
+    [[nodiscard]] Halcyon::Result<void> release(
+        DescriptorHandle handle, std::uint64_t retireTimeline);
+    [[nodiscard]] Halcyon::Result<void> touch(
+        DescriptorHandle handle, std::uint64_t submittedTimeline);
+    [[nodiscard]] Halcyon::Result<void> markUsed(
+        DescriptorHandle handle, std::uint64_t submittedTimeline)
+    {
         return touch(handle, submittedTimeline);
     }
 
@@ -110,33 +139,51 @@ public:
     // optional output is supplied, it receives the handles (with their old
     // generations) that became reusable during this call.
     [[nodiscard]] std::size_t collect(
-        std::uint64_t completedTimeline,
-        std::vector<DescriptorHandle>* reclaimed = nullptr);
+        std::uint64_t completedTimeline, std::vector<DescriptorHandle>* reclaimed = nullptr);
 
     [[nodiscard]] bool contains(DescriptorHandle handle) const noexcept;
-    [[nodiscard]] bool valid(DescriptorHandle handle) const noexcept { return contains(handle); }
+    [[nodiscard]] bool valid(DescriptorHandle handle) const noexcept
+    {
+        return contains(handle);
+    }
     [[nodiscard]] bool pending(DescriptorHandle handle) const noexcept;
     [[nodiscard]] DescriptorSlotState state(DescriptorHandle handle) const noexcept;
     [[nodiscard]] std::uint64_t retireTimeline(DescriptorHandle handle) const noexcept;
     [[nodiscard]] std::uint64_t lastUseTimeline(DescriptorHandle handle) const noexcept;
 
-    [[nodiscard]] std::uint32_t capacity() const noexcept {
+    [[nodiscard]] std::uint32_t capacity() const noexcept
+    {
         return static_cast<std::uint32_t>(slots_.size());
     }
-    [[nodiscard]] std::uint32_t slotCount() const noexcept { return capacity(); }
+    [[nodiscard]] std::uint32_t slotCount() const noexcept
+    {
+        return capacity();
+    }
     // liveCount includes the default slot when it is reserved.
-    [[nodiscard]] std::uint32_t liveCount() const noexcept { return liveCount_; }
-    [[nodiscard]] std::uint32_t userLiveCount() const noexcept {
+    [[nodiscard]] std::uint32_t liveCount() const noexcept
+    {
+        return liveCount_;
+    }
+    [[nodiscard]] std::uint32_t userLiveCount() const noexcept
+    {
         return liveCount_ - (hasDefaultSlot() ? 1u : 0u);
     }
-    [[nodiscard]] std::uint32_t pendingCount() const noexcept { return pendingCount_; }
-    [[nodiscard]] std::uint32_t availableCount() const noexcept {
+    [[nodiscard]] std::uint32_t pendingCount() const noexcept
+    {
+        return pendingCount_;
+    }
+    [[nodiscard]] std::uint32_t availableCount() const noexcept
+    {
         return static_cast<std::uint32_t>(freeSlots_.size());
     }
-    [[nodiscard]] std::uint64_t completedTimeline() const noexcept {
+    [[nodiscard]] std::uint64_t completedTimeline() const noexcept
+    {
         return completedTimeline_;
     }
-    [[nodiscard]] bool initialized() const noexcept { return !slots_.empty(); }
+    [[nodiscard]] bool initialized() const noexcept
+    {
+        return !slots_.empty();
+    }
 
     // Invalidates all user handles and rebuilds the free list.  The default
     // slot (if configured) remains reserved with its current generation.
@@ -147,7 +194,8 @@ public:
     void shutdown() noexcept;
 
 private:
-    struct Slot {
+    struct Slot
+    {
         std::uint32_t generation = 1;
         DescriptorSlotState state = DescriptorSlotState::Free;
         std::uint64_t retireTimeline = 0;
@@ -169,17 +217,19 @@ private:
 
 // A compact payload that is sufficient for a backend to identify a resource
 // and view.  It intentionally contains no native handles.
-struct DescriptorValue {
+struct DescriptorValue
+{
     std::uint64_t resourceId = 0;
     std::uint64_t viewId = 0;
     std::uint32_t flags = 0;
     std::uint32_t _padding = 0;
 
-    friend constexpr bool operator==(const DescriptorValue&, const DescriptorValue&) noexcept =
-        default;
+    friend constexpr bool operator==(
+        const DescriptorValue&, const DescriptorValue&) noexcept = default;
 };
 
-struct BindlessTableConfig {
+struct BindlessTableConfig
+{
     std::uint32_t sampledImageCapacity = 4096;
     std::uint32_t storageImageCapacity = 1024;
     std::uint32_t uniformBufferCapacity = 1024;
@@ -187,7 +237,8 @@ struct BindlessTableConfig {
     std::uint32_t samplerCapacity = 256;
 };
 
-class BindlessTable {
+class BindlessTable
+{
 public:
     BindlessTable() = default;
     explicit BindlessTable(BindlessTableConfig config);
@@ -197,71 +248,77 @@ public:
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocate(
         DescriptorType type, DescriptorValue value = {}, std::uint64_t completedTimeline = 0);
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocateSampledImage(
-        DescriptorValue value = {}, std::uint64_t completedTimeline = 0) {
+        DescriptorValue value = {}, std::uint64_t completedTimeline = 0)
+    {
         return allocate(DescriptorType::SampledImage, value, completedTimeline);
     }
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocateStorageImage(
-        DescriptorValue value = {}, std::uint64_t completedTimeline = 0) {
+        DescriptorValue value = {}, std::uint64_t completedTimeline = 0)
+    {
         return allocate(DescriptorType::StorageImage, value, completedTimeline);
     }
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocateUniformBuffer(
-        DescriptorValue value = {}, std::uint64_t completedTimeline = 0) {
+        DescriptorValue value = {}, std::uint64_t completedTimeline = 0)
+    {
         return allocate(DescriptorType::UniformBuffer, value, completedTimeline);
     }
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocateStorageBuffer(
-        DescriptorValue value = {}, std::uint64_t completedTimeline = 0) {
+        DescriptorValue value = {}, std::uint64_t completedTimeline = 0)
+    {
         return allocate(DescriptorType::StorageBuffer, value, completedTimeline);
     }
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocateSampler(
-        DescriptorValue value = {}, std::uint64_t completedTimeline = 0) {
+        DescriptorValue value = {}, std::uint64_t completedTimeline = 0)
+    {
         return allocate(DescriptorType::Sampler, value, completedTimeline);
     }
 
     [[nodiscard]] Halcyon::Result<BindlessHandle> allocateTyped(
         DescriptorType type, DescriptorValue value = {}, std::uint64_t completedTimeline = 0);
     [[nodiscard]] Halcyon::Result<DescriptorHandle> allocateDefault(
-        DescriptorType type, std::uint64_t completedTimeline = 0) {
+        DescriptorType type, std::uint64_t completedTimeline = 0)
+    {
         return allocate(type, defaultValue(type), completedTimeline);
     }
     [[nodiscard]] Halcyon::Result<BindlessHandle> allocateTypedDefault(
-        DescriptorType type, std::uint64_t completedTimeline = 0) {
+        DescriptorType type, std::uint64_t completedTimeline = 0)
+    {
         return allocateTyped(type, defaultValue(type), completedTimeline);
     }
 
-    [[nodiscard]] Halcyon::Result<void> update(DescriptorType type,
-                                               DescriptorHandle handle,
-                                               DescriptorValue value);
-    [[nodiscard]] Halcyon::Result<void> release(DescriptorType type,
-                                                DescriptorHandle handle,
-                                                std::uint64_t retireTimeline);
-    [[nodiscard]] Halcyon::Result<void> release(BindlessHandle handle,
-                                                std::uint64_t retireTimeline) {
+    [[nodiscard]] Halcyon::Result<void> update(
+        DescriptorType type, DescriptorHandle handle, DescriptorValue value);
+    [[nodiscard]] Halcyon::Result<void> release(
+        DescriptorType type, DescriptorHandle handle, std::uint64_t retireTimeline);
+    [[nodiscard]] Halcyon::Result<void> release(BindlessHandle handle, std::uint64_t retireTimeline)
+    {
         return release(handle.type, handle.slot, retireTimeline);
     }
-    [[nodiscard]] Halcyon::Result<void> touch(DescriptorType type,
-                                              DescriptorHandle handle,
-                                              std::uint64_t submittedTimeline);
-    [[nodiscard]] Halcyon::Result<void> touch(BindlessHandle handle,
-                                              std::uint64_t submittedTimeline) {
+    [[nodiscard]] Halcyon::Result<void> touch(
+        DescriptorType type, DescriptorHandle handle, std::uint64_t submittedTimeline);
+    [[nodiscard]] Halcyon::Result<void> touch(
+        BindlessHandle handle, std::uint64_t submittedTimeline)
+    {
         return touch(handle.type, handle.slot, submittedTimeline);
     }
     [[nodiscard]] std::size_t collect(std::uint64_t completedTimeline);
 
-    [[nodiscard]] Halcyon::Result<void> setDefault(DescriptorType type,
-                                                   DescriptorValue value);
+    [[nodiscard]] Halcyon::Result<void> setDefault(DescriptorType type, DescriptorValue value);
     [[nodiscard]] DescriptorHandle defaultHandle(DescriptorType type) const noexcept;
-    [[nodiscard]] BindlessHandle defaultTypedHandle(DescriptorType type) const noexcept {
+    [[nodiscard]] BindlessHandle defaultTypedHandle(DescriptorType type) const noexcept
+    {
         return BindlessHandle{type, defaultHandle(type)};
     }
     [[nodiscard]] bool contains(DescriptorType type, DescriptorHandle handle) const noexcept;
     [[nodiscard]] bool pending(DescriptorType type, DescriptorHandle handle) const noexcept;
-    [[nodiscard]] std::optional<DescriptorValue> get(DescriptorType type,
-                                                      DescriptorHandle handle) const noexcept;
-    [[nodiscard]] std::optional<DescriptorValue> get(BindlessHandle handle) const noexcept {
+    [[nodiscard]] std::optional<DescriptorValue> get(
+        DescriptorType type, DescriptorHandle handle) const noexcept;
+    [[nodiscard]] std::optional<DescriptorValue> get(BindlessHandle handle) const noexcept
+    {
         return get(handle.type, handle.slot);
     }
-    [[nodiscard]] Halcyon::Result<DescriptorValue> getResult(DescriptorType type,
-                                                             DescriptorHandle handle) const;
+    [[nodiscard]] Halcyon::Result<DescriptorValue> getResult(
+        DescriptorType type, DescriptorHandle handle) const;
 
     [[nodiscard]] DescriptorSlotAllocator& allocator(DescriptorType type) noexcept;
     [[nodiscard]] const DescriptorSlotAllocator& allocator(DescriptorType type) const noexcept;
@@ -269,20 +326,26 @@ public:
     [[nodiscard]] std::uint32_t capacity(DescriptorType type) const noexcept;
     [[nodiscard]] std::uint32_t liveCount(DescriptorType type) const noexcept;
     [[nodiscard]] std::uint32_t pendingCount(DescriptorType type) const noexcept;
-    [[nodiscard]] std::uint64_t completedTimeline() const noexcept {
+    [[nodiscard]] std::uint64_t completedTimeline() const noexcept
+    {
         return completedTimeline_;
     }
-    [[nodiscard]] bool initialized() const noexcept { return initialized_; }
+    [[nodiscard]] bool initialized() const noexcept
+    {
+        return initialized_;
+    }
 
     void clear() noexcept;
     void shutdown() noexcept;
 
 private:
-    [[nodiscard]] static std::size_t indexOf(DescriptorType type) noexcept {
+    [[nodiscard]] static std::size_t indexOf(DescriptorType type) noexcept
+    {
         return static_cast<std::size_t>(type);
     }
     [[nodiscard]] Halcyon::Core::Error invalidTypeError() const;
-    [[nodiscard]] bool validType(DescriptorType type) const noexcept {
+    [[nodiscard]] bool validType(DescriptorType type) const noexcept
+    {
         return indexOf(type) < kDescriptorTypeCount;
     }
 

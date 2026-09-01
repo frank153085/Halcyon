@@ -26,7 +26,8 @@ struct UploadAllocation
     std::uint64_t retireValue = 0;
     std::span<std::byte> bytes{};
 
-    [[nodiscard]] explicit operator bool() const noexcept {
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
         return size != 0 && !bytes.empty();
     }
 };
@@ -35,7 +36,7 @@ class UploadRing
 {
 public:
     explicit UploadRing(std::size_t capacityBytes = 4u * 1024u * 1024u)
-        : storage_(std::max<std::size_t>(capacityBytes, 1u))
+            : storage_(std::max<std::size_t>(capacityBytes, 1u))
     {
     }
 
@@ -44,24 +45,41 @@ public:
     UploadRing(UploadRing&&) = delete;
     UploadRing& operator=(UploadRing&&) = delete;
 
-    [[nodiscard]] std::size_t capacity() const noexcept { return storage_.size(); }
-    [[nodiscard]] std::size_t usedBytes() const noexcept {
+    [[nodiscard]] std::size_t capacity() const noexcept
+    {
+        return storage_.size();
+    }
+    [[nodiscard]] std::size_t usedBytes() const noexcept
+    {
         return static_cast<std::size_t>(head_ - tail_);
     }
-    [[nodiscard]] std::size_t freeBytes() const noexcept {
+    [[nodiscard]] std::size_t freeBytes() const noexcept
+    {
         return capacity() - std::min(usedBytes(), capacity());
     }
-    [[nodiscard]] std::size_t pendingAllocations() const noexcept { return inFlight_.size(); }
-    [[nodiscard]] std::size_t frameUploadedBytes() const noexcept { return frameBytes_; }
-    [[nodiscard]] std::size_t frameBudgetBytes() const noexcept { return frameBudget_; }
-    [[nodiscard]] std::size_t frameRemainingBytes() const noexcept {
+    [[nodiscard]] std::size_t pendingAllocations() const noexcept
+    {
+        return inFlight_.size();
+    }
+    [[nodiscard]] std::size_t frameUploadedBytes() const noexcept
+    {
+        return frameBytes_;
+    }
+    [[nodiscard]] std::size_t frameBudgetBytes() const noexcept
+    {
+        return frameBudget_;
+    }
+    [[nodiscard]] std::size_t frameRemainingBytes() const noexcept
+    {
         return frameBytes_ >= frameBudget_ ? 0u : frameBudget_ - frameBytes_;
     }
 
     // Limit work submitted by one frame.  This is independent from ring
     // capacity and is useful for preventing a large asset upload from
     // starving rendering.
-    void beginFrame(std::size_t uploadBudgetBytes = std::numeric_limits<std::size_t>::max()) noexcept {
+    void beginFrame(
+        std::size_t uploadBudgetBytes = std::numeric_limits<std::size_t>::max()) noexcept
+    {
         frameBytes_ = 0;
         frameBudget_ = uploadBudgetBytes;
     }
@@ -69,13 +87,16 @@ public:
     // Retire allocations whose GPU timeline value has completed.  Values are
     // expected to be submitted monotonically, as Vulkan timeline semaphores
     // guarantee.
-    void collect(std::uint64_t completedTimelineValue) noexcept {
+    void collect(std::uint64_t completedTimelineValue) noexcept
+    {
         completedTimelineValue_ = std::max(completedTimelineValue_, completedTimelineValue);
-        while (!inFlight_.empty() && inFlight_.front().retireValue <= completedTimelineValue_) {
+        while (!inFlight_.empty() && inFlight_.front().retireValue <= completedTimelineValue_)
+        {
             tail_ = std::max(tail_, inFlight_.front().end);
             inFlight_.pop_front();
         }
-        if (inFlight_.empty()) {
+        if (inFlight_.empty())
+        {
             // Keep cursors bounded and make a completely idle ring intuitive
             // to inspect in a debugger.
             tail_ = head_;
@@ -85,21 +106,25 @@ public:
     [[nodiscard]] Core::Result<UploadAllocation> allocate(
         std::size_t size, std::size_t alignment = 16u, std::uint64_t retireValue = 0u)
     {
-        if (size == 0u) {
+        if (size == 0u)
+        {
             return Core::Result<UploadAllocation>::failure(
                 Core::MakeError(Core::ErrorCode::InvalidArgument, "upload size must be non-zero"));
         }
-        if (alignment == 0u || (alignment & (alignment - 1u)) != 0u) {
+        if (alignment == 0u || (alignment & (alignment - 1u)) != 0u)
+        {
             return Core::Result<UploadAllocation>::failure(Core::MakeError(
                 Core::ErrorCode::InvalidArgument, "upload alignment must be a power of two"));
         }
-        if (size > capacity()) {
+        if (size > capacity())
+        {
             return Core::Result<UploadAllocation>::failure(Core::MakeError(
                 Core::ErrorCode::OutOfMemory, "upload does not fit in ring capacity"));
         }
-        if (size > frameRemainingBytes()) {
-            return Core::Result<UploadAllocation>::failure(Core::MakeError(
-                Core::ErrorCode::Timeout, "per-frame upload budget exhausted"));
+        if (size > frameRemainingBytes())
+        {
+            return Core::Result<UploadAllocation>::failure(
+                Core::MakeError(Core::ErrorCode::Timeout, "per-frame upload budget exhausted"));
         }
 
         const std::uint64_t aligned = alignUp(head_, alignment);
@@ -111,7 +136,8 @@ public:
                                             ? aligned + (capacity64 - offset)
                                             : aligned;
         const std::uint64_t end = candidate + static_cast<std::uint64_t>(size);
-        if (end - tail_ > capacity64) {
+        if (end - tail_ > capacity64)
+        {
             return Core::Result<UploadAllocation>::failure(Core::MakeError(
                 Core::ErrorCode::Timeout, "upload ring is still in use by the GPU"));
         }
@@ -132,16 +158,18 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] Core::Result<UploadAllocation> write(
-        std::span<const T> source, std::size_t alignment = alignof(T),
+    [[nodiscard]] Core::Result<UploadAllocation> write(std::span<const T> source,
+        std::size_t alignment = alignof(T),
         std::uint64_t retireValue = 0u)
     {
         const auto allocation = allocate(source.size_bytes(), alignment, retireValue);
-        if (!allocation) {
+        if (!allocation)
+        {
             return allocation;
         }
-        std::copy_n(reinterpret_cast<const std::byte*>(source.data()), source.size_bytes(),
-                    allocation.value().bytes.data());
+        std::copy_n(reinterpret_cast<const std::byte*>(source.data()),
+            source.size_bytes(),
+            allocation.value().bytes.data());
         return allocation;
     }
 
@@ -153,8 +181,8 @@ private:
         std::uint64_t retireValue = 0;
     };
 
-    [[nodiscard]] static std::uint64_t alignUp(std::uint64_t value,
-                                               std::size_t alignment) noexcept {
+    [[nodiscard]] static std::uint64_t alignUp(std::uint64_t value, std::size_t alignment) noexcept
+    {
         const auto mask = static_cast<std::uint64_t>(alignment - 1u);
         return (value + mask) & ~mask;
     }
@@ -169,4 +197,3 @@ private:
 };
 
 } // namespace Halcyon::Renderer::Resources
-

@@ -2,10 +2,9 @@
 
 #include "Core/Result.hpp"
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-
-#include <cstdint>
 #include <limits>
 #include <type_traits>
 
@@ -49,9 +48,7 @@ struct alignas(16) CameraData
     alignas(16) glm::vec4 positionAndNear{0.0f, 0.0f, 0.0f, 0.1f};
     alignas(16) glm::vec4 forwardAndFar{0.0f, 0.0f, -1.0f, 0.0f};
     // xy = pixel extent, zw = reciprocal pixel extent.
-    alignas(16) glm::vec4 viewportAndInvViewport{1280.0f, 720.0f,
-                                                  1.0f / 1280.0f,
-                                                  1.0f / 720.0f};
+    alignas(16) glm::vec4 viewportAndInvViewport{1280.0f, 720.0f, 1.0f / 1280.0f, 1.0f / 720.0f};
 };
 
 static_assert(alignof(CameraData) == 16);
@@ -60,27 +57,26 @@ static_assert(std::is_standard_layout_v<CameraData>);
 
 // Standalone constructors are useful in tests and non-interactive replay
 // tools.  On failure they return InvalidArgument and never produce NaNs.
-[[nodiscard]] Halcyon::Result<glm::mat4> makeReversedZProjection(
-    const Perspective& perspective);
+[[nodiscard]] Halcyon::Result<glm::mat4> makeReversedZProjection(const Perspective& perspective);
 
 class Camera final
 {
 public:
     Camera() = default;
 
-    [[nodiscard]] Halcyon::Result<void> setPerspective(
-        const Perspective& perspective);
+    [[nodiscard]] Halcyon::Result<void> setPerspective(const Perspective& perspective);
     [[nodiscard]] Halcyon::Result<void> setViewport(ViewportExtent extent);
 
     [[nodiscard]] Halcyon::Result<void> setPosition(const glm::vec3& position);
-    [[nodiscard]] Halcyon::Result<void> setOrientation(
-        const glm::quat& cameraToWorld);
-    [[nodiscard]] Halcyon::Result<void> lookAt(
-        const glm::vec3& position,
+    [[nodiscard]] Halcyon::Result<void> setOrientation(const glm::quat& cameraToWorld);
+    [[nodiscard]] Halcyon::Result<void> lookAt(const glm::vec3& position,
         const glm::vec3& target,
         const glm::vec3& upHint = glm::vec3{0.0f, 1.0f, 0.0f});
 
-    [[nodiscard]] const glm::vec3& position() const noexcept { return position_; }
+    [[nodiscard]] const glm::vec3& position() const noexcept
+    {
+        return position_;
+    }
     [[nodiscard]] const glm::quat& orientation() const noexcept
     {
         return orientation_;
@@ -89,7 +85,10 @@ public:
     {
         return perspective_;
     }
-    [[nodiscard]] ViewportExtent viewport() const noexcept { return viewport_; }
+    [[nodiscard]] ViewportExtent viewport() const noexcept
+    {
+        return viewport_;
+    }
 
     [[nodiscard]] glm::vec3 forward() const noexcept;
     [[nodiscard]] glm::vec3 right() const noexcept;

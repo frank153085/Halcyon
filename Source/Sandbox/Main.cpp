@@ -1,11 +1,10 @@
 #ifndef GLFW_INCLUDE_NONE
-#    define GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_NONE
 #endif
-#include <GLFW/glfw3.h>
-
 #include "Core/Log.hpp"
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.hpp"
 
+#include <GLFW/glfw3.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +13,7 @@
 #include <string_view>
 
 #ifndef HALCYON_ENABLE_VALIDATION
-#    define HALCYON_ENABLE_VALIDATION 1
+#define HALCYON_ENABLE_VALIDATION 1
 #endif
 
 namespace
@@ -22,8 +21,8 @@ namespace
 
 void glfwErrorCallback(int error, const char* description)
 {
-    HALCYON_LOG_ERROR("GLFW error ", error, ": ",
-                      description != nullptr ? description : "unknown error");
+    HALCYON_LOG_ERROR(
+        "GLFW error ", error, ": ", description != nullptr ? description : "unknown error");
 }
 
 void framebufferSizeCallback(GLFWwindow* window, int width, int height)
@@ -34,9 +33,8 @@ void framebufferSizeCallback(GLFWwindow* window, int width, int height)
         return;
     }
 
-    const auto result = renderer->resize(
-        {width > 0 ? static_cast<std::uint32_t>(width) : 0u,
-         height > 0 ? static_cast<std::uint32_t>(height) : 0u});
+    const auto result = renderer->resize({width > 0 ? static_cast<std::uint32_t>(width) : 0u,
+        height > 0 ? static_cast<std::uint32_t>(height) : 0u});
     if (!result)
     {
         HALCYON_LOG_ERROR("Resize request failed: ", result.error().describe());
@@ -45,17 +43,29 @@ void framebufferSizeCallback(GLFWwindow* window, int width, int height)
 
 void logCapabilities(const Halcyon::Vulkan::Capabilities& capabilities)
 {
-    HALCYON_LOG_INFO("GPU: ", capabilities.deviceName,
-                     " (Vulkan ", VK_API_VERSION_MAJOR(capabilities.deviceApiVersion), '.',
-                     VK_API_VERSION_MINOR(capabilities.deviceApiVersion), '.',
-                     VK_API_VERSION_PATCH(capabilities.deviceApiVersion), ')');
-    HALCYON_LOG_INFO("Base tier: dynamicRendering=", capabilities.dynamicRendering,
-                     ", synchronization2=", capabilities.synchronization2,
-                     ", timelineSemaphore=", capabilities.timelineSemaphore);
-    HALCYON_LOG_INFO("GPU-driven tier: descriptorIndexing=", capabilities.descriptorIndexing,
-                     ", bufferDeviceAddress=", capabilities.bufferDeviceAddress,
-                     ", indirectCount=", capabilities.indirectCount,
-                     ", barycentric=", capabilities.fragmentBarycentric);
+    HALCYON_LOG_INFO("GPU: ",
+        capabilities.deviceName,
+        " (Vulkan ",
+        VK_API_VERSION_MAJOR(capabilities.deviceApiVersion),
+        '.',
+        VK_API_VERSION_MINOR(capabilities.deviceApiVersion),
+        '.',
+        VK_API_VERSION_PATCH(capabilities.deviceApiVersion),
+        ')');
+    HALCYON_LOG_INFO("Base tier: dynamicRendering=",
+        capabilities.dynamicRendering,
+        ", synchronization2=",
+        capabilities.synchronization2,
+        ", timelineSemaphore=",
+        capabilities.timelineSemaphore);
+    HALCYON_LOG_INFO("GPU-driven tier: descriptorIndexing=",
+        capabilities.descriptorIndexing,
+        ", bufferDeviceAddress=",
+        capabilities.bufferDeviceAddress,
+        ", indirectCount=",
+        capabilities.indirectCount,
+        ", barycentric=",
+        capabilities.fragmentBarycentric);
     HALCYON_LOG_INFO("Optional ray query: ", capabilities.rayQuery);
 }
 
@@ -108,7 +118,8 @@ bool parseCommandLine(int argc, char** argv, CommandLine& commandLine)
             continue;
         }
 
-        const auto consumeValue = [&](std::string_view name, std::uint64_t& output) {
+        const auto consumeValue = [&](std::string_view name, std::uint64_t& output)
+        {
             if (argument == name && index + 1 < argc)
             {
                 return parseUnsigned(argv[++index] != nullptr ? argv[index] : "", output);
@@ -196,8 +207,8 @@ int main(int argc, char** argv)
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    GLFWwindow* window = glfwCreateWindow(commandLine.width, commandLine.height,
-                                          "Halcyon M1", nullptr, nullptr);
+    GLFWwindow* window =
+        glfwCreateWindow(commandLine.width, commandLine.height, "Halcyon M1", nullptr, nullptr);
     if (window == nullptr)
     {
         HALCYON_LOG_CRITICAL("Window creation failed");
@@ -223,8 +234,8 @@ int main(int argc, char** argv)
     const auto initializeResult = renderer.initialize(window, config);
     if (!initializeResult)
     {
-        HALCYON_LOG_CRITICAL("Renderer initialization failed: ",
-                             initializeResult.error().describe());
+        HALCYON_LOG_CRITICAL(
+            "Renderer initialization failed: ", initializeResult.error().describe());
         glfwDestroyWindow(window);
         glfwTerminate();
         return EXIT_FAILURE;
@@ -254,8 +265,7 @@ int main(int argc, char** argv)
         }
         if (stats.fatalError || !renderer.initialized())
         {
-            HALCYON_LOG_CRITICAL("Renderer entered a fatal state: ",
-                                 renderer.lastError());
+            HALCYON_LOG_CRITICAL("Renderer entered a fatal state: ", renderer.lastError());
             exitCode = EXIT_FAILURE;
             break;
         }
@@ -275,14 +285,15 @@ int main(int argc, char** argv)
             char title[160]{};
             if (stats.gpuFrameMs >= 0.0)
             {
-                std::snprintf(title, sizeof(title),
-                              "Halcyon M1 | CPU %.2f ms | GPU %.2f ms",
-                              stats.cpuFrameMs, stats.gpuFrameMs);
+                std::snprintf(title,
+                    sizeof(title),
+                    "Halcyon M1 | CPU %.2f ms | GPU %.2f ms",
+                    stats.cpuFrameMs,
+                    stats.gpuFrameMs);
             }
             else
             {
-                std::snprintf(title, sizeof(title), "Halcyon M1 | CPU %.2f ms",
-                              stats.cpuFrameMs);
+                std::snprintf(title, sizeof(title), "Halcyon M1 | CPU %.2f ms", stats.cpuFrameMs);
             }
             glfwSetWindowTitle(window, title);
         }

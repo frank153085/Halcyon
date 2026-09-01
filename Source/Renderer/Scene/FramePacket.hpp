@@ -76,4 +76,3 @@ namespace Halcyon
 using SceneFramePacket = Renderer::Scene::FramePacket;
 using OwnedSceneFramePacket = Renderer::Scene::OwnedFramePacket;
 } // namespace Halcyon
-

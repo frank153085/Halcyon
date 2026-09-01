@@ -6,4 +6,3 @@
 #include "HandlePool.hpp"
 #include "Log.hpp"
 #include "Result.hpp"
-

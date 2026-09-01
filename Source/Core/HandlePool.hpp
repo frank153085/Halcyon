@@ -25,8 +25,10 @@ namespace Halcyon::Core
 {
 namespace detail
 {
-template <typename HandleOrTag, typename IndexT, typename GenerationT,
-          bool IsHandleType = IsHandle<HandleOrTag>::value>
+template <typename HandleOrTag,
+    typename IndexT,
+    typename GenerationT,
+    bool IsHandleType = IsHandle<HandleOrTag>::value>
 struct pool_handle_selector;
 
 template <typename HandleOrTag, typename IndexT, typename GenerationT>
@@ -58,15 +60,15 @@ struct pool_handle_selector<HandleOrTag, IndexT, GenerationT, true>
  * lifetime.
  */
 template <typename T,
-          typename HandleOrTag = DefaultHandleTag,
-          typename IndexT = std::uint32_t,
-          typename GenerationT = std::uint32_t>
+    typename HandleOrTag = DefaultHandleTag,
+    typename IndexT = std::uint32_t,
+    typename GenerationT = std::uint32_t>
 class HandlePool
 {
 public:
     using value_type = T;
-    using handle_type = typename detail::pool_handle_selector<HandleOrTag, IndexT,
-                                                               GenerationT>::type;
+    using handle_type =
+        typename detail::pool_handle_selector<HandleOrTag, IndexT, GenerationT>::type;
     using index_type = typename handle_type::index_type;
     using generation_type = typename handle_type::generation_type;
 
@@ -83,16 +85,18 @@ public:
     HandlePool(const HandlePool&) = delete;
     HandlePool& operator=(const HandlePool&) = delete;
     HandlePool(HandlePool&& other) noexcept
-        : slots_(std::move(other.slots_)),
-          firstFree_(std::exchange(other.firstFree_, npos)),
-          size_(std::exchange(other.size_, 0))
+            : slots_(std::move(other.slots_)),
+              firstFree_(std::exchange(other.firstFree_, npos)),
+              size_(std::exchange(other.size_, 0))
     {
     }
 
     HandlePool& operator=(HandlePool&& other) noexcept
     {
         if (this == &other)
+        {
             return *this;
+        }
         slots_ = std::move(other.slots_);
         firstFree_ = std::exchange(other.firstFree_, npos);
         size_ = std::exchange(other.size_, 0);
@@ -100,7 +104,10 @@ public:
     }
     ~HandlePool() = default;
 
-    void reserve(std::size_t count) { slots_.reserve(count); }
+    void reserve(std::size_t count)
+    {
+        slots_.reserve(count);
+    }
 
     /** Reserve index zero without constructing a value there. */
     bool reserveSlotZero()
@@ -114,7 +121,9 @@ public:
 
         Slot& slot = slots_[0];
         if (slot.reserved)
+        {
             return true;
+        }
         if (slot.value.has_value())
         {
             slot.reserved = true;
@@ -129,7 +138,10 @@ public:
 
     // Naming aliases used by resource managers that call the sentinel a
     // "default" slot rather than slot zero.
-    bool reserveDefaultSlot() { return reserveSlotZero(); }
+    bool reserveDefaultSlot()
+    {
+        return reserveSlotZero();
+    }
 
     [[nodiscard]] bool isSlotZeroReserved() const noexcept
     {
@@ -140,7 +152,9 @@ public:
     [[nodiscard]] handle_type defaultHandle() const noexcept
     {
         if (slots_.empty() || !slots_[0].reserved || !slots_[0].value.has_value())
+        {
             return handle_type::invalid();
+        }
         return handle_type{static_cast<index_type>(0), slots_[0].generation};
     }
 
@@ -176,11 +190,9 @@ public:
         }
         catch (...)
         {
-            return Result<handle_type>::failure(
-                Error{ErrorCode::InvalidState,
-                      "unknown exception while constructing default resource"});
+            return Result<handle_type>::failure(Error{
+                ErrorCode::InvalidState, "unknown exception while constructing default resource"});
         }
-
     }
 
     template <typename... Args>
@@ -232,7 +244,9 @@ public:
     {
         Slot* slot = slotFor(handle);
         if (slot == nullptr || slot->reserved || !slot->value.has_value())
+        {
             return false;
+        }
 
         slot->value.reset();
         slot->generation = nextGeneration(slot->generation);
@@ -241,9 +255,18 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool remove(handle_type handle) noexcept { return erase(handle); }
-    [[nodiscard]] bool release(handle_type handle) noexcept { return erase(handle); }
-    [[nodiscard]] bool destroy(handle_type handle) noexcept { return erase(handle); }
+    [[nodiscard]] bool remove(handle_type handle) noexcept
+    {
+        return erase(handle);
+    }
+    [[nodiscard]] bool release(handle_type handle) noexcept
+    {
+        return erase(handle);
+    }
+    [[nodiscard]] bool destroy(handle_type handle) noexcept
+    {
+        return erase(handle);
+    }
 
     /** Invalidate all live handles while retaining capacity and slot-zero reservation. */
     void clear() noexcept
@@ -260,7 +283,9 @@ public:
             }
             slot.nextFree = npos;
             if (!slot.reserved)
+            {
                 pushFree(static_cast<index_type>(i));
+            }
         }
     }
 
@@ -269,8 +294,14 @@ public:
         const Slot* slot = slotFor(handle);
         return slot != nullptr && slot->value.has_value();
     }
-    [[nodiscard]] bool valid(handle_type handle) const noexcept { return contains(handle); }
-    [[nodiscard]] bool isValid(handle_type handle) const noexcept { return contains(handle); }
+    [[nodiscard]] bool valid(handle_type handle) const noexcept
+    {
+        return contains(handle);
+    }
+    [[nodiscard]] bool isValid(handle_type handle) const noexcept
+    {
+        return contains(handle);
+    }
 
     [[nodiscard]] T* get(handle_type handle) noexcept
     {
@@ -284,13 +315,21 @@ public:
         return slot != nullptr && slot->value.has_value() ? std::addressof(*slot->value) : nullptr;
     }
 
-    [[nodiscard]] T* tryGet(handle_type handle) noexcept { return get(handle); }
-    [[nodiscard]] const T* tryGet(handle_type handle) const noexcept { return get(handle); }
+    [[nodiscard]] T* tryGet(handle_type handle) noexcept
+    {
+        return get(handle);
+    }
+    [[nodiscard]] const T* tryGet(handle_type handle) const noexcept
+    {
+        return get(handle);
+    }
 
     [[nodiscard]] Result<T*> getResult(handle_type handle)
     {
         if (T* value = get(handle))
+        {
             return Result<T*>::success(value);
+        }
         return Result<T*>::failure(
             Error{ErrorCode::NotFound, "handle is invalid or has been released"});
     }
@@ -298,7 +337,9 @@ public:
     [[nodiscard]] Result<const T*> getResult(handle_type handle) const
     {
         if (const T* value = get(handle))
+        {
             return Result<const T*>::success(value);
+        }
         return Result<const T*>::failure(
             Error{ErrorCode::NotFound, "handle is invalid or has been released"});
     }
@@ -306,21 +347,37 @@ public:
     T& at(handle_type handle)
     {
         if (T* value = get(handle))
+        {
             return *value;
+        }
         throw std::out_of_range("HandlePool::at called with an invalid handle");
     }
 
     const T& at(handle_type handle) const
     {
         if (const T* value = get(handle))
+        {
             return *value;
+        }
         throw std::out_of_range("HandlePool::at called with an invalid handle");
     }
 
-    [[nodiscard]] std::size_t size() const noexcept { return size_; }
-    [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
-    [[nodiscard]] std::size_t slotCount() const noexcept { return slots_.size(); }
-    [[nodiscard]] std::size_t capacity() const noexcept { return slots_.capacity(); }
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return size_;
+    }
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+    [[nodiscard]] std::size_t slotCount() const noexcept
+    {
+        return slots_.size();
+    }
+    [[nodiscard]] std::size_t capacity() const noexcept
+    {
+        return slots_.capacity();
+    }
 
     /** Invoke f(handle, value) (or f(value)) for every live slot. */
     template <typename F>
@@ -330,15 +387,23 @@ public:
         {
             Slot& slot = slots_[i];
             if (!slot.value.has_value())
+            {
                 continue;
+            }
             const handle_type handle{static_cast<index_type>(i), slot.generation};
             if constexpr (std::invocable<F&, handle_type, T&>)
+            {
                 std::invoke(function, handle, *slot.value);
+            }
             else if constexpr (std::invocable<F&, T&>)
+            {
                 std::invoke(function, *slot.value);
+            }
             else
+            {
                 static_assert(std::invocable<F&, T&>,
-                              "HandlePool::forEach callback must accept (handle, value) or value");
+                    "HandlePool::forEach callback must accept (handle, value) or value");
+            }
         }
     }
 
@@ -349,15 +414,23 @@ public:
         {
             const Slot& slot = slots_[i];
             if (!slot.value.has_value())
+            {
                 continue;
+            }
             const handle_type handle{static_cast<index_type>(i), slot.generation};
             if constexpr (std::invocable<F&, handle_type, const T&>)
+            {
                 std::invoke(function, handle, *slot.value);
+            }
             else if constexpr (std::invocable<F&, const T&>)
+            {
                 std::invoke(function, *slot.value);
+            }
             else
+            {
                 static_assert(std::invocable<F&, const T&>,
-                              "HandlePool::forEach callback must accept (handle, value) or value");
+                    "HandlePool::forEach callback must accept (handle, value) or value");
+            }
         }
     }
 
@@ -374,14 +447,18 @@ private:
     {
         ++current;
         if (current == handle_type::kInvalidGeneration)
+        {
             current = generation_type{1};
+        }
         return current;
     }
 
     void appendSlot()
     {
         if (slots_.size() >= static_cast<std::size_t>(kInvalidIndex))
+        {
             throw std::length_error("HandlePool exhausted handle index space");
+        }
         slots_.emplace_back();
     }
 
@@ -404,7 +481,9 @@ private:
     {
         Slot& slot = slots_[static_cast<std::size_t>(index)];
         if (slot.reserved)
+        {
             return;
+        }
         slot.nextFree = firstFree_;
         firstFree_ = index;
     }
@@ -412,7 +491,9 @@ private:
     void unlinkFree(index_type index) noexcept
     {
         if (firstFree_ == npos)
+        {
             return;
+        }
         if (firstFree_ == index)
         {
             firstFree_ = slots_[static_cast<std::size_t>(index)].nextFree;
@@ -437,10 +518,14 @@ private:
     [[nodiscard]] Slot* slotFor(handle_type handle) noexcept
     {
         if (!handle.isValid())
+        {
             return nullptr;
+        }
         const std::size_t index = static_cast<std::size_t>(handle.index());
         if (index >= slots_.size())
+        {
             return nullptr;
+        }
         Slot& slot = slots_[index];
         return slot.generation == handle.generation() ? &slot : nullptr;
     }
@@ -448,10 +533,14 @@ private:
     [[nodiscard]] const Slot* slotFor(handle_type handle) const noexcept
     {
         if (!handle.isValid())
+        {
             return nullptr;
+        }
         const std::size_t index = static_cast<std::size_t>(handle.index());
         if (index >= slots_.size())
+        {
             return nullptr;
+        }
         const Slot& slot = slots_[index];
         return slot.generation == handle.generation() ? &slot : nullptr;
     }
@@ -461,8 +550,10 @@ private:
     std::size_t size_{0};
 };
 
-template <typename T, typename Tag = DefaultHandleTag,
-          typename IndexT = std::uint32_t, typename GenerationT = std::uint32_t>
+template <typename T,
+    typename Tag = DefaultHandleTag,
+    typename IndexT = std::uint32_t,
+    typename GenerationT = std::uint32_t>
 using TypedHandlePool = HandlePool<T, Handle<Tag, IndexT, GenerationT>>;
 
 } // namespace Halcyon::Core

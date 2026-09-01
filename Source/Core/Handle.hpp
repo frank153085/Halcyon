@@ -4,8 +4,8 @@
 // types non-interchangeable at compile time (e.g. TextureHandle cannot be
 // passed where a MeshHandle is expected).
 
-#include <cstddef>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -18,15 +18,13 @@ struct DefaultHandleTag
 {
 };
 
-template <typename Tag,
-          typename IndexT = std::uint32_t,
-          typename GenerationT = std::uint32_t>
+template <typename Tag, typename IndexT = std::uint32_t, typename GenerationT = std::uint32_t>
 class Handle
 {
     static_assert(std::is_integral_v<IndexT> && std::is_unsigned_v<IndexT>,
-                  "Handle index type must be an unsigned integer");
+        "Handle index type must be an unsigned integer");
     static_assert(std::is_integral_v<GenerationT> && std::is_unsigned_v<GenerationT>,
-                  "Handle generation type must be an unsigned integer");
+        "Handle generation type must be an unsigned integer");
 
 public:
     using tag_type = Tag;
@@ -41,14 +39,18 @@ public:
     constexpr Handle() noexcept = default;
 
     constexpr Handle(index_type index, generation_type generation) noexcept
-        : index_(index), generation_(generation)
+            : index_(index),
+              generation_(generation)
     {
     }
 
-    [[nodiscard]] static constexpr Handle invalid() noexcept { return {}; }
+    [[nodiscard]] static constexpr Handle invalid() noexcept
+    {
+        return {};
+    }
 
-    [[nodiscard]] static constexpr Handle fromParts(index_type index,
-                                                    generation_type generation) noexcept
+    [[nodiscard]] static constexpr Handle fromParts(
+        index_type index, generation_type generation) noexcept
     {
         return Handle{index, generation};
     }
@@ -57,20 +59,35 @@ public:
     {
         return index_ != kInvalidIndex && generation_ != kInvalidGeneration;
     }
-    [[nodiscard]] constexpr bool valid() const noexcept { return isValid(); }
-    explicit constexpr operator bool() const noexcept { return isValid(); }
+    [[nodiscard]] constexpr bool valid() const noexcept
+    {
+        return isValid();
+    }
+    explicit constexpr operator bool() const noexcept
+    {
+        return isValid();
+    }
 
-    [[nodiscard]] constexpr index_type index() const noexcept { return index_; }
-    [[nodiscard]] constexpr generation_type generation() const noexcept { return generation_; }
-    [[nodiscard]] constexpr index_type slot() const noexcept { return index_; }
+    [[nodiscard]] constexpr index_type index() const noexcept
+    {
+        return index_;
+    }
+    [[nodiscard]] constexpr generation_type generation() const noexcept
+    {
+        return generation_;
+    }
+    [[nodiscard]] constexpr index_type slot() const noexcept
+    {
+        return index_;
+    }
 
     /** Pack the two fields into a stable 64-bit value for diagnostics/maps. */
     [[nodiscard]] constexpr std::uint64_t packed() const noexcept
     {
         constexpr unsigned indexBits = static_cast<unsigned>(sizeof(index_type) * 8u);
         constexpr unsigned generationBits = static_cast<unsigned>(sizeof(generation_type) * 8u);
-        static_assert(indexBits + generationBits <= 64u,
-                      "Handle fields must fit in 64 bits to use packed()");
+        static_assert(
+            indexBits + generationBits <= 64u, "Handle fields must fit in 64 bits to use packed()");
         return (static_cast<std::uint64_t>(generation_) << indexBits) |
                static_cast<std::uint64_t>(index_);
     }
@@ -123,7 +140,7 @@ struct hash<Halcyon::Core::Handle<Tag, IndexT, GenerationT>>
         const std::size_t indexHash = static_cast<std::size_t>(handle.index());
         const std::size_t generationHash = static_cast<std::size_t>(handle.generation());
         return indexHash ^ (generationHash + static_cast<std::size_t>(0x9e3779b9u) +
-                            (indexHash << 6u) + (indexHash >> 2u));
+                               (indexHash << 6u) + (indexHash >> 2u));
     }
 };
 } // namespace std

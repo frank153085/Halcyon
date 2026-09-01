@@ -2,12 +2,12 @@
 #include "Renderer/Resources/UploadRing.hpp"
 
 #ifndef HALCYON_BUILD_EXPERIMENTAL_M2
-#    define HALCYON_BUILD_EXPERIMENTAL_M2 0
+#define HALCYON_BUILD_EXPERIMENTAL_M2 0
 #endif
 
 #if HALCYON_BUILD_EXPERIMENTAL_M2
-#    include "Renderer/Graph/BarrierPlanner.hpp"
-#    include "Renderer/Resources/BindlessTable.hpp"
+#include "Renderer/Graph/BarrierPlanner.hpp"
+#include "Renderer/Resources/BindlessTable.hpp"
 #endif
 
 #include <array>
@@ -32,13 +32,16 @@ public:
         }
     }
 
-    [[nodiscard]] int failures() const noexcept { return failures_; }
+    [[nodiscard]] int failures() const noexcept
+    {
+        return failures_;
+    }
 
 private:
     int failures_ = 0;
 };
 
-#define HALCYON_EXPECT(context, expression) \
+#define HALCYON_EXPECT(context, expression)                                                        \
     (context).expect(static_cast<bool>(expression), #expression, __LINE__)
 
 void uploadRingTests(TestContext& context)
@@ -74,8 +77,16 @@ void deletionQueueTests(TestContext& context)
 {
     Halcyon::Renderer::Resources::DeferredDeletionQueue queue;
     int destroyed = 0;
-    queue.enqueue(5, [&destroyed] { ++destroyed; });
-    queue.enqueue(2, [&destroyed] { destroyed += 10; });
+    queue.enqueue(5,
+        [&destroyed]
+        {
+            ++destroyed;
+        });
+    queue.enqueue(2,
+        [&destroyed]
+        {
+            destroyed += 10;
+        });
     HALCYON_EXPECT(context, queue.collect(1) == 0u);
     HALCYON_EXPECT(context, queue.collect(2) == 1u);
     HALCYON_EXPECT(context, destroyed == 10);
@@ -89,13 +100,17 @@ void barrierPlannerTests(TestContext& context)
     namespace Graph = Halcyon::Renderer::Graph;
     const auto texture = Graph::TextureHandle{3u, 1u};
     const std::array<Graph::ResourceAccess, 1> write{
-        Graph::ResourceAccess{Graph::ResourceKind::Texture, texture.index(),
-                              texture.generation(), Graph::AccessMode::Write,
-                              Graph::ResourceUsage::ColorAttachment}};
+        Graph::ResourceAccess{Graph::ResourceKind::Texture,
+            texture.index(),
+            texture.generation(),
+            Graph::AccessMode::Write,
+            Graph::ResourceUsage::ColorAttachment}};
     const std::array<Graph::ResourceAccess, 1> read{
-        Graph::ResourceAccess{Graph::ResourceKind::Texture, texture.index(),
-                              texture.generation(), Graph::AccessMode::Read,
-                              Graph::ResourceUsage::Sampled}};
+        Graph::ResourceAccess{Graph::ResourceKind::Texture,
+            texture.index(),
+            texture.generation(),
+            Graph::AccessMode::Read,
+            Graph::ResourceUsage::Sampled}};
     Graph::BarrierPlanner planner;
     const auto first = planner.plan(write, Graph::QueueClass::Graphics);
     HALCYON_EXPECT(context, first.size() == 1u && first.front().required);
@@ -145,15 +160,13 @@ void bindlessTests(TestContext& context)
     // older completion value.
     const auto storage = table.allocateStorageImage();
     HALCYON_EXPECT(context, storage);
-    HALCYON_EXPECT(context,
-                   table.release(DescriptorType::StorageImage, storage.value(), 5u));
+    HALCYON_EXPECT(context, table.release(DescriptorType::StorageImage, storage.value(), 5u));
     const auto timelineAdvance = table.allocateSampledImage({}, 10u);
     HALCYON_EXPECT(context, timelineAdvance);
     const auto recycledStorage = table.allocateStorageImage({}, 0u);
     HALCYON_EXPECT(context, recycledStorage);
     HALCYON_EXPECT(context, recycledStorage.value().index() == storage.value().index());
-    HALCYON_EXPECT(context,
-                   recycledStorage.value().generation() != storage.value().generation());
+    HALCYON_EXPECT(context, recycledStorage.value().generation() != storage.value().generation());
 }
 #endif
 

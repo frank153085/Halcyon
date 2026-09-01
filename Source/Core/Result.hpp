@@ -4,8 +4,8 @@
 // deliberately do not depend on Vulkan (or any other backend), so they can be
 // used by tools and unit tests as well as the renderer.
 
-#include <cstdint>
 #include <concepts>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -45,18 +45,30 @@ enum class ErrorCode : std::uint32_t
 {
     switch (code)
     {
-    case ErrorCode::Unknown:         return "unknown";
-    case ErrorCode::InvalidArgument: return "invalid argument";
-    case ErrorCode::InvalidState:    return "invalid state";
-    case ErrorCode::NotFound:        return "not found";
-    case ErrorCode::AlreadyExists:   return "already exists";
-    case ErrorCode::OutOfMemory:     return "out of memory";
-    case ErrorCode::Io:              return "I/O error";
-    case ErrorCode::Unsupported:     return "unsupported";
-    case ErrorCode::Timeout:         return "timeout";
-    case ErrorCode::Cancelled:       return "cancelled";
-    case ErrorCode::DeviceLost:      return "device lost";
-    case ErrorCode::Backend:         return "backend error";
+        case ErrorCode::Unknown:
+            return "unknown";
+        case ErrorCode::InvalidArgument:
+            return "invalid argument";
+        case ErrorCode::InvalidState:
+            return "invalid state";
+        case ErrorCode::NotFound:
+            return "not found";
+        case ErrorCode::AlreadyExists:
+            return "already exists";
+        case ErrorCode::OutOfMemory:
+            return "out of memory";
+        case ErrorCode::Io:
+            return "I/O error";
+        case ErrorCode::Unsupported:
+            return "unsupported";
+        case ErrorCode::Timeout:
+            return "timeout";
+        case ErrorCode::Cancelled:
+            return "cancelled";
+        case ErrorCode::DeviceLost:
+            return "device lost";
+        case ErrorCode::Backend:
+            return "backend error";
     }
     return "unknown";
 }
@@ -70,15 +82,16 @@ struct Error
 
     Error() = default;
 
-    Error(ErrorCode errorCode,
-          std::string errorMessage = {},
-          std::string errorContext = {})
-        : code(errorCode), message(std::move(errorMessage)), context(std::move(errorContext))
+    Error(ErrorCode errorCode, std::string errorMessage = {}, std::string errorContext = {})
+            : code(errorCode),
+              message(std::move(errorMessage)),
+              context(std::move(errorContext))
     {
     }
 
     explicit Error(std::string errorMessage)
-        : code(ErrorCode::Unknown), message(std::move(errorMessage))
+            : code(ErrorCode::Unknown),
+              message(std::move(errorMessage))
     {
     }
 
@@ -92,10 +105,14 @@ struct Error
     {
         Error copy = *this;
         if (prefix.empty())
+        {
             return copy;
+        }
 
         if (copy.context.empty())
+        {
             copy.context.assign(prefix);
+        }
         else
         {
             std::string combined;
@@ -155,21 +172,57 @@ public:
     using error_type = Error;
 
     constexpr Result() noexcept = default;
-    Result(const Error& error) : error_(error) {}
-    Result(Error&& error) noexcept : error_(std::move(error)) {}
+    Result(const Error& error)
+            : error_(error)
+    {
+    }
+    Result(Error&& error) noexcept
+            : error_(std::move(error))
+    {
+    }
 
-    static Result success() noexcept { return Result{}; }
-    static Result failure(Error error) { return Result(std::move(error)); }
+    static Result success() noexcept
+    {
+        return Result{};
+    }
+    static Result failure(Error error)
+    {
+        return Result(std::move(error));
+    }
 
-    [[nodiscard]] bool hasValue() const noexcept { return !error_.has_value(); }
-    [[nodiscard]] bool has_value() const noexcept { return hasValue(); }
-    [[nodiscard]] bool isOk() const noexcept { return hasValue(); }
-    [[nodiscard]] bool is_ok() const noexcept { return isOk(); }
-    [[nodiscard]] bool isError() const noexcept { return !hasValue(); }
-    [[nodiscard]] bool is_error() const noexcept { return isError(); }
-    explicit operator bool() const noexcept { return hasValue(); }
+    [[nodiscard]] bool hasValue() const noexcept
+    {
+        return !error_.has_value();
+    }
+    [[nodiscard]] bool has_value() const noexcept
+    {
+        return hasValue();
+    }
+    [[nodiscard]] bool isOk() const noexcept
+    {
+        return hasValue();
+    }
+    [[nodiscard]] bool is_ok() const noexcept
+    {
+        return isOk();
+    }
+    [[nodiscard]] bool isError() const noexcept
+    {
+        return !hasValue();
+    }
+    [[nodiscard]] bool is_error() const noexcept
+    {
+        return isError();
+    }
+    explicit operator bool() const noexcept
+    {
+        return hasValue();
+    }
 
-    void value() const { ensureValue(); }
+    void value() const
+    {
+        ensureValue();
+    }
 
     Error& error() &
     {
@@ -197,10 +250,12 @@ public:
     [[nodiscard]] auto map(F&& function) const
     {
         using Mapped = std::invoke_result_t<F>;
-        using MappedValue = std::conditional_t<std::is_void_v<Mapped>, void,
-                                               std::remove_cvref_t<Mapped>>;
+        using MappedValue =
+            std::conditional_t<std::is_void_v<Mapped>, void, std::remove_cvref_t<Mapped>>;
         if (isError())
+        {
             return Result<MappedValue>::failure(*error_);
+        }
         if constexpr (std::is_void_v<Mapped>)
         {
             std::invoke(std::forward<F>(function));
@@ -216,13 +271,17 @@ private:
     void ensureValue() const
     {
         if (isError())
-            throw std::logic_error("attempted to access value of a failed Result: " +
-                                   error_->describe());
+        {
+            throw std::logic_error(
+                "attempted to access value of a failed Result: " + error_->describe());
+        }
     }
     void ensureError() const
     {
         if (hasValue())
+        {
             throw std::logic_error("attempted to access error of a successful Result");
+        }
     }
 
     std::optional<Error> error_;
@@ -240,17 +299,26 @@ class Result
 public:
     static_assert(!std::is_reference_v<T> && !std::is_void_v<T> &&
                       !std::is_same_v<std::remove_cv_t<T>, Error>,
-                  "Result<T> requires a non-reference, non-void value type");
+        "Result<T> requires a non-reference, non-void value type");
     using value_type = T;
     using error_type = Error;
 
-    Result(const T& value) : storage_(value) {}
-    Result(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
-        : storage_(std::move(value))
+    Result(const T& value)
+            : storage_(value)
     {
     }
-    Result(const Error& error) : storage_(error) {}
-    Result(Error&& error) noexcept : storage_(std::move(error)) {}
+    Result(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
+            : storage_(std::move(value))
+    {
+    }
+    Result(const Error& error)
+            : storage_(error)
+    {
+    }
+    Result(Error&& error) noexcept
+            : storage_(std::move(error))
+    {
+    }
 
     template <typename... Args>
         requires std::constructible_from<T, Args...>
@@ -268,12 +336,30 @@ public:
     {
         return std::holds_alternative<T>(storage_);
     }
-    [[nodiscard]] bool has_value() const noexcept { return hasValue(); }
-    [[nodiscard]] bool isOk() const noexcept { return hasValue(); }
-    [[nodiscard]] bool is_ok() const noexcept { return isOk(); }
-    [[nodiscard]] bool isError() const noexcept { return !hasValue(); }
-    [[nodiscard]] bool is_error() const noexcept { return isError(); }
-    explicit operator bool() const noexcept { return hasValue(); }
+    [[nodiscard]] bool has_value() const noexcept
+    {
+        return hasValue();
+    }
+    [[nodiscard]] bool isOk() const noexcept
+    {
+        return hasValue();
+    }
+    [[nodiscard]] bool is_ok() const noexcept
+    {
+        return isOk();
+    }
+    [[nodiscard]] bool isError() const noexcept
+    {
+        return !hasValue();
+    }
+    [[nodiscard]] bool is_error() const noexcept
+    {
+        return isError();
+    }
+    explicit operator bool() const noexcept
+    {
+        return hasValue();
+    }
 
     T& value() &
     {
@@ -296,12 +382,30 @@ public:
         return std::get<T>(std::move(storage_));
     }
 
-    T& operator*() & { return value(); }
-    const T& operator*() const& { return value(); }
-    T&& operator*() && { return std::move(value()); }
-    const T&& operator*() const&& { return std::move(value()); }
-    T* operator->() { return std::addressof(value()); }
-    const T* operator->() const { return std::addressof(value()); }
+    T& operator*() &
+    {
+        return value();
+    }
+    const T& operator*() const&
+    {
+        return value();
+    }
+    T&& operator*() &&
+    {
+        return std::move(value());
+    }
+    const T&& operator*() const&&
+    {
+        return std::move(value());
+    }
+    T* operator->()
+    {
+        return std::addressof(value());
+    }
+    const T* operator->() const
+    {
+        return std::addressof(value());
+    }
 
     Error& error() &
     {
@@ -327,8 +431,7 @@ public:
     template <typename U>
     [[nodiscard]] T valueOr(U&& fallback) const&
     {
-        return hasValue() ? std::get<T>(storage_)
-                          : static_cast<T>(std::forward<U>(fallback));
+        return hasValue() ? std::get<T>(storage_) : static_cast<T>(std::forward<U>(fallback));
     }
 
     template <typename U>
@@ -356,10 +459,12 @@ public:
     [[nodiscard]] auto map(F&& function) &
     {
         using Mapped = std::invoke_result_t<F, T&>;
-        using MappedValue = std::conditional_t<std::is_void_v<Mapped>, void,
-                                               std::remove_cvref_t<Mapped>>;
+        using MappedValue =
+            std::conditional_t<std::is_void_v<Mapped>, void, std::remove_cvref_t<Mapped>>;
         if (!hasValue())
+        {
             return Result<MappedValue>::failure(error());
+        }
         if constexpr (std::is_void_v<Mapped>)
         {
             std::invoke(std::forward<F>(function), value());
@@ -367,8 +472,7 @@ public:
         }
         else
         {
-            return Result<MappedValue>::success(
-                std::invoke(std::forward<F>(function), value()));
+            return Result<MappedValue>::success(std::invoke(std::forward<F>(function), value()));
         }
     }
 
@@ -377,10 +481,12 @@ public:
     [[nodiscard]] auto map(F&& function) const&
     {
         using Mapped = std::invoke_result_t<F, const T&>;
-        using MappedValue = std::conditional_t<std::is_void_v<Mapped>, void,
-                                               std::remove_cvref_t<Mapped>>;
+        using MappedValue =
+            std::conditional_t<std::is_void_v<Mapped>, void, std::remove_cvref_t<Mapped>>;
         if (!hasValue())
+        {
             return Result<MappedValue>::failure(error());
+        }
         if constexpr (std::is_void_v<Mapped>)
         {
             std::invoke(std::forward<F>(function), value());
@@ -388,8 +494,7 @@ public:
         }
         else
         {
-            return Result<MappedValue>::success(
-                std::invoke(std::forward<F>(function), value()));
+            return Result<MappedValue>::success(std::invoke(std::forward<F>(function), value()));
         }
     }
 
@@ -401,7 +506,9 @@ public:
         using Next = std::invoke_result_t<F, T&>;
         static_assert(detail::is_result_v<Next>, "andThen callable must return Result<U>");
         if (!hasValue())
+        {
             return Next::failure(error());
+        }
         return std::invoke(std::forward<F>(function), value());
     }
 
@@ -412,7 +519,9 @@ public:
         using Next = std::invoke_result_t<F, const T&>;
         static_assert(detail::is_result_v<Next>, "andThen callable must return Result<U>");
         if (!hasValue())
+        {
             return Next::failure(error());
+        }
         return std::invoke(std::forward<F>(function), value());
     }
 
@@ -420,13 +529,17 @@ private:
     void ensureValue() const
     {
         if (!hasValue())
+        {
             throw std::logic_error("attempted to access value of a failed Result: " +
                                    std::get<Error>(storage_).describe());
+        }
     }
     void ensureError() const
     {
         if (hasValue())
+        {
             throw std::logic_error("attempted to access error of a successful Result");
+        }
     }
 
     std::variant<T, Error> storage_;
@@ -452,9 +565,7 @@ template <typename T>
     return Result<void>::failure(std::move(error));
 }
 
-[[nodiscard]] inline Error MakeError(ErrorCode code,
-                                     std::string message,
-                                     std::string context = {})
+[[nodiscard]] inline Error MakeError(ErrorCode code, std::string message, std::string context = {})
 {
     return Error{code, std::move(message), std::move(context)};
 }

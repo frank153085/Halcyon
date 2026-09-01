@@ -58,9 +58,11 @@ Halcyon::Result<std::vector<FileRecord>> collect(const fs::path& root)
     }
 
     std::vector<FileRecord> records;
-    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied,
-                                             error), end;
-         it != end && !error; it.increment(error))
+    for (fs::recursive_directory_iterator
+             it(root, fs::directory_options::skip_permission_denied, error),
+        end;
+        it != end && !error;
+        it.increment(error))
     {
         if (!it->is_regular_file(error) || error)
         {
@@ -79,24 +81,26 @@ Halcyon::Result<std::vector<FileRecord>> collect(const fs::path& root)
             return Halcyon::Result<std::vector<FileRecord>>::failure(Halcyon::MakeError(
                 Halcyon::ErrorCode::Io, "unable to stat asset", it->path().string()));
         }
-        records.push_back(FileRecord{
-            fs::relative(it->path(), root, sizeError).generic_string(),
-            static_cast<std::uint64_t>(size), fnv1a(stream)});
+        records.push_back(FileRecord{fs::relative(it->path(), root, sizeError).generic_string(),
+            static_cast<std::uint64_t>(size),
+            fnv1a(stream)});
     }
     if (error)
     {
         return Halcyon::Result<std::vector<FileRecord>>::failure(Halcyon::MakeError(
             Halcyon::ErrorCode::Io, "unable to enumerate input directory", error.message()));
     }
-    std::sort(records.begin(), records.end(), [](const FileRecord& lhs, const FileRecord& rhs) {
-        return lhs.relativePath < rhs.relativePath;
-    });
+    std::sort(records.begin(),
+        records.end(),
+        [](const FileRecord& lhs, const FileRecord& rhs)
+        {
+            return lhs.relativePath < rhs.relativePath;
+        });
     return Halcyon::Ok(std::move(records));
 }
 
-Halcyon::Result<void> writeManifest(const fs::path& output,
-                                    const fs::path& root,
-                                    const std::vector<FileRecord>& records)
+Halcyon::Result<void> writeManifest(
+    const fs::path& output, const fs::path& root, const std::vector<FileRecord>& records)
 {
     const fs::path temporary = output.string() + ".tmp";
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
@@ -110,10 +114,10 @@ Halcyon::Result<void> writeManifest(const fs::path& output,
     for (std::size_t i = 0; i < records.size(); ++i)
     {
         const auto& record = records[i];
-        stream << "    {\"path\": \"" << record.relativePath << "\", \"bytes\": "
-               << record.byteCount << ", \"fnv1a64\": \"0x" << std::hex
-               << std::setw(16) << std::setfill('0') << record.hash << std::dec
-               << "\"}" << (i + 1u == records.size() ? "\n" : ",\n");
+        stream << "    {\"path\": \"" << record.relativePath
+               << "\", \"bytes\": " << record.byteCount << ", \"fnv1a64\": \"0x" << std::hex
+               << std::setw(16) << std::setfill('0') << record.hash << std::dec << "\"}"
+               << (i + 1u == records.size() ? "\n" : ",\n");
     }
     stream << "  ]\n}\n";
     stream.close();
@@ -193,7 +197,6 @@ int main(int argc, char** argv)
         std::cerr << result.error().describe() << '\n';
         return 1;
     }
-    std::cout << "Cooked " << records.value().size() << " files into "
-              << output.string() << '\n';
+    std::cout << "Cooked " << records.value().size() << " files into " << output.string() << '\n';
     return 0;
 }

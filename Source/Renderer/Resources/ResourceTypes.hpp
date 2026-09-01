@@ -12,12 +12,24 @@
 namespace Halcyon::Renderer::Resources
 {
 
-struct MeshTag {};
-struct MaterialTag {};
-struct TextureTag {};
-struct BufferTag {};
-struct PipelineTag {};
-struct SamplerTag {};
+struct MeshTag
+{
+};
+struct MaterialTag
+{
+};
+struct TextureTag
+{
+};
+struct BufferTag
+{
+};
+struct PipelineTag
+{
+};
+struct SamplerTag
+{
+};
 
 using MeshHandle = Core::Handle<MeshTag>;
 using MaterialHandle = Core::Handle<MaterialTag>;
@@ -107,12 +119,11 @@ struct ResourceRef
     std::uint32_t type = 0;
 
     template <typename HandleT>
-    [[nodiscard]] static constexpr ResourceRef from(HandleT handle,
-                                                     std::uint32_t resourceType) noexcept
+    [[nodiscard]] static constexpr ResourceRef from(
+        HandleT handle, std::uint32_t resourceType) noexcept
     {
         return ResourceRef{handle.packed(), resourceType};
     }
 };
 
 } // namespace Halcyon::Renderer::Resources
-

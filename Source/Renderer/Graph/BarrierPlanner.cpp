@@ -98,15 +98,15 @@ UsageInfo describeUsage(ResourceKind kind, ResourceUsage usage, AccessMode mode)
         // ResourceUsage does not encode a shader stage, so use every stage
         // supported by the current abstraction rather than under-synchronise
         // vertex texture fetches.
-        info.stage = info.stage | PipelineStage::VertexShader |
-                     PipelineStage::FragmentShader | PipelineStage::ComputeShader;
+        info.stage = info.stage | PipelineStage::VertexShader | PipelineStage::FragmentShader |
+                     PipelineStage::ComputeShader;
         info.access = info.access | AccessFlags::ShaderSampledRead;
         info.layout = ImageLayout::ShaderReadOnly;
     }
     if (any(usage & ResourceUsage::Storage))
     {
-        info.stage = info.stage | PipelineStage::VertexShader |
-                     PipelineStage::ComputeShader | PipelineStage::FragmentShader;
+        info.stage = info.stage | PipelineStage::VertexShader | PipelineStage::ComputeShader |
+                     PipelineStage::FragmentShader;
         if (accessReads)
         {
             info.access = info.access | AccessFlags::ShaderStorageRead;
@@ -193,7 +193,10 @@ UsageInfo describeUsage(ResourceKind kind, ResourceUsage usage, AccessMode mode)
     return info;
 }
 
-void BarrierPlanner::begin() noexcept { states_.clear(); }
+void BarrierPlanner::begin() noexcept
+{
+    states_.clear();
+}
 
 std::vector<ResourceBarrier> BarrierPlanner::plan(
     std::span<const ResourceAccess> accesses, QueueClass queue)
@@ -205,8 +208,9 @@ std::vector<ResourceBarrier> BarrierPlanner::plan(
     merged.reserve(accesses.size());
     for (const auto& access : accesses)
     {
-        const auto existing = std::find_if(
-            merged.begin(), merged.end(), [&](const ResourceAccess& candidate)
+        const auto existing = std::find_if(merged.begin(),
+            merged.end(),
+            [&](const ResourceAccess& candidate)
             {
                 return candidate.kind == access.kind &&
                        candidate.resourceIndex == access.resourceIndex &&
@@ -240,16 +244,16 @@ std::vector<ResourceBarrier> BarrierPlanner::plan(
         }
         const bool queueTransfer = found != states_.end() && before.queue != queue;
         const bool alreadyTracked = found != states_.end();
-        const bool hazard = alreadyTracked &&
-                            (before.writes || after.writes || before.layout != after.layout ||
-                             queueTransfer);
+        const bool hazard = alreadyTracked && (before.writes || after.writes ||
+                                                  before.layout != after.layout || queueTransfer);
         // An image needs its initial Undefined -> desired layout transition.
         // A buffer has no layout and no prior access to make visible, so its
         // first use does not need a memory barrier.
-        const bool initialImageTransition = !alreadyTracked && access.kind == ResourceKind::Texture &&
+        const bool initialImageTransition = !alreadyTracked &&
+                                            access.kind == ResourceKind::Texture &&
                                             after.layout != ImageLayout::Undefined;
-        barriers.push_back(ResourceBarrier{access, before, after,
-                                           hazard || initialImageTransition, queueTransfer});
+        barriers.push_back(ResourceBarrier{
+            access, before, after, hazard || initialImageTransition, queueTransfer});
         if (!alreadyTracked)
         {
             missingKeys.push_back(key);
@@ -284,15 +288,15 @@ std::vector<ResourceBarrier> BarrierPlanner::plan(
     }
     for (const auto& barrier : barriers)
     {
-        const Key key{barrier.access.kind, barrier.access.resourceIndex,
-                      barrier.access.resourceGeneration};
+        const Key key{
+            barrier.access.kind, barrier.access.resourceIndex, barrier.access.resourceGeneration};
         states_.find(key)->second = barrier.after;
     }
     return barriers;
 }
 
-const BarrierState* BarrierPlanner::state(ResourceKind kind, std::uint32_t index,
-                                          std::uint32_t generation) const noexcept
+const BarrierState* BarrierPlanner::state(
+    ResourceKind kind, std::uint32_t index, std::uint32_t generation) const noexcept
 {
     const auto found = states_.find(Key{kind, index, generation});
     return found == states_.end() ? nullptr : &found->second;

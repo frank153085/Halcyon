@@ -34,13 +34,20 @@ enum class LogLevel : std::uint8_t
 {
     switch (level)
     {
-    case LogLevel::Trace:    return "TRACE";
-    case LogLevel::Debug:    return "DEBUG";
-    case LogLevel::Info:     return "INFO";
-    case LogLevel::Warn:     return "WARN";
-    case LogLevel::Error:    return "ERROR";
-    case LogLevel::Critical: return "CRITICAL";
-    case LogLevel::Off:      return "OFF";
+        case LogLevel::Trace:
+            return "TRACE";
+        case LogLevel::Debug:
+            return "DEBUG";
+        case LogLevel::Info:
+            return "INFO";
+        case LogLevel::Warn:
+            return "WARN";
+        case LogLevel::Error:
+            return "ERROR";
+        case LogLevel::Critical:
+            return "CRITICAL";
+        case LogLevel::Off:
+            return "OFF";
     }
     return "UNKNOWN";
 }
@@ -118,7 +125,9 @@ public:
             {
                 std::scoped_lock lock(mutex_);
                 if (level == LogLevel::Off || level_ == LogLevel::Off || level < level_)
+                {
                     return;
+                }
                 sink = sink_;
             }
 
@@ -126,7 +135,9 @@ public:
             // string_view. A sink must not retain the view after this call.
             const std::string ownedMessage(message);
             if (sink)
+            {
                 sink(level, ownedMessage);
+            }
         }
         catch (...)
         {
@@ -139,7 +150,9 @@ public:
     void logf(LogLevel level, Args&&... args) const noexcept
     {
         if (!shouldLog(level))
+        {
             return;
+        }
         try
         {
             std::ostringstream stream;
@@ -197,15 +210,18 @@ public:
     }
 
 private:
-    Logger() : sink_(&Logger::defaultSink) {}
+    Logger()
+            : sink_(&Logger::defaultSink)
+    {
+    }
 
     static void defaultSink(LogLevel level, std::string_view message) noexcept
     {
         try
         {
             const auto now = std::chrono::system_clock::now();
-            const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now.time_since_epoch());
+            const auto milliseconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
             std::clog << '[' << milliseconds.count() << "ms] [" << toString(level) << "] [tid "
                       << std::this_thread::get_id() << "] " << message << '\n';
         }
@@ -255,12 +271,12 @@ inline void LogCritical(Args&&... args) noexcept
 // Optional macro façade.  The calls remain type-safe and arguments are only
 // formatted when the corresponding level is enabled.
 #ifndef HALCYON_LOG_TRACE
-#    define HALCYON_LOG_TRACE(...) ::Halcyon::Core::LogTrace(__VA_ARGS__)
-#    define HALCYON_LOG_DEBUG(...) ::Halcyon::Core::LogDebug(__VA_ARGS__)
-#    define HALCYON_LOG_INFO(...)  ::Halcyon::Core::LogInfo(__VA_ARGS__)
-#    define HALCYON_LOG_WARN(...)  ::Halcyon::Core::LogWarn(__VA_ARGS__)
-#    define HALCYON_LOG_ERROR(...) ::Halcyon::Core::LogError(__VA_ARGS__)
-#    define HALCYON_LOG_CRITICAL(...) ::Halcyon::Core::LogCritical(__VA_ARGS__)
+#define HALCYON_LOG_TRACE(...) ::Halcyon::Core::LogTrace(__VA_ARGS__)
+#define HALCYON_LOG_DEBUG(...) ::Halcyon::Core::LogDebug(__VA_ARGS__)
+#define HALCYON_LOG_INFO(...) ::Halcyon::Core::LogInfo(__VA_ARGS__)
+#define HALCYON_LOG_WARN(...) ::Halcyon::Core::LogWarn(__VA_ARGS__)
+#define HALCYON_LOG_ERROR(...) ::Halcyon::Core::LogError(__VA_ARGS__)
+#define HALCYON_LOG_CRITICAL(...) ::Halcyon::Core::LogCritical(__VA_ARGS__)
 #endif
 
 namespace Halcyon

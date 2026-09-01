@@ -5,8 +5,6 @@
 // objects (command pools, swapchain images, etc.); callers submit an
 // immutable FramePacket and receive diagnostic frame statistics.
 
-#include <vulkan/vulkan.h>
-
 #include "../../Core/Result.hpp"
 #include "../Scene/Camera.hpp"
 #include "../Scene/FramePacket.hpp"
@@ -16,27 +14,33 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vulkan/vulkan.h>
 
 struct GLFWwindow;
 
-namespace Halcyon::Vulkan {
+namespace Halcyon::Vulkan
+{
 
-enum class FeatureMode : std::uint8_t {
+enum class FeatureMode : std::uint8_t
+{
     Disabled,
     Auto,
     Required,
 };
 
-struct Extent2D {
+struct Extent2D
+{
     std::uint32_t width = 1280;
     std::uint32_t height = 720;
 
-    [[nodiscard]] constexpr bool empty() const noexcept {
+    [[nodiscard]] constexpr bool empty() const noexcept
+    {
         return width == 0 || height == 0;
     }
 };
 
-struct RendererConfig {
+struct RendererConfig
+{
     Extent2D initialExtent{};
     float targetFrameTimeMs = 16.667f;
     std::uint32_t framesInFlight = 3;
@@ -53,14 +57,16 @@ using InstanceData = Halcyon::Renderer::Scene::InstanceData;
 using LightData = Halcyon::Renderer::Scene::LightData;
 using FramePacket = Halcyon::Renderer::Scene::FramePacket;
 
-struct QualityState {
+struct QualityState
+{
     float internalResolutionScale = 1.0f;
     float shadowResolutionScale = 1.0f;
     float lodBias = 0.0f;
     bool rayQueryEnabled = false;
 };
 
-struct FrameStats {
+struct FrameStats
+{
     double cpuFrameMs = 0.0;
     double gpuFrameMs = -1.0;
     std::uint64_t deviceMemoryBytes = 0;
@@ -74,7 +80,8 @@ struct FrameStats {
     bool fatalError = false;
 };
 
-struct Capabilities {
+struct Capabilities
+{
     std::uint32_t instanceApiVersion = VK_API_VERSION_1_0;
     std::uint32_t deviceApiVersion = VK_API_VERSION_1_0;
     std::string deviceName;
@@ -98,7 +105,8 @@ struct Capabilities {
     std::uint32_t presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 };
 
-class Renderer final {
+class Renderer final
+{
 public:
     Renderer() noexcept;
     ~Renderer();

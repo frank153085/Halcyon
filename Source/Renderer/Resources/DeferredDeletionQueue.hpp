@@ -43,9 +43,15 @@ private:
         struct Model final : Concept
         {
             template <typename U>
-            explicit Model(U&& function) : function_(std::forward<U>(function)) {}
+            explicit Model(U&& function)
+                    : function_(std::forward<U>(function))
+            {
+            }
 
-            void invoke() override { std::invoke(function_); }
+            void invoke() override
+            {
+                std::invoke(function_);
+            }
 
             F function_;
         };
@@ -61,11 +67,14 @@ private:
             requires(!std::same_as<std::decay_t<F>, Callback> &&
                      std::invocable<std::remove_reference_t<F>&>)
         explicit Callback(F&& function)
-            : implementation_(makeImplementation(std::forward<F>(function)))
+                : implementation_(makeImplementation(std::forward<F>(function)))
         {
         }
 
-        void operator()() { implementation_->invoke(); }
+        void operator()()
+        {
+            implementation_->invoke();
+        }
 
     private:
         template <typename F>
@@ -79,7 +88,9 @@ private:
             if constexpr (std::is_pointer_v<Function>)
             {
                 if (function == nullptr)
+                {
                     throw std::invalid_argument("DeferredDeletionQueue callback is null");
+                }
             }
             return std::make_unique<Model<Function>>(std::forward<F>(function));
         }
@@ -143,7 +154,9 @@ public:
         {
             auto node = extractReady(completed);
             if (!node)
+            {
                 break;
+            }
 
             try
             {
@@ -166,7 +179,9 @@ public:
         {
             auto node = extractAny();
             if (!node)
+            {
                 break;
+            }
 
             try
             {
@@ -186,7 +201,10 @@ public:
      * Flush here as a last-resort leak guard; callback exceptions are already
      * contained by flush().
      */
-    ~DeferredDeletionQueue() noexcept { (void)flush(); }
+    ~DeferredDeletionQueue() noexcept
+    {
+        (void)flush();
+    }
 
     [[nodiscard]] std::size_t size() const noexcept
     {
@@ -194,7 +212,10 @@ public:
         return entries_.size();
     }
 
-    [[nodiscard]] bool empty() const noexcept { return size() == 0; }
+    [[nodiscard]] bool empty() const noexcept
+    {
+        return size() == 0;
+    }
 
     /** Number of callbacks that threw since the last clearErrors() call. */
     [[nodiscard]] std::size_t errorCount() const noexcept
@@ -203,7 +224,10 @@ public:
         return errorCount_;
     }
 
-    [[nodiscard]] bool hasErrors() const noexcept { return errorCount() != 0; }
+    [[nodiscard]] bool hasErrors() const noexcept
+    {
+        return errorCount() != 0;
+    }
 
     /** Return the most recently captured exception for diagnostics, if any. */
     [[nodiscard]] std::exception_ptr lastException() const noexcept
@@ -225,7 +249,9 @@ private:
         std::scoped_lock lock(mutex_);
         const auto iterator = entries_.begin();
         if (iterator == entries_.end() || iterator->first > completed)
+        {
             return {};
+        }
         return entries_.extract(iterator);
     }
 
@@ -233,7 +259,9 @@ private:
     {
         std::scoped_lock lock(mutex_);
         if (entries_.empty())
+        {
             return {};
+        }
         return entries_.extract(entries_.begin());
     }
 
