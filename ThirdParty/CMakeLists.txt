@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.28)
 
 function(halcyon_add_header_only name include_dir)
     add_library(${name} INTERFACE)
-    target_include_directories(${name} INTERFACE
+    target_include_directories(${name} SYSTEM INTERFACE
         "${CMAKE_CURRENT_LIST_DIR}/${include_dir}")
     add_library(Halcyon::${name} ALIAS ${name})
 endfunction()

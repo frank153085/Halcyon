@@ -60,6 +60,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/FramePacket.h
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.cpp
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
+    Source/Renderer/Vulkan/GpuAllocator.cpp
+    Source/Renderer/Vulkan/GpuAllocator.h
     Source/Renderer/Resources/ResourceTypes.h
     Source/Renderer/Resources/UploadRing.h
 )
@@ -161,6 +163,15 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonCoreTests)
     add_test(NAME Halcyon.Core COMMAND HalcyonCoreTests)
 
+    add_executable(HalcyonMemoryAllocatorTests
+        Tests/MemoryAllocatorTests.cpp
+        Source/Core/Memory/HeapAllocator.cpp
+        Source/Core/Memory/LinearAllocator.cpp
+        Source/Core/Memory/FrameArena.cpp)
+    target_link_libraries(HalcyonMemoryAllocatorTests PRIVATE HalcyonCore)
+    halcyon_enable_warnings(HalcyonMemoryAllocatorTests)
+    add_test(NAME Halcyon.MemoryAllocator COMMAND HalcyonMemoryAllocatorTests)
+
     if(HALCYON_BUILD_EXPERIMENTAL_M2)
         add_executable(HalcyonRendererCoreTests Tests/RendererCoreTests.cpp)
         target_link_libraries(HalcyonRendererCoreTests
@@ -201,6 +212,7 @@ if(HALCYON_BUILD_TESTS)
     add_custom_target(HalcyonTests)
     add_dependencies(HalcyonTests
         HalcyonCoreTests
+        HalcyonMemoryAllocatorTests
         HalcyonCameraTests
         HalcyonInfrastructureTests
         HalcyonDeferredDeletionTests)

@@ -1,5 +1,7 @@
 #include "HalcyonVulkanRenderer.h"
 
+#include "GpuAllocator.h"
+
 // GLFW is included here (rather than in the public header) so applications
 // can choose their own GLFW include policy.  The Vulkan include guard makes
 // this safe when the caller included glfw3.h with GLFW_INCLUDE_VULKAN first.
@@ -428,26 +430,6 @@ struct DeviceCandidate
         }
     }
     return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-}
-
-// Select a memory type without pulling a full allocator into the first
-// vertical slice.  The helper is deliberately kept local to the Vulkan
-// backend; higher layers only deal in resource handles and descriptors.
-[[nodiscard]] bool findMemoryType(const VkPhysicalDeviceMemoryProperties& properties,
-    std::uint32_t typeBits,
-    VkMemoryPropertyFlags required,
-    std::uint32_t& typeIndex) noexcept
-{
-    for (std::uint32_t index = 0; index < properties.memoryTypeCount; ++index)
-    {
-        if ((typeBits & (std::uint32_t{1} << index)) != 0 &&
-            (properties.memoryTypes[index].propertyFlags & required) == required)
-        {
-            typeIndex = index;
-            return true;
-        }
-    }
-    return false;
 }
 
 // The source of these modules is Shaders/triangle.*.hlsl.  Keeping a tiny
@@ -896,7 +878,7 @@ struct Renderer::Impl
     // intentional: it gives reversed-Z the precision it needs and keeps the
     // image usable by later Hi-Z experiments without a stencil dependency.
     VkImage depthImage = VK_NULL_HANDLE;
-    VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+    ImageAllocation depthAllocation{};
     VkImageView depthImageView = VK_NULL_HANDLE;
     VkDeviceSize depthMemorySize = 0;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
@@ -931,6 +913,7 @@ struct Renderer::Impl
     bool rayQueryEnabled = false;
     std::uint64_t deviceLocalBytes = 0;
     VkDeviceSize deviceMemoryBytes = 0;
+    GpuAllocator gpuAllocator;
 
     ~Impl()
     {
@@ -950,21 +933,14 @@ struct Renderer::Impl
             {
                 vkDestroyImageView(device, depthImageView, nullptr);
             }
-            if (depthImage != VK_NULL_HANDLE)
-            {
-                vkDestroyImage(device, depthImage, nullptr);
-            }
-            if (depthMemory != VK_NULL_HANDLE)
-            {
-                vkFreeMemory(device, depthMemory, nullptr);
-            }
+            gpuAllocator.destroy(depthAllocation);
         }
         depthImageView = VK_NULL_HANDLE;
         depthImage = VK_NULL_HANDLE;
-        depthMemory = VK_NULL_HANDLE;
+        depthAllocation = {};
         depthMemorySize = 0;
         depthImageInitialized = false;
-        deviceMemoryBytes = 0;
+        deviceMemoryBytes = gpuAllocator.allocatedBytes();
     }
 
     void cleanupSwapchain() noexcept
@@ -1036,6 +1012,7 @@ struct Renderer::Impl
                 vkDestroySemaphore(device, timelineSemaphore, nullptr);
                 timelineSemaphore = VK_NULL_HANDLE;
             }
+            gpuAllocator.shutdown();
             vkDestroyDevice(device, nullptr);
             device = VK_NULL_HANDLE;
         }
@@ -1629,12 +1606,12 @@ struct Renderer::Impl
     // and leave the old swapchain/depth target intact if allocation fails.
     [[nodiscard]] VoidResult createDepthResources(VkExtent2D extent,
         VkImage& outImage,
-        VkDeviceMemory& outMemory,
+        ImageAllocation& outAllocation,
         VkImageView& outView,
         VkDeviceSize& outMemorySize)
     {
         outImage = VK_NULL_HANDLE;
-        outMemory = VK_NULL_HANDLE;
+        outAllocation = {};
         outView = VK_NULL_HANDLE;
         outMemorySize = 0;
         if (extent.width == 0 || extent.height == 0)
@@ -1665,49 +1642,13 @@ struct Renderer::Impl
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        VkResult result = vkCreateImage(device, &imageInfo, nullptr, &outImage);
-        if (result != VK_SUCCESS)
+        const auto allocationResult = gpuAllocator.createImage(imageInfo, MemoryUsage::GpuOnly);
+        if (!allocationResult)
         {
-            outImage = VK_NULL_HANDLE;
-            return fail(vkFailure("vkCreateImage(depth)", result));
+            return allocationResult.error();
         }
-
-        VkMemoryRequirements requirements{};
-        vkGetImageMemoryRequirements(device, outImage, &requirements);
-        std::uint32_t memoryType = 0;
-        if (!findMemoryType(memoryProperties,
-                requirements.memoryTypeBits,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                memoryType))
-        {
-            vkDestroyImage(device, outImage, nullptr);
-            outImage = VK_NULL_HANDLE;
-            return fail("No device-local memory type is available for the depth image",
-                Halcyon::ErrorCode::OutOfMemory);
-        }
-
-        VkMemoryAllocateInfo allocateInfo{};
-        allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocateInfo.allocationSize = requirements.size;
-        allocateInfo.memoryTypeIndex = memoryType;
-        result = vkAllocateMemory(device, &allocateInfo, nullptr, &outMemory);
-        if (result != VK_SUCCESS)
-        {
-            vkDestroyImage(device, outImage, nullptr);
-            outImage = VK_NULL_HANDLE;
-            outMemory = VK_NULL_HANDLE;
-            return fail(vkFailure("vkAllocateMemory(depth)", result));
-        }
-
-        result = vkBindImageMemory(device, outImage, outMemory, 0);
-        if (result != VK_SUCCESS)
-        {
-            vkFreeMemory(device, outMemory, nullptr);
-            vkDestroyImage(device, outImage, nullptr);
-            outMemory = VK_NULL_HANDLE;
-            outImage = VK_NULL_HANDLE;
-            return fail(vkFailure("vkBindImageMemory(depth)", result));
-        }
+        outAllocation = allocationResult.value();
+        outImage = outAllocation.image;
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1719,17 +1660,16 @@ struct Renderer::Impl
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.baseArrayLayer = 0;
         viewInfo.subresourceRange.layerCount = 1;
-        result = vkCreateImageView(device, &viewInfo, nullptr, &outView);
+        const VkResult result = vkCreateImageView(device, &viewInfo, nullptr, &outView);
         if (result != VK_SUCCESS)
         {
-            vkFreeMemory(device, outMemory, nullptr);
-            vkDestroyImage(device, outImage, nullptr);
+            gpuAllocator.destroy(outAllocation);
             outView = VK_NULL_HANDLE;
-            outMemory = VK_NULL_HANDLE;
+            outAllocation = {};
             outImage = VK_NULL_HANDLE;
             return fail(vkFailure("vkCreateImageView(depth)", result));
         }
-        outMemorySize = requirements.size;
+        outMemorySize = outAllocation.size;
         return ok();
     }
 
@@ -1930,11 +1870,11 @@ struct Renderer::Impl
         }
 
         VkImage newDepthImage = VK_NULL_HANDLE;
-        VkDeviceMemory newDepthMemory = VK_NULL_HANDLE;
+        ImageAllocation newDepthAllocation{};
         VkImageView newDepthView = VK_NULL_HANDLE;
         VkDeviceSize newDepthMemorySize = 0;
         const VoidResult depthResult = createDepthResources(
-            extent, newDepthImage, newDepthMemory, newDepthView, newDepthMemorySize);
+            extent, newDepthImage, newDepthAllocation, newDepthView, newDepthMemorySize);
         if (!depthResult)
         {
             for (VkSemaphore created : newPresentSemaphores)
@@ -1970,12 +1910,13 @@ struct Renderer::Impl
         swapchainFormat = surfaceFormat.format;
         swapchainColorSpace = surfaceFormat.colorSpace;
         swapchainExtent = extent;
-        const VkImage oldDepthImage = std::exchange(depthImage, newDepthImage);
-        const VkDeviceMemory oldDepthMemory = std::exchange(depthMemory, newDepthMemory);
+        (void)std::exchange(depthImage, newDepthImage);
+        const ImageAllocation oldDepthAllocation =
+            std::exchange(depthAllocation, newDepthAllocation);
         const VkImageView oldDepthView = std::exchange(depthImageView, newDepthView);
         depthMemorySize = newDepthMemorySize;
         depthImageInitialized = false;
-        deviceMemoryBytes = depthMemorySize;
+        deviceMemoryBytes = gpuAllocator.allocatedBytes();
         destroyTrianglePipeline();
         (void)createTrianglePipeline();
         if (device != VK_NULL_HANDLE)
@@ -2005,14 +1946,7 @@ struct Renderer::Impl
             {
                 vkDestroyImageView(device, oldDepthView, nullptr);
             }
-            if (oldDepthImage != VK_NULL_HANDLE)
-            {
-                vkDestroyImage(device, oldDepthImage, nullptr);
-            }
-            if (oldDepthMemory != VK_NULL_HANDLE)
-            {
-                vkFreeMemory(device, oldDepthMemory, nullptr);
-            }
+            gpuAllocator.destroy(oldDepthAllocation);
         }
         framebufferResized = false;
         return ok();
@@ -2790,6 +2724,14 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             return result;
         }
         result = impl_->createDevice();
+        if (!result)
+        {
+            impl_->setError(result.error().describe());
+            impl_->cleanup();
+            return result;
+        }
+        result =
+            impl_->gpuAllocator.initialize(impl_->instance, impl_->physicalDevice, impl_->device);
         if (!result)
         {
             impl_->setError(result.error().describe());
