@@ -1,6 +1,7 @@
 #include "HalcyonVulkanRenderer.h"
 
 #include "GpuAllocator.h"
+#include "GpuUploader.h"
 
 // GLFW is included here (rather than in the public header) so applications
 // can choose their own GLFW include policy.  The Vulkan include guard makes
@@ -914,6 +915,8 @@ struct Renderer::Impl
     std::uint64_t deviceLocalBytes = 0;
     VkDeviceSize deviceMemoryBytes = 0;
     GpuAllocator gpuAllocator;
+    GpuUploader gpuUploader;
+    BufferAllocation triangleVertexBuffer{};
 
     ~Impl()
     {
@@ -986,6 +989,8 @@ struct Renderer::Impl
             // is still destroyed even when the device has already been lost.
             (void)vkDeviceWaitIdle(device);
             cleanupSwapchain();
+            gpuAllocator.destroy(triangleVertexBuffer);
+            triangleVertexBuffer = {};
             if (timestampPool != VK_NULL_HANDLE)
             {
                 vkDestroyQueryPool(device, timestampPool, nullptr);
@@ -1205,11 +1210,13 @@ struct Renderer::Impl
         {
             return fail("Renderer::initialize received a null GLFWwindow");
         }
-        const VkResult result = glfwCreateWindowSurface(instance, window, nullptr, &surface);
+        VkSurfaceKHR createdSurface = VK_NULL_HANDLE;
+        const VkResult result = glfwCreateWindowSurface(instance, window, nullptr, &createdSurface);
         if (result != VK_SUCCESS)
         {
             return fail(vkFailure("glfwCreateWindowSurface", result));
         }
+        surface = createdSurface;
         return ok();
     }
 
@@ -1597,6 +1604,53 @@ struct Renderer::Impl
             {
                 timestampsEnabled = true;
             }
+        }
+        return ok();
+    }
+
+    [[nodiscard]] VoidResult createTriangleGeometry()
+    {
+        if (frames.empty())
+        {
+            return fail("Cannot create upload geometry before frame resources");
+        }
+        constexpr std::array<float, 15> vertices = {0.0f,
+            -0.72f,
+            1.0f,
+            0.25f,
+            0.20f,
+            0.72f,
+            0.72f,
+            0.20f,
+            1.0f,
+            0.35f,
+            -0.72f,
+            0.72f,
+            0.20f,
+            0.45f,
+            1.0f};
+        VkBufferCreateInfo bufferInfo{};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufferInfo.size = sizeof(vertices);
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        const auto bufferResult = gpuAllocator.createBuffer(bufferInfo, MemoryUsage::GpuOnly);
+        if (!bufferResult)
+        {
+            return bufferResult.error();
+        }
+        triangleVertexBuffer = bufferResult.value();
+        const auto uploadResult = gpuUploader.uploadBuffer(device,
+            frames.front().commandPool,
+            graphicsQueue,
+            gpuAllocator,
+            triangleVertexBuffer,
+            std::as_bytes(std::span(vertices)));
+        if (!uploadResult)
+        {
+            gpuAllocator.destroy(triangleVertexBuffer);
+            triangleVertexBuffer = {};
+            return uploadResult;
         }
         return ok();
     }
@@ -2601,6 +2655,12 @@ VoidResult Renderer::Impl::recordFrame(
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trianglePipeline);
+        if (triangleVertexBuffer.buffer != VK_NULL_HANDLE)
+        {
+            const VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(
+                frame.commandBuffer, 0, 1, &triangleVertexBuffer.buffer, &offset);
+        }
         vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
     }
     vkCmdEndRendering(frame.commandBuffer);
@@ -2746,6 +2806,13 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             return result;
         }
         result = impl_->createFrameResources();
+        if (!result)
+        {
+            impl_->setError(result.error().describe());
+            impl_->cleanup();
+            return result;
+        }
+        result = impl_->createTriangleGeometry();
         if (!result)
         {
             impl_->setError(result.error().describe());

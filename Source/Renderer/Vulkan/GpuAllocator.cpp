@@ -3,6 +3,7 @@
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #define VMA_IMPLEMENTATION
+#include <cstring>
 #include <unordered_map>
 #include <utility>
 #include <vk_mem_alloc.h>
@@ -159,6 +160,39 @@ Halcyon::Result<ImageAllocation> GpuAllocator::createImage(
     }
     impl_->bytes += details.size;
     return ImageAllocation{image, details.size, id};
+}
+
+Halcyon::Result<void> GpuAllocator::writeBuffer(
+    BufferAllocation allocation, std::span<const std::byte> data, VkDeviceSize offset)
+{
+    if (!impl_ || impl_->allocator == VK_NULL_HANDLE || allocation.allocationId == 0 ||
+        data.empty())
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Invalid buffer upload request"});
+    }
+    const auto it = impl_->records.find(allocation.allocationId);
+    if (it == impl_->records.end() || it->second.isImage || offset > it->second.size ||
+        data.size_bytes() > it->second.size - offset)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Buffer upload exceeds allocation"});
+    }
+    void* mapped = nullptr;
+    const VkResult mapResult = vmaMapMemory(impl_->allocator, it->second.allocation, &mapped);
+    if (mapResult != VK_SUCCESS)
+    {
+        return Halcyon::Result<void>::failure(vmaError("vmaMapMemory", mapResult));
+    }
+    std::memcpy(static_cast<std::byte*>(mapped) + offset, data.data(), data.size_bytes());
+    const VkResult flushResult =
+        vmaFlushAllocation(impl_->allocator, it->second.allocation, offset, data.size_bytes());
+    vmaUnmapMemory(impl_->allocator, it->second.allocation);
+    if (flushResult != VK_SUCCESS)
+    {
+        return Halcyon::Result<void>::failure(vmaError("vmaFlushAllocation", flushResult));
+    }
+    return Halcyon::Result<void>::success();
 }
 
 void GpuAllocator::destroy(BufferAllocation allocation) noexcept

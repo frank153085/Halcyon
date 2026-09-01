@@ -62,6 +62,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
     Source/Renderer/Vulkan/GpuAllocator.cpp
     Source/Renderer/Vulkan/GpuAllocator.h
+    Source/Renderer/Vulkan/GpuUploader.cpp
+    Source/Renderer/Vulkan/GpuUploader.h
     Source/Renderer/Resources/ResourceTypes.h
     Source/Renderer/Resources/UploadRing.h
 )

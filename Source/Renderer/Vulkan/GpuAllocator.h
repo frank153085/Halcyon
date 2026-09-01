@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vulkan/vulkan.h>
 
 namespace Halcyon::Vulkan
@@ -48,6 +49,8 @@ public:
         const VkBufferCreateInfo& createInfo, MemoryUsage usage);
     [[nodiscard]] Halcyon::Result<ImageAllocation> createImage(
         const VkImageCreateInfo& createInfo, MemoryUsage usage);
+    [[nodiscard]] Halcyon::Result<void> writeBuffer(
+        BufferAllocation allocation, std::span<const std::byte> data, VkDeviceSize offset = 0);
 
     void destroy(BufferAllocation allocation) noexcept;
     void destroy(ImageAllocation allocation) noexcept;
