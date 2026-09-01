@@ -8,6 +8,7 @@
 #include "../../Core/Result.h"
 #include "../Scene/Camera.h"
 #include "../Scene/FramePacket.h"
+#include "GpuResourceManager.h"
 
 #include <array>
 #include <cstdint>
@@ -135,6 +136,12 @@ public:
     [[nodiscard]] const Capabilities& capabilities() const noexcept;
     [[nodiscard]] const std::string& lastError() const noexcept;
     [[nodiscard]] bool initialized() const noexcept;
+
+    // Resource helpers keep VMA and staging details inside the Vulkan backend.
+    [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(const char* path);
+    [[nodiscard]] Halcyon::Result<MeshResource> loadObj(const char* path);
+    void destroy(TextureResource& texture) noexcept;
+    void destroy(MeshResource& mesh) noexcept;
 
     // Read-only escape hatches for tools that need to attach a profiler or
     // RenderDoc marker.  They may return VK_NULL_HANDLE before initialization.

@@ -1,6 +1,7 @@
 #include "HalcyonVulkanRenderer.h"
 
 #include "GpuAllocator.h"
+#include "GpuResourceManager.h"
 #include "GpuUploader.h"
 
 // GLFW is included here (rather than in the public header) so applications
@@ -916,6 +917,7 @@ struct Renderer::Impl
     VkDeviceSize deviceMemoryBytes = 0;
     GpuAllocator gpuAllocator;
     GpuUploader gpuUploader;
+    GpuResourceManager gpuResources;
     BufferAllocation triangleVertexBuffer{};
 
     ~Impl()
@@ -991,6 +993,7 @@ struct Renderer::Impl
             cleanupSwapchain();
             gpuAllocator.destroy(triangleVertexBuffer);
             triangleVertexBuffer = {};
+            gpuResources.shutdown();
             if (timestampPool != VK_NULL_HANDLE)
             {
                 vkDestroyQueryPool(device, timestampPool, nullptr);
@@ -2819,6 +2822,11 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->cleanup();
             return result;
         }
+        impl_->gpuResources.initialize(impl_->device,
+            impl_->frames.front().commandPool,
+            impl_->graphicsQueue,
+            impl_->gpuAllocator,
+            impl_->gpuUploader);
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         if (window != nullptr)
@@ -2907,6 +2915,42 @@ const std::string& Renderer::lastError() const noexcept
 bool Renderer::initialized() const noexcept
 {
     return impl_ != nullptr && impl_->initialized;
+}
+
+Halcyon::Result<TextureResource> Renderer::loadTexture2D(const char* path)
+{
+    if (impl_ == nullptr || path == nullptr)
+    {
+        return Halcyon::Result<TextureResource>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Texture path is null"});
+    }
+    return impl_->gpuResources.loadTexture2D(path);
+}
+
+Halcyon::Result<MeshResource> Renderer::loadObj(const char* path)
+{
+    if (impl_ == nullptr || path == nullptr)
+    {
+        return Halcyon::Result<MeshResource>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Model path is null"});
+    }
+    return impl_->gpuResources.loadObj(path);
+}
+
+void Renderer::destroy(TextureResource& texture) noexcept
+{
+    if (impl_ != nullptr)
+    {
+        impl_->gpuResources.destroy(texture);
+    }
+}
+
+void Renderer::destroy(MeshResource& mesh) noexcept
+{
+    if (impl_ != nullptr)
+    {
+        impl_->gpuResources.destroy(mesh);
+    }
 }
 
 VkInstance Renderer::instance() const noexcept
