@@ -7,6 +7,15 @@ option(HALCYON_ENABLE_VALIDATION "Enable Vulkan validation by default" ON)
 option(HALCYON_BUILD_EXPERIMENTAL_M2
     "Build unfinished M2+ RenderGraph, bindless and frame-budget prototypes" OFF)
 
+option(HALCYON_ENABLE_GOOGLETEST "Build the GoogleTest dependency" OFF)
+option(HALCYON_ENABLE_IMGUI "Build Dear ImGui" OFF)
+option(HALCYON_ENABLE_SPIRV_TOOLS "Build SPIR-V validation and optimization tools" OFF)
+option(HALCYON_ENABLE_BASISU "Build Basis Universal texture tooling" OFF)
+option(HALCYON_ENABLE_MESHOPTIMIZER "Build meshoptimizer" OFF)
+option(HALCYON_ENABLE_DRACO "Build Draco geometry compression" OFF)
+option(HALCYON_ENABLE_BENCHMARK "Build Google Benchmark" OFF)
+option(HALCYON_ENABLE_ZSTD "Build Zstandard" OFF)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -24,6 +33,7 @@ set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
 set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(ThirdParty/glm)
+add_subdirectory(ThirdParty)
 
 function(halcyon_enable_warnings target)
     if(MSVC)
@@ -54,6 +64,7 @@ add_library(HalcyonRenderer STATIC
 target_include_directories(HalcyonRenderer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_link_libraries(HalcyonRenderer
     PUBLIC HalcyonCore glm::glm Vulkan::Vulkan
+    PRIVATE Halcyon::Vma Halcyon::Stb Halcyon::RobinMap
     PRIVATE glfw
 )
 target_compile_definitions(HalcyonRenderer PRIVATE GLFW_INCLUDE_NONE)
@@ -122,6 +133,9 @@ endif()
 add_executable(HalcyonSandbox Source/Sandbox/Main.cpp)
 set_target_properties(HalcyonSandbox PROPERTIES OUTPUT_NAME Halcyon)
 target_link_libraries(HalcyonSandbox PRIVATE HalcyonRenderer glfw)
+if(HALCYON_ENABLE_IMGUI)
+    target_link_libraries(HalcyonSandbox PRIVATE Halcyon::ImGui)
+endif()
 target_compile_definitions(HalcyonSandbox PRIVATE
     GLFW_INCLUDE_NONE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
