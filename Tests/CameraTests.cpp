@@ -1,4 +1,4 @@
-#include "Renderer/Scene/Camera.hpp"
+#include "Renderer/Scene/Camera.h"
 
 #include <cmath>
 #include <cstddef>

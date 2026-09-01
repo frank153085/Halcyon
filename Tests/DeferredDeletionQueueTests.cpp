@@ -1,4 +1,4 @@
-#include "Renderer/Resources/DeferredDeletionQueue.hpp"
+#include "Renderer/Resources/DeferredDeletionQueue.h"
 
 #include <iostream>
 #include <memory>

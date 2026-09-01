@@ -1,4 +1,4 @@
-#include "BarrierPlanner.hpp"
+#include "BarrierPlanner.h"
 
 #include <algorithm>
 

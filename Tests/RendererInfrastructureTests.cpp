@@ -1,13 +1,13 @@
-#include "Renderer/Resources/DeferredDeletionQueue.hpp"
-#include "Renderer/Resources/UploadRing.hpp"
+#include "Renderer/Resources/DeferredDeletionQueue.h"
+#include "Renderer/Resources/UploadRing.h"
 
 #ifndef HALCYON_BUILD_EXPERIMENTAL_M2
 #define HALCYON_BUILD_EXPERIMENTAL_M2 0
 #endif
 
 #if HALCYON_BUILD_EXPERIMENTAL_M2
-#include "Renderer/Graph/BarrierPlanner.hpp"
-#include "Renderer/Resources/BindlessTable.hpp"
+#include "Renderer/Graph/BarrierPlanner.h"
+#include "Renderer/Resources/BindlessTable.h"
 #endif
 
 #include <array>

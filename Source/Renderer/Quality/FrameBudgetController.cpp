@@ -1,4 +1,4 @@
-#include "FrameBudgetController.hpp"
+#include "FrameBudgetController.h"
 
 #include <algorithm>
 #include <cmath>

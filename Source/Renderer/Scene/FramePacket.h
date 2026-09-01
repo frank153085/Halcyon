@@ -5,7 +5,7 @@
 // handles, which makes it safe to capture, replay and feed to more than one
 // renderer implementation.
 
-#include "Camera.hpp"
+#include "Camera.h"
 
 #include <array>
 #include <cstdint>

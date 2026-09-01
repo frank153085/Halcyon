@@ -82,6 +82,15 @@ Clang Tidy uses the repository `.clang-format` for any formatting fixes. Do not 
 Markdown, and plain text files. Keep trailing whitespace out of source files; Markdown may retain
 trailing spaces when they are intentionally used for a hard line break.
 
+Project-owned C++ headers use the `.h` suffix consistently. Third-party headers keep their upstream
+suffixes. A public Halcyon header may be a thin forwarding facade to an internal header when it
+provides a stable include path or hides backend details; forwarding headers must contain no logic
+and must not duplicate declarations.
+
+Public facades live under `Include/Halcyon/` and internal implementation headers live under
+`Source/`. Application code should prefer the facade include path, for example
+`#include "Halcyon/Renderer.h"`.
+
 `.gitattributes` enforces LF text files and marks shader binaries, images, and compiled assets as
 binary. Do not override these attributes for individual commits.
 

@@ -1,4 +1,4 @@
-#include "RenderGraph.hpp"
+#include "RenderGraph.h"
 
 #include <algorithm>
 #include <deque>

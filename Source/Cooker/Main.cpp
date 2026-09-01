@@ -3,7 +3,7 @@
 // dependency-free resource manifest that later meshopt/fastgltf stages can
 // extend without changing the runtime cache contract.
 
-#include "Core/Result.hpp"
+#include "Core/Result.h"
 
 #include <algorithm>
 #include <array>

@@ -1,8 +1,8 @@
 #ifndef GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_NONE
 #endif
-#include "Core/Log.hpp"
-#include "Renderer/Vulkan/HalcyonVulkanRenderer.hpp"
+#include "Core/Log.h"
+#include "Halcyon/Renderer.h"
 
 #include <GLFW/glfw3.h>
 #include <cstdint>

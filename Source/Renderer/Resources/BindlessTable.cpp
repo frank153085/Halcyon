@@ -1,4 +1,4 @@
-#include "BindlessTable.hpp"
+#include "BindlessTable.h"
 
 #include <algorithm>
 #include <exception>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Core/Result.hpp"
+#include "Core/Result.h"
 
 #include <cstdint>
 #include <glm/glm.hpp>

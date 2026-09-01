@@ -1,4 +1,4 @@
-﻿#include "HalcyonVulkanRenderer.hpp"
+#include "HalcyonVulkanRenderer.h"
 
 // GLFW is included here (rather than in the public header) so applications
 // can choose their own GLFW include policy.  The Vulkan include guard makes

@@ -5,9 +5,9 @@
 // objects (command pools, swapchain images, etc.); callers submit an
 // immutable FramePacket and receive diagnostic frame statistics.
 
-#include "../../Core/Result.hpp"
-#include "../Scene/Camera.hpp"
-#include "../Scene/FramePacket.hpp"
+#include "../../Core/Result.h"
+#include "../Scene/Camera.h"
+#include "../Scene/FramePacket.h"
 
 #include <array>
 #include <cstdint>

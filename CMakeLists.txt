@@ -44,7 +44,9 @@ function(halcyon_enable_warnings target)
 endfunction()
 
 add_library(HalcyonCore INTERFACE)
-target_include_directories(HalcyonCore INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+target_include_directories(HalcyonCore INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_compile_features(HalcyonCore INTERFACE cxx_std_20)
 target_compile_definitions(HalcyonCore INTERFACE
     GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -52,16 +54,18 @@ target_compile_definitions(HalcyonCore INTERFACE
 )
 
 add_library(HalcyonRenderer STATIC
-    Source/Renderer/Resources/DeferredDeletionQueue.hpp
+    Source/Renderer/Resources/DeferredDeletionQueue.h
     Source/Renderer/Scene/Camera.cpp
-    Source/Renderer/Scene/Camera.hpp
-    Source/Renderer/Scene/FramePacket.hpp
+    Source/Renderer/Scene/Camera.h
+    Source/Renderer/Scene/FramePacket.h
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.cpp
-    Source/Renderer/Vulkan/HalcyonVulkanRenderer.hpp
-    Source/Renderer/Resources/ResourceTypes.hpp
-    Source/Renderer/Resources/UploadRing.hpp
+    Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
+    Source/Renderer/Resources/ResourceTypes.h
+    Source/Renderer/Resources/UploadRing.h
 )
-target_include_directories(HalcyonRenderer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+target_include_directories(HalcyonRenderer PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(HalcyonRenderer
     PUBLIC HalcyonCore glm::glm Vulkan::Vulkan
     PRIVATE Halcyon::Vma Halcyon::Stb Halcyon::RobinMap
@@ -77,12 +81,12 @@ if(HALCYON_BUILD_EXPERIMENTAL_M2)
     add_library(HalcyonRendererExperimental STATIC
         Source/Renderer/Graph/RenderGraph.cpp
         Source/Renderer/Graph/BarrierPlanner.cpp
-        Source/Renderer/Graph/RenderGraph.hpp
-        Source/Renderer/Graph/BarrierPlanner.hpp
+        Source/Renderer/Graph/RenderGraph.h
+        Source/Renderer/Graph/BarrierPlanner.h
         Source/Renderer/Resources/BindlessTable.cpp
-        Source/Renderer/Resources/BindlessTable.hpp
+        Source/Renderer/Resources/BindlessTable.h
         Source/Renderer/Quality/FrameBudgetController.cpp
-        Source/Renderer/Quality/FrameBudgetController.hpp
+        Source/Renderer/Quality/FrameBudgetController.h
     )
     target_include_directories(HalcyonRendererExperimental
         PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Source")

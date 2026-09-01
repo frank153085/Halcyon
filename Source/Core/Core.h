@@ -2,7 +2,7 @@
 
 // Public umbrella include for backend-independent Halcyon core utilities.
 
-#include "Handle.hpp"
-#include "HandlePool.hpp"
-#include "Log.hpp"
-#include "Result.hpp"
+#include "Handle.h"
+#include "HandlePool.h"
+#include "Log.h"
+#include "Result.h"

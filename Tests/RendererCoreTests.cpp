@@ -1,5 +1,5 @@
-#include "Renderer/Graph/RenderGraph.hpp"
-#include "Renderer/Quality/FrameBudgetController.hpp"
+#include "Renderer/Graph/RenderGraph.h"
+#include "Renderer/Quality/FrameBudgetController.h"
 
 #include <cstdint>
 #include <iostream>
