@@ -31,9 +31,18 @@ public:
     {
         return isInitialized();
     }
+    explicit operator bool() const noexcept
+    {
+        return isInitialized();
+    }
     Index index() const noexcept
     {
         return index_;
+    }
+    // Filament-compatible spelling used by graph diagnostics and examples.
+    Index getIndex() const noexcept
+    {
+        return index();
     }
     Version version() const noexcept
     {
@@ -75,6 +84,10 @@ public:
     constexpr FrameGraphId() noexcept = default;
     constexpr FrameGraphId(Index index, Version version, std::uint32_t epoch = 1) noexcept
             : FrameGraphHandle(index, version, epoch)
+    {
+    }
+    constexpr explicit FrameGraphId(const FrameGraphHandle& handle) noexcept
+            : FrameGraphHandle(handle.index(), handle.version(), handle.epoch())
     {
     }
     static constexpr FrameGraphId invalid() noexcept

@@ -2,6 +2,7 @@
 
 #include "FrameGraphId.h"
 
+#include <cstddef>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -13,11 +14,28 @@
 namespace Halcyon::Renderer::Graph
 {
 class FrameGraphResources;
+class FrameGraph;
 
-class FrameGraphPassBase
+// Matches Filament's small executor/base split.  Keeping the execution
+// interface in its own type makes it possible for tooling and internal pass
+// nodes to refer to an executor without knowing the concrete pass payload.
+class FrameGraphPassExecutor
+{
+protected:
+    virtual void execute(const FrameGraphResources&, CommandContext&) noexcept = 0;
+
+public:
+    FrameGraphPassExecutor() noexcept = default;
+    virtual ~FrameGraphPassExecutor() noexcept;
+    FrameGraphPassExecutor(const FrameGraphPassExecutor&) = delete;
+    FrameGraphPassExecutor& operator=(const FrameGraphPassExecutor&) = delete;
+};
+
+class FrameGraphPassBase : protected FrameGraphPassExecutor
 {
 public:
-    virtual ~FrameGraphPassBase() noexcept = default;
+    using FrameGraphPassExecutor::FrameGraphPassExecutor;
+    ~FrameGraphPassBase() noexcept override;
     std::string_view name() const noexcept
     {
         return name_;
@@ -47,9 +65,18 @@ public:
         return errorImpl();
     }
 
+    // Internal dispatch hook used by RenderPassNode.  Keeping the executor
+    // method protected preserves the public API while allowing the Filament-
+    // style node to own pass invocation.
+    void executeInternal(const FrameGraphResources& resources,
+        CommandContext& commands) noexcept
+    {
+        execute(resources, commands);
+    }
+
 private:
+    friend class RenderPassNode;
     friend class FrameGraph;
-    virtual void execute(const FrameGraphResources&, CommandContext&) noexcept = 0;
     virtual bool failedImpl() const noexcept = 0;
     virtual std::string_view errorImpl() const noexcept = 0;
     std::string name_;
@@ -83,6 +110,14 @@ public:
     const Data& getData() const noexcept
     {
         return data_;
+    }
+
+    // Filament exposes the payload size for arena-backed pass nodes.  Halcyon
+    // currently uses std::unique_ptr, but retaining the query keeps the same
+    // vocabulary for future arena allocation.
+    std::size_t getSize() const noexcept
+    {
+        return sizeof(FrameGraphPass);
     }
 
 private:

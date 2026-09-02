@@ -8,6 +8,9 @@
 namespace Halcyon::Renderer::Graph
 {
 
+class FrameGraphResourceProvider;
+struct FrameGraphRenderTargetCreateInfo;
+
 inline constexpr std::uint32_t kInvalidIndex = 0xffffffffu;
 
 enum class ResourceKind : std::uint8_t
@@ -52,7 +55,22 @@ enum class ResourceUsage : std::uint32_t
     DepthAttachment = 1u << 7u,
     TransferSource = 1u << 8u,
     TransferDestination = 1u << 9u,
-    Present = 1u << 10u
+    Present = 1u << 10u,
+
+    // Filament spells these usage bits in upper-case.  Aliases keep examples
+    // and snippets portable while the canonical Halcyon names remain
+    // camel-case.
+    VERTEX = Vertex,
+    INDEX = Index,
+    UNIFORM = Uniform,
+    STORAGE = Storage,
+    INDIRECT = Indirect,
+    SAMPLEABLE = Sampled,
+    COLOR_ATTACHMENT = ColorAttachment,
+    DEPTH_ATTACHMENT = DepthAttachment,
+    TRANSFER_SOURCE = TransferSource,
+    TRANSFER_DESTINATION = TransferDestination,
+    PRESENT = Present
 };
 
 constexpr ResourceUsage operator|(ResourceUsage a, ResourceUsage b) noexcept
@@ -112,23 +130,11 @@ struct FrameGraphNativeResource
     void* token = nullptr;
 };
 
-struct FrameGraphTexture
-{
-    using Descriptor = TextureDescriptor;
-    using SubResourceDescriptor = TextureSubresourceDescriptor;
-    using Usage = ResourceUsage;
-    TextureDescriptor descriptor{};
-    FrameGraphNativeResource native{};
-};
-
-struct FrameGraphBuffer
-{
-    using Descriptor = BufferDescriptor;
-    using SubResourceDescriptor = BufferSubresourceDescriptor;
-    using Usage = ResourceUsage;
-    BufferDescriptor descriptor{};
-    FrameGraphNativeResource native{};
-};
+// Concrete resource contracts are kept in FrameGraphTexture.h, matching
+// Filament's one-resource-per-header layout.  Forward declarations here keep
+// the low-level semantic types usable without pulling the heavier contract in.
+struct FrameGraphTexture;
+struct FrameGraphBuffer;
 
 struct FrameGraphResourceCreateInfo
 {
@@ -151,6 +157,19 @@ public:
     virtual bool create(
         const FrameGraphResourceCreateInfo&, FrameGraphNativeResource&) noexcept = 0;
     virtual void destroy(const FrameGraphNativeResource&) noexcept = 0;
+
+    // Render targets are backend-specific aggregates of texture attachments.
+    // Providers that do not expose native render targets can keep the default
+    // implementation; executing a graph that declares one then reports a
+    // regular FrameGraph execution error.
+    virtual bool createRenderTarget(
+        const FrameGraphRenderTargetCreateInfo&, FrameGraphNativeResource&) noexcept
+    {
+        return false;
+    }
+    virtual void destroyRenderTarget(const FrameGraphNativeResource&) noexcept
+    {
+    }
 };
 
 struct CommandContext
@@ -185,3 +204,8 @@ private:
 };
 
 } // namespace Halcyon::Renderer::Graph
+
+// Preserve the historical guarantee that including FrameGraphTypes.h also
+// makes the built-in resource contracts available.  The include is guarded by
+// #pragma once on both headers, so FrameGraphTexture.h can include Types.h.
+#include "FrameGraphTexture.h"

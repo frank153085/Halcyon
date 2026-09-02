@@ -5,7 +5,7 @@
 // compact masks to VkPipelineStageFlags2/VkAccessFlags2 and image layouts,
 // while unit tests can validate hazard decisions without a GPU.
 
-#include "Halcyon/FrameGraph.h"
+#include "FrameGraph.h"
 
 #include <cstdint>
 #include <span>

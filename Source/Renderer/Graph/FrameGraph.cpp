@@ -1,4 +1,4 @@
-#include "Halcyon/FrameGraph.h"
+#include "FrameGraph.h"
 
 #include <algorithm>
 #include <deque>
@@ -8,41 +8,6 @@
 
 namespace Halcyon::Renderer::Graph
 {
-
-void DependencyGraph::addEdge(std::uint32_t from, std::uint32_t to)
-{
-    if (from >= size() || to >= size())
-    {
-        return;
-    }
-    auto& out = successors_[from];
-    if (std::find(out.begin(), out.end(), to) == out.end())
-    {
-        out.push_back(to);
-        predecessors_[to].push_back(from);
-        edges_.push_back({from, to});
-    }
-}
-const std::vector<std::uint32_t>& DependencyGraph::successors(std::uint32_t n) const noexcept
-{
-    static const std::vector<std::uint32_t> empty;
-    return n < size() ? successors_[n] : empty;
-}
-const std::vector<std::uint32_t>& DependencyGraph::predecessors(std::uint32_t n) const noexcept
-{
-    static const std::vector<std::uint32_t> empty;
-    return n < size() ? predecessors_[n] : empty;
-}
-std::vector<std::uint32_t> DependencyGraph::indegrees() const
-{
-    std::vector<std::uint32_t> r;
-    r.reserve(size());
-    for (const auto& p : predecessors_)
-    {
-        r.push_back(static_cast<std::uint32_t>(p.size()));
-    }
-    return r;
-}
 
 namespace
 {
@@ -81,6 +46,14 @@ FrameGraphHandle FrameGraph::createRaw(
     {
         resources_[slot] = std::move(r);
     }
+    if (slot >= resourceNodes_.size())
+    {
+        resourceNodes_.resize(slot + 1u);
+    }
+    resourceNodes_[slot] = std::make_unique<ResourceNode>(
+        FrameGraphHandle(static_cast<std::uint32_t>(slot), resources_[slot].version, epoch_));
+    resourceNodes_[slot]->setName(resources_[slot].name);
+    resourceNodes_[slot]->setKind(kind);
     return FrameGraphHandle(static_cast<std::uint32_t>(slot), resources_[slot].version, epoch_);
 }
 FrameGraphHandle FrameGraph::createRaw(
@@ -111,10 +84,18 @@ FrameGraphHandle FrameGraph::createRaw(
     {
         resources_[slot] = std::move(r);
     }
+    if (slot >= resourceNodes_.size())
+    {
+        resourceNodes_.resize(slot + 1u);
+    }
+    resourceNodes_[slot] = std::make_unique<ResourceNode>(
+        FrameGraphHandle(static_cast<std::uint32_t>(slot), resources_[slot].version, epoch_));
+    resourceNodes_[slot]->setName(resources_[slot].name);
+    resourceNodes_[slot]->setKind(kind);
     return FrameGraphHandle(static_cast<std::uint32_t>(slot), resources_[slot].version, epoch_);
 }
 FrameGraphHandle FrameGraph::createSubresourceRaw(
-    FrameGraphHandle parent, std::string_view name, const BufferSubresourceDescriptor&)
+    FrameGraphHandle parent, std::string_view name, const BufferSubresourceDescriptor& descriptor)
 {
     if (!isValid(parent))
     {
@@ -122,23 +103,46 @@ FrameGraphHandle FrameGraph::createSubresourceRaw(
     }
     const auto& p = resources_[parent.index()];
     BufferDescriptor d = p.buffer;
+    if (descriptor.offset < d.size)
+    {
+        d.size = descriptor.size == 0 ? d.size - descriptor.offset
+                                      : std::min(d.size - descriptor.offset, descriptor.size);
+    }
     d.name = std::string(name);
     const auto h = createRaw(ResourceKind::Buffer, name, d);
     resources_[h.index()].parent = parent.index();
+    resources_[h.index()].bufferSubresource = descriptor;
+    if (h.index() < resourceNodes_.size() && resourceNodes_[h.index()])
+    {
+        resourceNodes_[h.index()]->setParentHandle(parent);
+        if (parent.index() < resourceNodes_.size())
+        {
+            resourceNodes_[h.index()]->setParentNode(resourceNodes_[parent.index()].get());
+        }
+    }
     return h;
 }
 FrameGraphHandle FrameGraph::createSubresourceRaw(
-    FrameGraphHandle parent, std::string_view name, const TextureSubresourceDescriptor&)
+    FrameGraphHandle parent, std::string_view name, const TextureSubresourceDescriptor& descriptor)
 {
     if (!isValid(parent))
     {
         return {};
     }
     const auto& p = resources_[parent.index()];
-    TextureDescriptor d = p.texture;
+    TextureDescriptor d = FrameGraphTexture::generateSubResourceDescriptor(p.texture, descriptor);
     d.name = std::string(name);
     const auto h = createRaw(ResourceKind::Texture, name, d);
     resources_[h.index()].parent = parent.index();
+    resources_[h.index()].textureSubresource = descriptor;
+    if (h.index() < resourceNodes_.size() && resourceNodes_[h.index()])
+    {
+        resourceNodes_[h.index()]->setParentHandle(parent);
+        if (parent.index() < resourceNodes_.size())
+        {
+            resourceNodes_[h.index()]->setParentNode(resourceNodes_[parent.index()].get());
+        }
+    }
     return h;
 }
 
@@ -203,14 +207,20 @@ FrameGraphHandle FrameGraph::createPassRaw(
     p.object->name_ = std::string(name);
     p.object->handle_ = FrameGraphHandle(index, index + 1, epoch_);
     passes_.push_back(std::move(p));
+    auto node = std::make_unique<RenderPassNode>(this, std::string(name).c_str(),
+        passes_.back().object.get());
+    node->setHandle(passes_.back().object->handle_);
+    node->setId(index);
+    node->setName(name);
+    passNodes_.push_back(std::move(node));
     return passes_.back().object->handle_;
 }
 void FrameGraph::Builder::readRaw(FrameGraphHandle h, ResourceUsage u, AccessMode m)
 {
     if (graph_)
     {
-        graph_->addAccessRaw(pass_, h, m, u);
         const auto v = graph_->accessVersion(h, AccessMode::Read, u);
+        graph_->addAccessRaw(pass_, v, m, u);
         lastAccess_ = v;
     }
 }
@@ -218,15 +228,58 @@ void FrameGraph::Builder::writeRaw(FrameGraphHandle h, ResourceUsage u, AccessMo
 {
     if (graph_)
     {
-        graph_->addAccessRaw(pass_, h, m, u);
         const auto v = graph_->accessVersion(h, m, u);
-        graph_->setProducerRaw(v, pass_);
+        // Read-write consumes the previous version and produces a new one.
+        // Keeping the read explicit lets dependency analysis distinguish it
+        // from a discardable write-only replacement.
+        if (m == AccessMode::ReadWrite &&
+            (v.index() != h.index() || v.version() != h.version()))
+        {
+            graph_->addAccessRaw(pass_, h, AccessMode::Read, u);
+        }
+        graph_->addAccessRaw(pass_, v, AccessMode::Write, u);
         lastAccess_ = v;
     }
 }
 std::string_view FrameGraph::Builder::getName(FrameGraphHandle h) const noexcept
 {
     return graph_ && graph_->isValid(h) ? graph_->resources_[h.index()].name : std::string_view{};
+}
+
+std::uint32_t FrameGraph::Builder::declareRenderPass(
+    std::string_view name, const FrameGraphRenderPass::Descriptor& descriptor)
+{
+    if (graph_ == nullptr || pass_.index() >= graph_->passNodes_.size())
+    {
+        return 0;
+    }
+    auto* node = dynamic_cast<RenderPassNode*>(graph_->passNodes_[pass_.index()].get());
+    return node != nullptr ? node->declareRenderTarget(name, descriptor) : 0;
+}
+
+TextureHandle FrameGraph::Builder::declareRenderPass(
+    TextureHandle color, std::uint32_t* index)
+{
+    const auto written = write(color, ResourceUsage::ColorAttachment);
+    FrameGraphRenderPass::Descriptor descriptor{};
+    descriptor.attachments.color[0] = written;
+    const auto renderPass = declareRenderPass(getName(written), descriptor);
+    if (index != nullptr)
+    {
+        *index = renderPass;
+    }
+    return written;
+}
+
+void FrameGraph::Builder::reserveRenderTargets(std::size_t count) noexcept
+{
+    if (graph_ != nullptr && pass_.index() < graph_->passNodes_.size())
+    {
+        if (auto* node = dynamic_cast<RenderPassNode*>(graph_->passNodes_[pass_.index()].get()))
+        {
+            node->reserveRenderTargets(count);
+        }
+    }
 }
 
 FrameGraphHandle FrameGraph::accessVersion(
@@ -237,6 +290,16 @@ FrameGraphHandle FrameGraph::accessVersion(
         lastError_ = {GraphErrorCode::InvalidHandle, "invalid frame graph resource handle", {}};
         return {};
     }
+    if (mode == AccessMode::Read)
+    {
+        resources_[input.index()].usage |= usage;
+        return input;
+    }
+    if (resources_[input.index()].accessCount == 0)
+    {
+        resources_[input.index()].usage |= usage;
+        return input;
+    }
     resources_[input.index()].current = false;
     Resource copy = resources_[input.index()];
     copy.index = static_cast<std::uint32_t>(resources_.size());
@@ -246,7 +309,17 @@ FrameGraphHandle FrameGraph::accessVersion(
     copy.usage = usage;
     copy.producer = mode == AccessMode::Write ? -1 : copy.producer;
     copy.exported = false;
+    copy.accessCount = 0;
     resources_.push_back(std::move(copy));
+    resourceNodes_.push_back(std::make_unique<ResourceNode>(
+        FrameGraphHandle(resources_.back().index, resources_.back().version, epoch_), input));
+    resourceNodes_.back()->setName(resources_.back().name);
+    resourceNodes_.back()->setKind(resources_.back().kind);
+    resourceNodes_.back()->setParentHandle(input);
+    if (input.index() < resourceNodes_.size() - 1u)
+    {
+        resourceNodes_.back()->setParentNode(resourceNodes_[input.index()].get());
+    }
     return FrameGraphHandle(resources_.back().index, resources_.back().version, epoch_);
 }
 void FrameGraph::addAccessRaw(
@@ -260,18 +333,36 @@ void FrameGraph::addAccessRaw(
         h.index() < resources_.size() ? resources_[h.index()].kind : ResourceKind::Buffer,
         h.index(),
         h.generation(),
-        h.version(),
         mode,
-        usage});
+        usage,
+        h.version()});
     if (h.index() < resources_.size())
     {
         resources_[h.index()].usage |= usage;
+        ++resources_[h.index()].accessCount;
         resources_[h.index()].bufferObject.native = resources_[h.index()].native;
         resources_[h.index()].textureObject.native = resources_[h.index()].native;
     }
     if (mode == AccessMode::Write || mode == AccessMode::ReadWrite)
     {
         setProducerRaw(h, pass);
+    }
+    if (pass.index() < passNodes_.size() && h.index() < resourceNodes_.size() &&
+        resourceNodes_[h.index()])
+    {
+        auto* passNode = passNodes_[pass.index()].get();
+        auto* resourceNode = resourceNodes_[h.index()].get();
+        passNode->registerResource(h, nullptr);
+        const bool writer = mode == AccessMode::Write || mode == AccessMode::ReadWrite;
+        auto* edge = new ResourceEdgeBase(passNode, resourceNode, writer);
+        if (writer)
+        {
+            resourceNode->setIncomingEdge(edge);
+        }
+        else
+        {
+            resourceNode->addOutgoingEdge(edge);
+        }
     }
 }
 void FrameGraph::setProducerRaw(FrameGraphHandle h, PassHandle p)
@@ -293,6 +384,10 @@ void FrameGraph::setPassSideEffectInternal(PassHandle p, bool enabled)
     if (p.index() < passes_.size())
     {
         passes_[p.index()].object->sideEffect_ = enabled;
+        if (p.index() < passNodes_.size() && passNodes_[p.index()])
+        {
+            passNodes_[p.index()]->setSideEffect(enabled);
+        }
     }
 }
 void FrameGraph::setQueueRaw(PassHandle p, QueueClass q)
@@ -300,13 +395,49 @@ void FrameGraph::setQueueRaw(PassHandle p, QueueClass q)
     if (p.index() < passes_.size())
     {
         passes_[p.index()].object->queue_ = q;
+        if (p.index() < passNodes_.size() && passNodes_[p.index()])
+        {
+            passNodes_[p.index()]->setQueue(q);
+        }
     }
 }
 void FrameGraph::setExecuteRaw(PassHandle p, PassExecuteCallback cb)
 {
     if (p.index() < passes_.size())
     {
-        passes_[p.index()].legacyExecute = std::move(cb);
+        passes_[p.index()].legacyExecute = cb;
+        passes_[p.index()].legacyFailed = false;
+        passes_[p.index()].legacyError.clear();
+        if (p.index() < passNodes_.size() && passNodes_[p.index()])
+        {
+            auto callback = std::move(cb);
+            auto* graph = this;
+            const auto passIndex = p.index();
+            passNodes_[p.index()]->setExecuteCallback(
+                [callback = std::move(callback), graph, passIndex, p](
+                    const FrameGraphResources&, CommandContext& commands)
+                {
+                    if (callback)
+                    {
+                        try
+                        {
+                            callback(PassExecutionContext{p, commands.passName(),
+                                commands.executionIndex(), nullptr});
+                        }
+                        catch (const std::exception& e)
+                        {
+                            graph->passes_[passIndex].legacyFailed = true;
+                            graph->passes_[passIndex].legacyError = e.what();
+                        }
+                        catch (...)
+                        {
+                            graph->passes_[passIndex].legacyFailed = true;
+                            graph->passes_[passIndex].legacyError =
+                                "frame graph pass execution failed";
+                        }
+                    }
+                });
+        }
     }
 }
 void FrameGraph::importTokenRaw(FrameGraphHandle h, FrameGraphNativeResource token)
@@ -334,6 +465,14 @@ void FrameGraph::presentRaw(FrameGraphHandle h) noexcept
     }
     resources_[h.index()].exported = true;
     auto p = addPass("Present", true);
+    if (p.pass_ .index() < passNodes_.size())
+    {
+        auto presentNode = std::make_unique<PresentPassNode>(this);
+        presentNode->setHandle(p.pass_);
+        presentNode->setId(p.pass_.index());
+        presentNode->resource = h;
+        passNodes_[p.pass_.index()] = std::move(presentNode);
+    }
     if (resources_[h.index()].kind == ResourceKind::Texture)
     {
         p.read(TextureHandle(h.index(), h.version(), epoch_), ResourceUsage::Present);
@@ -347,10 +486,31 @@ void FrameGraph::forwardRaw(FrameGraphHandle a, FrameGraphHandle b)
 {
     if (isValid(a) && isValid(b))
     {
-        resources_[a.index()].current = false;
-        resources_[a.index()].aliasOf = b.index();
-        resources_[a.index()].exported = resources_[b.index()].exported;
+        // Filament's contract keeps the forwarded resource (a) valid and
+        // invalidates the replaced handle (b).
+        resources_[b.index()].current = false;
+        resources_[b.index()].aliasOf = a.index();
+        resources_[a.index()].exported = resources_[a.index()].exported ||
+                                         resources_[b.index()].exported;
     }
+}
+
+FrameGraphId<FrameGraphTexture> FrameGraph::import(
+    std::string_view name,
+    const FrameGraphRenderPass::ImportDescriptor& descriptor,
+    FrameGraphNativeResource target) noexcept
+{
+    TextureDescriptor texture{};
+    texture.name = std::string(name);
+    texture.transient = false;
+    const auto raw = createRaw(ResourceKind::Texture, name, texture);
+    const auto id = FrameGraphId<FrameGraphTexture>(raw.index(), raw.version(), epoch_);
+    importTokenRaw(id, target);
+    usageRaw(id, resourceUsageForAttachments(descriptor.attachments));
+    resources_[id.index()].imported = true;
+    resources_[id.index()].importedRenderTarget = true;
+    resources_[id.index()].renderTargetImport = descriptor;
+    return id;
 }
 
 bool FrameGraph::isValid(FrameGraphHandle h) const noexcept
@@ -394,6 +554,20 @@ FrameGraph& FrameGraph::compile() noexcept
     compiled_ = {};
     lastError_ = {};
     graph_.reset(passes_.size());
+    for (auto& node : passNodes_)
+    {
+        if (node)
+        {
+            node->resetCompileState();
+        }
+    }
+    for (auto& node : resourceNodes_)
+    {
+        if (node)
+        {
+            node->clearEdges();
+        }
+    }
     compiled_.passes.resize(passes_.size());
     compiled_.resources.resize(resources_.size());
     for (std::size_t i = 0; i < resources_.size(); ++i)
@@ -430,6 +604,19 @@ FrameGraph& FrameGraph::compile() noexcept
         int writer = -1;
         std::vector<std::uint32_t> readers;
     };
+    // Versions of a virtual resource alias the same physical allocation.
+    // Track hazards by the root resource so a write to a new version is
+    // ordered after readers/writers of the previous version.
+    auto rootResource = [&](std::uint32_t index)
+    {
+        std::size_t guard = 0;
+        while (index < resources_.size() && resources_[index].aliasOf != kInvalidIndex &&
+               guard++ < resources_.size())
+        {
+            index = resources_[index].aliasOf;
+        }
+        return index;
+    };
     std::vector<AccessState> states(resources_.size());
     for (std::uint32_t i = 0; i < passes_.size(); ++i)
     {
@@ -448,7 +635,7 @@ FrameGraph& FrameGraph::compile() noexcept
         for (const auto& a : passes_[i].accesses)
         {
             if (a.resourceIndex >= resources_.size() ||
-                resources_[a.resourceIndex].version != a.resourceVersion)
+                resources_[a.resourceIndex].version != a.effectiveVersion())
             {
                 lastError_ = {GraphErrorCode::InvalidHandle, "invalid resource declaration", {}};
                 compiled_.error = lastError_;
@@ -460,7 +647,8 @@ FrameGraph& FrameGraph::compile() noexcept
             {
                 add(static_cast<std::uint32_t>(producer), i);
             }
-            auto& state = states[a.resourceIndex];
+            const auto hazardIndex = static_cast<std::uint32_t>(rootResource(a.resourceIndex));
+            auto& state = states[hazardIndex];
             if (a.reads() && state.writer >= 0 && state.writer != static_cast<int>(i))
             {
                 add(static_cast<std::uint32_t>(state.writer), i);
@@ -488,8 +676,76 @@ FrameGraph& FrameGraph::compile() noexcept
             }
         }
     }
+    // Build the Filament-shaped bipartite node graph. The compact pass graph
+    // above remains available for legacy graphviz output, while compilation
+    // and culling below use PassNode/ResourceNode connectivity.
+    const auto resourceOffset = static_cast<std::uint32_t>(passes_.size());
+    nodeGraph_.reset(passes_.size() + resources_.size());
+    for (std::uint32_t i = 0; i < passes_.size(); ++i)
     {
-        auto indeg = graph_.indegrees();
+        nodeGraph_.nodes()[i].pass = true;
+        nodeGraph_.nodes()[i].kind = ResourceKind::Buffer;
+        nodeGraph_.nodes()[i].name = passes_[i].object->name_;
+    }
+    for (std::uint32_t i = 0; i < resources_.size(); ++i)
+    {
+        auto& node = nodeGraph_.nodes()[resourceOffset + i];
+        node.pass = false;
+        node.kind = resources_[i].kind;
+        node.name = resources_[i].name;
+    }
+    for (std::uint32_t i = 0; i < passes_.size(); ++i)
+    {
+        for (const auto dep : passes_[i].deps)
+        {
+            if (dep.index() < passes_.size())
+            {
+                nodeGraph_.addEdge(dep.index(), i);
+            }
+        }
+        for (const auto& access : passes_[i].accesses)
+        {
+            if (access.resourceIndex >= resources_.size())
+            {
+                continue;
+            }
+            const auto resourceNode = resourceOffset + access.resourceIndex;
+            if (access.reads() && !access.writes())
+            {
+                nodeGraph_.addEdge(resourceNode, i);
+            }
+            if (access.writes())
+            {
+                nodeGraph_.addEdge(i, resourceNode);
+            }
+            if (i < passNodes_.size() && access.resourceIndex < resourceNodes_.size() &&
+                passNodes_[i] && resourceNodes_[access.resourceIndex])
+            {
+                auto* passNode = passNodes_[i].get();
+                auto* resourceNodeObject = resourceNodes_[access.resourceIndex].get();
+                passNode->registerResource(
+                    FrameGraphHandle(access.resourceIndex, access.effectiveVersion(), epoch_), nullptr);
+                auto* edge = new ResourceEdgeBase(passNode, resourceNodeObject, access.writes());
+                if (access.writes())
+                {
+                    resourceNodeObject->setIncomingEdge(edge);
+                }
+                else
+                {
+                    resourceNodeObject->addOutgoingEdge(edge);
+                }
+            }
+        }
+    }
+    // Preserve all pass hazards in the Filament-shaped graph as pass-to-pass
+    // edges. Resource nodes carry the richer attachment metadata, while these
+    // edges provide an unambiguous topological order across resource versions.
+    for (const auto& edge : graph_.edges())
+    {
+        nodeGraph_.addEdge(edge.from, edge.to);
+    }
+    {
+        auto indeg = nodeGraph_.indegrees();
         std::deque<std::uint32_t> q;
         for (std::uint32_t i = 0; i < indeg.size(); ++i)
         {
@@ -504,7 +760,7 @@ FrameGraph& FrameGraph::compile() noexcept
             auto n = q.front();
             q.pop_front();
             ++visited;
-            for (auto s : graph_.successors(n))
+            for (auto s : nodeGraph_.successors(n))
             {
                 if (--indeg[s] == 0)
                 {
@@ -512,7 +768,7 @@ FrameGraph& FrameGraph::compile() noexcept
                 }
             }
         }
-        if (visited != passes_.size())
+        if (visited != nodeGraph_.size())
         {
             lastError_ = {GraphErrorCode::CycleDetected, "frame graph contains a cycle", {}};
             if (!passes_.empty())
@@ -525,59 +781,54 @@ FrameGraph& FrameGraph::compile() noexcept
         }
     }
     std::vector<bool> live(passes_.size(), false);
-    std::deque<std::uint32_t> work;
-    for (std::uint32_t i = 0; i < passes_.size(); ++i)
+    if (!config_.cullPasses)
     {
-        if (passes_[i].object->sideEffect_)
-        {
-            live[i] = true;
-            work.push_back(i);
-        }
+        std::fill(live.begin(), live.end(), true);
     }
-    for (std::uint32_t i = 0; i < resources_.size(); ++i)
+    else
     {
-        if (resources_[i].exported && resources_[i].producer >= 0 && !live[resources_[i].producer])
+        for (std::uint32_t i = 0; i < passes_.size(); ++i)
         {
-            live[resources_[i].producer] = true;
-            work.push_back(static_cast<std::uint32_t>(resources_[i].producer));
-        }
-    }
-    while (!work.empty())
-    {
-        auto n = work.front();
-        work.pop_front();
-        for (auto p : graph_.predecessors(n))
-        {
-            if (!live[p])
+            if (passes_[i].object->sideEffect_)
             {
-                live[p] = true;
-                work.push_back(p);
+                nodeGraph_.makeTarget(i);
             }
+        }
+        for (std::uint32_t i = 0; i < resources_.size(); ++i)
+        {
+            if (resources_[i].exported)
+            {
+                nodeGraph_.makeTarget(resourceOffset + i);
+            }
+        }
+        nodeGraph_.cull();
+        for (std::uint32_t i = 0; i < passes_.size(); ++i)
+        {
+            live[i] = !nodeGraph_.isCulled(i);
         }
     }
     for (std::uint32_t i = 0; i < passes_.size(); ++i)
     {
         compiled_.passes[i].culled = !live[i];
         passes_[i].object->culled_ = !live[i];
-    }
-    std::vector<std::uint32_t> indegree(passes_.size());
-    for (std::uint32_t i = 0; i < passes_.size(); ++i)
-    {
-        if (live[i])
+        if (i < passNodes_.size() && passNodes_[i])
         {
-            for (auto n : graph_.successors(i))
-            {
-                if (live[n])
-                {
-                    ++indegree[n];
-                }
-            }
+            passNodes_[i]->setCulled(!live[i]);
         }
     }
-    std::vector<std::uint32_t> ready;
-    for (std::uint32_t i = 0; i < passes_.size(); ++i)
+    for (std::uint32_t i = 0; i < resources_.size(); ++i)
     {
-        if (live[i] && indegree[i] == 0)
+        if (i < resourceNodes_.size() && resourceNodes_[i])
+        {
+            resourceNodes_[i]->setCulled(nodeGraph_.isCulled(resourceOffset + i));
+            resourceNodes_[i]->setProducer(resources_[i].producer);
+        }
+    }
+    auto indegree = nodeGraph_.indegrees();
+    std::vector<std::uint32_t> ready;
+    for (std::uint32_t i = 0; i < nodeGraph_.size(); ++i)
+    {
+        if (indegree[i] == 0)
         {
             ready.push_back(i);
         }
@@ -587,10 +838,13 @@ FrameGraph& FrameGraph::compile() noexcept
         auto it = std::min_element(ready.begin(), ready.end());
         auto n = *it;
         ready.erase(it);
-        compiled_.executionOrder.push_back(passes_[n].object->handle_);
-        for (auto s : graph_.successors(n))
+        if (n < passes_.size() && live[n])
         {
-            if (live[s] && --indegree[s] == 0)
+            compiled_.executionOrder.push_back(passes_[n].object->handle_);
+        }
+        for (auto s : nodeGraph_.successors(n))
+        {
+            if (--indegree[s] == 0)
             {
                 ready.push_back(s);
             }
@@ -607,6 +861,16 @@ FrameGraph& FrameGraph::compile() noexcept
         compiled_.error = lastError_;
         error = lastError_;
         return *this;
+    }
+    // Resolve render-pass attachment metadata only after the final execution
+    // order and culling state are known. This makes discard analysis reflect
+    // explicit dependencies that reorder passes.
+    for (std::size_t i = 0; i < passNodes_.size(); ++i)
+    {
+        if (i < passes_.size() && !passes_[i].object->culled_ && passNodes_[i])
+        {
+            passNodes_[i]->resolve();
+        }
     }
     for (std::size_t pos = 0; pos < compiled_.executionOrder.size(); ++pos)
     {
@@ -638,6 +902,12 @@ void FrameGraph::execute(CommandContext& commands) noexcept
         return;
     }
     lastError_ = {};
+    for (auto& pass : passes_)
+    {
+        pass.legacyFailed = false;
+        pass.legacyError.clear();
+    }
+    ResourceCreationContext context{this, provider_, &commands};
     for (std::size_t i = 0; i < compiled_.executionOrder.size(); ++i)
     {
         for (auto& r : resources_)
@@ -670,12 +940,36 @@ void FrameGraph::execute(CommandContext& commands) noexcept
         commands.queue_ = p.object->queue_;
         commands.executionIndex_ = static_cast<std::uint32_t>(i);
         FrameGraphResources resources(this, h);
-        p.object->execute(resources, commands);
-        if (p.object->failed())
+        if (h.index() < passNodes_.size() && passNodes_[h.index()])
+        {
+            if (auto* renderPass = dynamic_cast<RenderPassNode*>(passNodes_[h.index()].get()))
+            {
+                renderPass->devirtualizeRenderTargets(context);
+                if (!renderPass->renderTargetsReady())
+                {
+                    lastError_ = {GraphErrorCode::ExecutionFailed,
+                        "render target creation failed", {}};
+                    return;
+                }
+            }
+            passNodes_[h.index()]->execute(resources, commands);
+            if (auto* renderPass = dynamic_cast<RenderPassNode*>(passNodes_[h.index()].get()))
+            {
+                renderPass->destroyRenderTargets(context);
+            }
+        }
+        else
+        {
+            p.object->executeInternal(resources, commands);
+        }
+        if (p.object->failed() || p.legacyFailed)
         {
             lastError_ = {GraphErrorCode::ExecutionFailed,
-                std::string(p.object->errorMessage().empty() ? "frame graph pass execution failed"
-                                                             : p.object->errorMessage()),
+                std::string(p.legacyFailed
+                                  ? p.legacyError
+                                  : (p.object->errorMessage().empty()
+                                          ? "frame graph pass execution failed"
+                                          : p.object->errorMessage())),
                 {}};
             return;
         }
@@ -708,6 +1002,10 @@ void FrameGraph::reset() noexcept
     }
     resources_.clear();
     passes_.clear();
+    passNodes_.clear();
+    resourceNodes_.clear();
+    graph_.reset(0);
+    nodeGraph_.reset(0);
     compiled_ = {};
     executionOrder.clear();
     error = {};
@@ -777,25 +1075,6 @@ ResourceUsage FrameGraph::resourceUsageRaw(FrameGraphHandle h) const noexcept
                ? resources_[h.index()].usage
                : ResourceUsage::None;
 }
-const void* FrameGraphResources::getRaw(FrameGraphHandle h, ResourceKind kind) const noexcept
-{
-    return graph_ && graph_->declaredRaw(pass_, h) ? graph_->resourceRaw(h, kind) : nullptr;
-}
-ResourceUsage FrameGraphResources::usageRaw(FrameGraphHandle h) const noexcept
-{
-    return graph_ ? graph_->resourceUsageRaw(h) : ResourceUsage::None;
-}
-bool FrameGraphResources::declared(FrameGraphHandle h) const noexcept
-{
-    return graph_ && graph_->declaredRaw(pass_, h);
-}
-void FrameGraphResources::detachRaw(FrameGraphHandle h) const noexcept
-{
-    if (graph_ && h.index() < graph_->resources_.size())
-    {
-        const_cast<FrameGraph*>(graph_)->resources_[h.index()].detached = true;
-    }
-}
 bool FrameGraph::declaredRaw(FrameGraphHandle pass, FrameGraphHandle resource) const noexcept
 {
     if (pass.index() >= passes_.size())
@@ -807,7 +1086,8 @@ bool FrameGraph::declaredRaw(FrameGraphHandle pass, FrameGraphHandle resource) c
         accesses.end(),
         [&](const ResourceAccess& a)
         {
-            if (a.resourceIndex == resource.index() && a.resourceVersion == resource.version())
+            if (a.resourceIndex == resource.index() &&
+                a.effectiveVersion() == resource.version())
             {
                 return true;
             }

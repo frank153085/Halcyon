@@ -146,27 +146,39 @@ endif()
 # and quality code can evolve independently of the Vulkan frame loop.
 if(HALCYON_BUILD_EXPERIMENTAL_M2)
     add_library(HalcyonFrameGraph STATIC
+        # Keep this list in the same order and at the same granularity as
+        # filament/src/fg.  The graph itself is backend-neutral; the source
+        # files below are intentionally one responsibility per translation
+        # unit so navigating between the two projects is mechanical.
+        Source/Renderer/Graph/Blackboard.cpp
+        Source/Renderer/Graph/DependencyGraph.cpp
         Source/Renderer/Graph/FrameGraph.cpp
-        Source/Renderer/Graph/FrameGraphCompiler.cpp
-        Source/Renderer/Graph/FrameGraphExecutor.cpp
+        Source/Renderer/Graph/FrameGraphPass.cpp
         Source/Renderer/Graph/FrameGraphResources.cpp
+        Source/Renderer/Graph/FrameGraphTexture.cpp
+        Source/Renderer/Graph/PassNode.cpp
+        Source/Renderer/Graph/ResourceNode.cpp
+        Source/Renderer/Graph/ResourceCreationContext.cpp
+        Source/Renderer/Graph/Resource.cpp
         Source/Core/Memory/FrameArena.cpp
         Source/Core/Memory/LinearAllocator.cpp
+        Source/Renderer/Graph/Blackboard.h
+        Source/Renderer/Graph/FrameGraphId.h
+        Source/Renderer/Graph/FrameGraphPass.h
+        Source/Renderer/Graph/FrameGraphRenderPass.h
+        Source/Renderer/Graph/FrameGraphResources.h
+        Source/Renderer/Graph/FrameGraphTexture.h
+        Source/Renderer/Graph/FrameGraphTypes.h
+        Source/Renderer/Graph/FrameGraphDummyLink.h
         Source/Renderer/Graph/FrameGraph.h
-        Source/Renderer/Graph/DependencyGraph.h
-        Source/Renderer/Graph/PassNode.h
-        Source/Renderer/Graph/PresentPassNode.h
-        Source/Renderer/Graph/ResourceNode.h
-        Source/Renderer/Graph/VirtualResource.h
-        Source/Renderer/Graph/FrameGraphCompiler.h
-        Source/Renderer/Graph/FrameGraphExecutor.h
-        Source/Renderer/Graph/FrameGraphArena.h
-        Include/Halcyon/FrameGraph.h
-        Include/Halcyon/FrameGraphId.h
-        Include/Halcyon/FrameGraphPass.h
-        Include/Halcyon/FrameGraphResources.h
-        Include/Halcyon/FrameGraphTypes.h
-        Include/Halcyon/Blackboard.h)
+        Source/Renderer/Graph/details/DependencyGraph.h
+        Source/Renderer/Graph/details/PassNode.h
+        Source/Renderer/Graph/details/Resource.h
+        Source/Renderer/Graph/details/ResourceAllocator.h
+        Source/Renderer/Graph/details/ResourceCreationContext.h
+        Source/Renderer/Graph/details/ResourceNode.h
+        Source/Renderer/Graph/details/Utilities.h
+        Source/Renderer/Graph/FrameGraphArena.h)
     target_include_directories(HalcyonFrameGraph PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/Source"
         "${CMAKE_CURRENT_SOURCE_DIR}/Include")
@@ -175,7 +187,6 @@ if(HALCYON_BUILD_EXPERIMENTAL_M2)
 
     add_library(HalcyonRendererExperimental STATIC
         Source/Renderer/Graph/BarrierPlanner.cpp
-        Source/Renderer/Graph/FrameGraphNode.h
         Source/Renderer/Graph/BarrierPlanner.h
         Source/Renderer/Resources/BindlessTable.cpp
         Source/Renderer/Resources/BindlessTable.h

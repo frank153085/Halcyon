@@ -27,10 +27,7 @@ public:
         auto it = values_.find(std::string(key));
         return it == values_.end() ? nullptr : std::any_cast<T>(&it->second);
     }
-    bool contains(std::string_view key) const noexcept
-    {
-        return values_.find(std::string(key)) != values_.end();
-    }
+    bool contains(std::string_view key) const noexcept;
     template <typename T, typename... Args>
     T& getOrEmplace(std::string_view key, Args&&... args)
     {
@@ -42,14 +39,8 @@ public:
         }
         return *std::any_cast<T>(&it->second);
     }
-    bool remove(std::string_view key) noexcept
-    {
-        return values_.erase(std::string(key)) != 0;
-    }
-    void clear() noexcept
-    {
-        values_.clear();
-    }
+    bool remove(std::string_view key) noexcept;
+    void clear() noexcept;
 
 private:
     std::unordered_map<std::string, std::any> values_;

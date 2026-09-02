@@ -1,8 +1,8 @@
 #include "Renderer/Graph/FrameGraph.h"
-#include "Renderer/Graph/FrameGraphNode.h"
 #include "Renderer/Quality/FrameBudgetController.h"
 
 #include <cstdint>
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -32,6 +32,48 @@ public:
 
 private:
     int failures_ = 0;
+};
+
+class RecordingResourceProvider final : public Halcyon::Renderer::Graph::FrameGraphResourceProvider
+{
+public:
+    bool create(const Halcyon::Renderer::Graph::FrameGraphResourceCreateInfo& info,
+        Halcyon::Renderer::Graph::FrameGraphNativeResource& output) noexcept override
+    {
+        ++resourceCreates;
+        output.token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(resourceCreates));
+        lastKind = info.kind;
+        return true;
+    }
+
+    void destroy(const Halcyon::Renderer::Graph::FrameGraphNativeResource&) noexcept override
+    {
+        ++resourceDestroys;
+    }
+
+    bool createRenderTarget(
+        const Halcyon::Renderer::Graph::FrameGraphRenderTargetCreateInfo& info,
+        Halcyon::Renderer::Graph::FrameGraphNativeResource& output) noexcept override
+    {
+        ++renderTargetCreates;
+        lastRenderPass = info;
+        output.token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(0x1000u + renderTargetCreates));
+        return true;
+    }
+
+    void destroyRenderTarget(
+        const Halcyon::Renderer::Graph::FrameGraphNativeResource&) noexcept override
+    {
+        ++renderTargetDestroys;
+    }
+
+    std::size_t resourceCreates = 0;
+    std::size_t resourceDestroys = 0;
+    std::size_t renderTargetCreates = 0;
+    std::size_t renderTargetDestroys = 0;
+    Halcyon::Renderer::Graph::ResourceKind lastKind =
+        Halcyon::Renderer::Graph::ResourceKind::Buffer;
+    Halcyon::Renderer::Graph::FrameGraphRenderTargetCreateInfo lastRenderPass{};
 };
 
 #define HALCYON_EXPECT(context, expression)                                                        \
@@ -144,6 +186,16 @@ void renderGraphCycleAndGenerationTests(TestContext& context)
 {
     namespace Graph = Halcyon::Renderer::Graph;
 
+    Graph::FrameGraph orderingGraph;
+    auto firstDeclared = orderingGraph.addPass("First declared", true);
+    auto secondDeclared = orderingGraph.addPass("Second declared", true);
+    firstDeclared.dependsOn(secondDeclared.handle());
+    const auto ordered = orderingGraph.compile();
+    HALCYON_EXPECT(context, ordered);
+    HALCYON_EXPECT(context, ordered.executionOrder.size() == 2u);
+    HALCYON_EXPECT(context, ordered.executionOrder[0] == secondDeclared.handle());
+    HALCYON_EXPECT(context, ordered.executionOrder[1] == firstDeclared.handle());
+
     Graph::FrameGraph graph;
     const auto oldBuffer = graph.createBuffer({.name = "Old", .size = 64});
     HALCYON_EXPECT(context, graph.valid(oldBuffer));
@@ -228,6 +280,61 @@ void frameGraphNodeStructureTests(TestContext& context)
         indegrees.size() == 3u && indegrees[0] == 0u && indegrees[1] == 1u && indegrees[2] == 1u);
 }
 
+void frameGraphRenderPassTests(TestContext& context)
+{
+    namespace Graph = Halcyon::Renderer::Graph;
+    RecordingResourceProvider provider;
+    Graph::FrameGraph graph;
+    graph.setResourceProvider(&provider);
+    const auto color = graph.createTexture({.name = "Color", .width = 64, .height = 32});
+    bool infoValid = false;
+    auto& pass = graph.addPass<Graph::FrameGraph::Empty>("Raster",
+        [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            std::uint32_t renderPass = 0;
+            builder.declareRenderPass(Graph::TextureHandle(color), &renderPass);
+            builder.setSideEffect();
+        },
+        [&](const Graph::FrameGraphResources& resources,
+            const Graph::FrameGraph::Empty&, Graph::CommandContext&)
+        {
+            const auto info = resources.getRenderPassInfo();
+            infoValid = info.descriptor.viewport.width == 64 &&
+                        info.descriptor.viewport.height == 32 && info.target.token != nullptr;
+        });
+    (void)pass;
+    graph.compile();
+    Graph::CommandContext commands;
+    graph.execute(commands);
+    HALCYON_EXPECT(context, infoValid);
+    HALCYON_EXPECT(context, provider.renderTargetCreates == 1u);
+    HALCYON_EXPECT(context, provider.renderTargetDestroys == 1u);
+
+    Graph::FrameGraph importedGraph;
+    importedGraph.setResourceProvider(&provider);
+    Graph::FrameGraphRenderPass::ImportDescriptor importDescriptor{};
+    importDescriptor.attachments = Graph::FrameGraphAttachmentFlags::Color0;
+    Graph::FrameGraphNativeResource importedToken{reinterpret_cast<void*>(0xfeedu)};
+    const auto imported = importedGraph.import("ImportedRT", importDescriptor, importedToken);
+    bool importedInfoValid = false;
+    importedGraph.addPass<Graph::FrameGraph::Empty>("Imported raster",
+        [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            builder.declareRenderPass(Graph::TextureHandle(imported));
+            builder.setSideEffect();
+        },
+        [&](const Graph::FrameGraphResources& resources,
+            const Graph::FrameGraph::Empty&, Graph::CommandContext&)
+        {
+            importedInfoValid = resources.getRenderPassInfo().target.token == importedToken.token;
+        });
+    importedGraph.compile();
+    Graph::CommandContext importedCommands;
+    importedGraph.execute(importedCommands);
+    HALCYON_EXPECT(context, importedInfoValid);
+    HALCYON_EXPECT(context, provider.renderTargetCreates == 1u);
+}
+
 } // namespace
 
 int main()
@@ -237,6 +344,7 @@ int main()
     renderGraphCycleAndGenerationTests(context);
     frameBudgetDowngradeAndUpgradeTests(context);
     frameGraphNodeStructureTests(context);
+    frameGraphRenderPassTests(context);
 
     if (context.failures() != 0)
     {
