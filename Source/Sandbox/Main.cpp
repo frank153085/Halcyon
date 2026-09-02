@@ -6,6 +6,7 @@
 #include "Renderer/Scene/Camera.h"
 
 #include <GLFW/glfw3.h>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -289,6 +290,8 @@ int main(int argc, char** argv)
 
     std::uint64_t frameIndex = 0;
     Halcyon::Vulkan::InstanceData instance{};
+    const float rotationSpeedRadiansPerSecond = glm::radians(30.0f);
+    const auto playbackStart = std::chrono::steady_clock::now();
     int exitCode = EXIT_SUCCESS;
     std::string reportedError;
     while (glfwWindowShouldClose(window) == GLFW_FALSE &&
@@ -310,7 +313,9 @@ int main(int argc, char** argv)
 
         // Keep the sample animation in the application layer.  The transform
         // is serialized into the backend-neutral InstanceData layout.
-        const float angle = static_cast<float>(packet.frameIndex) * 0.01f;
+        const double elapsedSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - playbackStart).count();
+        const float angle = static_cast<float>(elapsedSeconds) * rotationSpeedRadiansPerSecond;
         const glm::mat4 model = glm::rotate(
             glm::mat4{1.0f}, angle, glm::vec3{0.0f, 1.0f, 0.0f});
         std::memcpy(instance.transform.data(), glm::value_ptr(model), sizeof(model));

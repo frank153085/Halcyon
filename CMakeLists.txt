@@ -60,6 +60,24 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/FramePacket.h
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.cpp
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
+    Source/Renderer/Vulkan/EmbeddedTriangleShaders.cpp
+    Source/Renderer/Vulkan/EmbeddedTriangleShaders.h
+    Source/Renderer/Vulkan/VulkanCommon.cpp
+    Source/Renderer/Vulkan/VulkanCommon.h
+    Source/Renderer/Vulkan/VulkanShaderModule.cpp
+    Source/Renderer/Vulkan/VulkanShaderModule.h
+    Source/Renderer/Vulkan/ShaderLibrary.h
+    Source/Renderer/Vulkan/ShaderLibrary.cpp
+    Source/Renderer/Vulkan/VulkanPipeline.cpp
+    Source/Renderer/Vulkan/VulkanPipeline.h
+    Source/Renderer/Vulkan/VulkanSwapchain.cpp
+    Source/Renderer/Vulkan/VulkanSwapchain.h
+    Source/Renderer/Vulkan/VulkanDevice.cpp
+    Source/Renderer/Vulkan/VulkanDevice.h
+    Source/Renderer/Vulkan/VulkanFrameContext.cpp
+    Source/Renderer/Vulkan/VulkanFrameContext.h
+    Source/Renderer/Vulkan/VulkanDemoResources.cpp
+    Source/Renderer/Vulkan/VulkanDemoResources.h
     Source/Renderer/Vulkan/GpuAllocator.cpp
     Source/Renderer/Vulkan/GpuAllocator.h
     Source/Renderer/Vulkan/GpuUploader.cpp
