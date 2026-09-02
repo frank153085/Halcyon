@@ -1,194 +1,16 @@
-#ifndef GLFW_INCLUDE_NONE
-#define GLFW_INCLUDE_NONE
-#endif
-
 #include "ExampleRunner.h"
 
-#include "Core/Log.h"
-#include "Halcyon/Renderer.h"
-#include "Renderer/Scene/Camera.h"
-#include "Renderer/Scene/Ecs/RenderExtractor.h"
+#include "Halcyon/Application.h"
 
-#include <GLFW/glfw3.h>
-#include <chrono>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <filesystem>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <limits>
-#include <span>
-#include <string>
-#include <string_view>
-
-#ifndef HALCYON_ENABLE_VALIDATION
-#define HALCYON_ENABLE_VALIDATION 1
-#endif
+#include <memory>
 
 namespace Halcyon::Examples
 {
 namespace
 {
-
-struct CommandLine
-{
-    int width = 1280;
-    int height = 720;
-    std::uint64_t frameLimit = 0;
-    bool validation = HALCYON_ENABLE_VALIDATION != 0;
-    bool resourceTest = false;
-    bool help = false;
-};
-
-void glfwErrorCallback(int error, const char* description)
-{
-    HALCYON_LOG_ERROR(
-        "GLFW error ", error, ": ", description != nullptr ? description : "unknown error");
-}
-
-void framebufferSizeCallback(GLFWwindow* window, int width, int height)
-{
-    auto* renderer = static_cast<Halcyon::Vulkan::Renderer*>(glfwGetWindowUserPointer(window));
-    if (renderer == nullptr)
-    {
-        return;
-    }
-    const auto result = renderer->resize({width > 0 ? static_cast<std::uint32_t>(width) : 0u,
-        height > 0 ? static_cast<std::uint32_t>(height) : 0u});
-    if (!result)
-    {
-        HALCYON_LOG_ERROR("Resize request failed: ", result.error().describe());
-    }
-}
-
-void logCapabilities(const Halcyon::Vulkan::Capabilities& capabilities)
-{
-    HALCYON_LOG_INFO("GPU: ",
-        capabilities.deviceName,
-        " (Vulkan ",
-        VK_API_VERSION_MAJOR(capabilities.deviceApiVersion),
-        '.',
-        VK_API_VERSION_MINOR(capabilities.deviceApiVersion),
-        '.',
-        VK_API_VERSION_PATCH(capabilities.deviceApiVersion),
-        ')');
-    HALCYON_LOG_INFO("Base tier: dynamicRendering=",
-        capabilities.dynamicRendering,
-        ", synchronization2=",
-        capabilities.synchronization2,
-        ", timelineSemaphore=",
-        capabilities.timelineSemaphore);
-    HALCYON_LOG_INFO("GPU-driven tier: descriptorIndexing=",
-        capabilities.descriptorIndexing,
-        ", bufferDeviceAddress=",
-        capabilities.bufferDeviceAddress,
-        ", indirectCount=",
-        capabilities.indirectCount,
-        ", barycentric=",
-        capabilities.fragmentBarycentric);
-    HALCYON_LOG_INFO("Optional ray query: ", capabilities.rayQuery);
-}
-
-bool parseUnsigned(std::string_view text, std::uint64_t& value)
-{
-    if (text.empty())
-    {
-        return false;
-    }
-    std::uint64_t parsed = 0;
-    for (const char character : text)
-    {
-        if (character < '0' || character > '9')
-        {
-            return false;
-        }
-        const auto digit = static_cast<std::uint64_t>(character - '0');
-        if (parsed > (std::numeric_limits<std::uint64_t>::max() - digit) / 10u)
-        {
-            return false;
-        }
-        parsed = parsed * 10u + digit;
-    }
-    value = parsed;
-    return true;
-}
-
-bool parseCommandLine(int argc, char** argv, CommandLine& commandLine)
-{
-    for (int index = 1; index < argc; ++index)
-    {
-        const std::string_view argument = argv[index] != nullptr ? argv[index] : "";
-        if (argument == "--help" || argument == "-h")
-        {
-            commandLine.help = true;
-            continue;
-        }
-
-        const auto consumeValue = [&](std::string_view name, std::uint64_t& output)
-        {
-            if (argument == name && index + 1 < argc)
-            {
-                return parseUnsigned(argv[++index] != nullptr ? argv[index] : "", output);
-            }
-            if (argument.starts_with(name) && argument.size() > name.size() &&
-                argument[name.size()] == '=')
-            {
-                return parseUnsigned(argument.substr(name.size() + 1u), output);
-            }
-            return false;
-        };
-
-        std::uint64_t value = 0;
-        if (consumeValue("--frames", value))
-        {
-            commandLine.frameLimit = value;
-            continue;
-        }
-        if (consumeValue("--width", value) && value > 0 && value <= 16384u)
-        {
-            commandLine.width = static_cast<int>(value);
-            continue;
-        }
-        if (consumeValue("--height", value) && value > 0 && value <= 16384u)
-        {
-            commandLine.height = static_cast<int>(value);
-            continue;
-        }
-        if (argument == "--no-validation" || argument == "--validation=0")
-        {
-            commandLine.validation = false;
-            continue;
-        }
-        if (argument == "--validation" || argument == "--validation=1")
-        {
-            commandLine.validation = true;
-            continue;
-        }
-        if (argument == "--resource-test")
-        {
-            commandLine.resourceTest = true;
-            continue;
-        }
-
-        HALCYON_LOG_ERROR("Unknown or malformed command-line option: ", argument);
-        return false;
-    }
-    return true;
-}
-
-void printUsage(const ExampleDefinition& definition)
-{
-    std::printf("%s options:\n"
-                "  --frames N       render N frames and exit (default: until close)\n"
-                "  --width N        initial window width (default: 1280)\n"
-                "  --height N       initial window height (default: 720)\n"
-                "  --no-validation  disable Vulkan validation layers\n"
-                "  --resource-test  log startup resource playback\n"
-                "  --help           show this message\n",
-        definition.title);
-}
 
 std::string resolveStartupPath(const char* path)
 {
@@ -214,192 +36,98 @@ std::string resolveStartupPath(const char* path)
     return relativePath.string();
 }
 
+struct State
+{
+    Entity modelEntity{};
+};
+
+ApplicationCallbacks makeCallbacks(
+    const std::shared_ptr<State>& state, const ExampleDefinition& definition)
+{
+    ApplicationCallbacks callbacks;
+    callbacks.onInitialize = [state](Engine& engine) -> Result<void>
+    {
+        Perspective perspective{};
+        perspective.verticalFovRadians = glm::radians(55.0f);
+        perspective.nearPlane = 0.1f;
+        perspective.farPlane = 100.0f;
+        auto& view = engine.defaultView();
+        auto result = view.setPerspective(perspective);
+        if (!result)
+        {
+            return result;
+        }
+        result = view.setViewport(view.viewport());
+        if (!result)
+        {
+            return result;
+        }
+        result = view.lookAt({0.0f, 0.15f, 3.2f}, {0.0f, 0.0f, 0.0f});
+        if (!result)
+        {
+            return result;
+        }
+
+        state->modelEntity = engine.scene().createEntity();
+        (void)engine.scene().transforms().add(state->modelEntity);
+        (void)engine.scene().renderables().add(state->modelEntity);
+        if (engine.scene().transforms().get(state->modelEntity) == nullptr)
+        {
+            return Result<void>::failure(
+                MakeError(ErrorCode::Backend, "failed to create model transform", "Example"));
+        }
+        return Result<void>::success();
+    };
+    callbacks.onFrame = [state](Engine& engine, const FrameInfo& frame) -> Result<void>
+    {
+        auto* transform = engine.scene().transforms().get(state->modelEntity);
+        if (transform == nullptr)
+        {
+            return Result<void>::failure(
+                MakeError(ErrorCode::InvalidState, "model transform is unavailable", "Example"));
+        }
+        const float angle = static_cast<float>(frame.elapsedSeconds) * glm::radians(30.0f);
+        transform->localTransform =
+            glm::rotate(glm::mat4{1.0f}, angle, glm::vec3{0.0f, 1.0f, 0.0f});
+        transform->dirty = true;
+        return Result<void>::success();
+    };
+    callbacks.onShutdown = [state](Engine& engine)
+    {
+        if (state->modelEntity.isValid())
+        {
+            engine.scene().destroyEntity(state->modelEntity);
+            state->modelEntity = Entity::invalid();
+        }
+    };
+    if (definition.onInitialize)
+    {
+        callbacks.onInitialize = definition.onInitialize;
+    }
+    if (definition.onFrame)
+    {
+        callbacks.onFrame = definition.onFrame;
+    }
+    if (definition.onShutdown)
+    {
+        callbacks.onShutdown = definition.onShutdown;
+    }
+    return callbacks;
+}
+
 } // namespace
 
 int run(const ExampleDefinition& definition, int argc, char** argv)
 {
-    CommandLine commandLine;
-    if (!parseCommandLine(argc, argv, commandLine))
-    {
-        printUsage(definition);
-        return EXIT_FAILURE;
-    }
-    if (commandLine.help)
-    {
-        printUsage(definition);
-        return EXIT_SUCCESS;
-    }
+    ApplicationConfig config;
+    config.window.title = definition.title != nullptr ? definition.title : "Halcyon Example";
+    const std::string startupTexture = resolveStartupPath(definition.startupTexturePath);
+    const std::string startupMesh = resolveStartupPath(definition.startupMeshPath);
+    config.engine.startupTexturePath = startupTexture.empty() ? nullptr : startupTexture.c_str();
+    config.engine.startupMeshPath = startupMesh.empty() ? nullptr : startupMesh.c_str();
 
-    glfwSetErrorCallback(glfwErrorCallback);
-    if (glfwInit() != GLFW_TRUE)
-    {
-        HALCYON_LOG_CRITICAL("GLFW initialization failed");
-        return EXIT_FAILURE;
-    }
-    if (glfwVulkanSupported() != GLFW_TRUE)
-    {
-        HALCYON_LOG_CRITICAL("The active driver/loader does not support Vulkan");
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    GLFWwindow* window =
-        glfwCreateWindow(commandLine.width, commandLine.height, definition.title, nullptr, nullptr);
-    if (window == nullptr)
-    {
-        HALCYON_LOG_CRITICAL("Window creation failed");
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-
-    int framebufferWidth = 0;
-    int framebufferHeight = 0;
-    glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
-
-    Halcyon::Vulkan::Renderer renderer;
-    Halcyon::Vulkan::RendererConfig config;
-    config.initialExtent = {
-        framebufferWidth > 0 ? static_cast<std::uint32_t>(framebufferWidth) : 1280u,
-        framebufferHeight > 0 ? static_cast<std::uint32_t>(framebufferHeight) : 720u};
-    config.framesInFlight = 3;
-    config.enableValidation = commandLine.validation;
-    config.rayQuery = Halcyon::Vulkan::FeatureMode::Disabled;
-    const std::string startupTexturePath = resolveStartupPath(definition.startupTexturePath);
-    const std::string startupMeshPath = resolveStartupPath(definition.startupMeshPath);
-    config.startupTexturePath = startupTexturePath.empty() ? nullptr : startupTexturePath.c_str();
-    config.startupMeshPath = startupMeshPath.empty() ? nullptr : startupMeshPath.c_str();
-
-    const auto initializeResult = renderer.initialize(window, config);
-    if (!initializeResult)
-    {
-        HALCYON_LOG_CRITICAL(
-            "Renderer initialization failed: ", initializeResult.error().describe());
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-
-    glfwSetWindowUserPointer(window, &renderer);
-    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    logCapabilities(renderer.capabilities());
-    if (commandLine.resourceTest)
-    {
-        HALCYON_LOG_INFO("Resource playback mode is enabled; assets are loaded by the renderer.");
-    }
-
-    Halcyon::Renderer::Scene::Camera camera;
-    Halcyon::Renderer::Scene::Perspective perspective{};
-    perspective.verticalFovRadians = glm::radians(55.0f);
-    perspective.nearPlane = 0.1f;
-    perspective.farPlane = 100.0f;
-    const auto cameraPerspectiveResult = camera.setPerspective(perspective);
-    const auto cameraViewportResult = camera.setViewport(Halcyon::Renderer::Scene::ViewportExtent{
-        config.initialExtent.width, config.initialExtent.height});
-    const auto cameraLookAtResult =
-        camera.lookAt(glm::vec3{0.0f, 0.15f, 3.2f}, glm::vec3{0.0f, 0.0f, 0.0f});
-    if (!cameraPerspectiveResult || !cameraViewportResult || !cameraLookAtResult)
-    {
-        HALCYON_LOG_CRITICAL("Failed to initialize example camera");
-        glfwSetWindowUserPointer(window, nullptr);
-        renderer.shutdown();
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-
-    Halcyon::Renderer::Scene::Ecs::Scene scene;
-    const auto modelEntity = scene.createEntity();
-    (void)scene.transforms().add(modelEntity);
-    (void)scene.renderables().add(modelEntity);
-    auto* modelTransform = scene.transforms().get(modelEntity);
-    if (modelTransform == nullptr)
-    {
-        HALCYON_LOG_CRITICAL("Failed to create example ECS transform");
-        glfwSetWindowUserPointer(window, nullptr);
-        renderer.shutdown();
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return EXIT_FAILURE;
-    }
-
-    std::uint64_t frameIndex = 0;
-    const float rotationSpeedRadiansPerSecond = glm::radians(30.0f);
-    const auto playbackStart = std::chrono::steady_clock::now();
-    int exitCode = EXIT_SUCCESS;
-    std::string reportedError;
-    while (glfwWindowShouldClose(window) == GLFW_FALSE &&
-           (commandLine.frameLimit == 0 || frameIndex < commandLine.frameLimit))
-    {
-        glfwPollEvents();
-
-        int currentFramebufferWidth = 0;
-        int currentFramebufferHeight = 0;
-        glfwGetFramebufferSize(window, &currentFramebufferWidth, &currentFramebufferHeight);
-        if (currentFramebufferWidth > 0 && currentFramebufferHeight > 0)
-        {
-            (void)camera.setViewport({static_cast<std::uint32_t>(currentFramebufferWidth),
-                static_cast<std::uint32_t>(currentFramebufferHeight)});
-        }
-        const double elapsedSeconds =
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - playbackStart).count();
-        const float angle = static_cast<float>(elapsedSeconds) * rotationSpeedRadiansPerSecond;
-        const glm::mat4 model = glm::rotate(glm::mat4{1.0f}, angle, glm::vec3{0.0f, 1.0f, 0.0f});
-        modelTransform->localTransform = model;
-        modelTransform->dirty = true;
-        scene.updateTransforms();
-        auto ownedPacket = Halcyon::Renderer::Scene::Ecs::RenderExtractor::extract(
-            scene, camera.data(), frameIndex++);
-        const Halcyon::Vulkan::FrameStats stats = renderer.render(ownedPacket.view());
-
-        if (stats.deviceLost)
-        {
-            HALCYON_LOG_CRITICAL("Vulkan device lost: ", renderer.lastError());
-            exitCode = EXIT_FAILURE;
-            break;
-        }
-        if (stats.fatalError || !renderer.initialized())
-        {
-            HALCYON_LOG_CRITICAL("Renderer entered a fatal state: ", renderer.lastError());
-            exitCode = EXIT_FAILURE;
-            break;
-        }
-        if (!renderer.lastError().empty() && renderer.lastError() != reportedError)
-        {
-            reportedError = renderer.lastError();
-            HALCYON_LOG_ERROR("Renderer: ", reportedError);
-        }
-        if (stats.minimized)
-        {
-            glfwWaitEventsTimeout(0.05);
-        }
-        if (stats.rendered && frameIndex % 120u == 0u)
-        {
-            char title[160]{};
-            if (stats.gpuFrameMs >= 0.0)
-            {
-                std::snprintf(title,
-                    sizeof(title),
-                    "%s | CPU %.2f ms | GPU %.2f ms",
-                    definition.title,
-                    stats.cpuFrameMs,
-                    stats.gpuFrameMs);
-            }
-            else
-            {
-                std::snprintf(
-                    title, sizeof(title), "%s | CPU %.2f ms", definition.title, stats.cpuFrameMs);
-            }
-            glfwSetWindowTitle(window, title);
-        }
-    }
-
-    glfwSetWindowUserPointer(window, nullptr);
-    renderer.shutdown();
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return exitCode;
+    auto state = std::make_shared<State>();
+    return Application::run(argc, argv, std::move(config), makeCallbacks(state, definition));
 }
 
 } // namespace Halcyon::Examples

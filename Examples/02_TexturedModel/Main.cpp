@@ -2,9 +2,9 @@
 
 int main(int argc, char** argv)
 {
-    return Halcyon::Examples::run({"Halcyon Example 02 - Textured Model",
-                                      "assets/models/monkey/color.png",
-                                      "assets/models/monkey/monkey.obj"},
-        argc,
-        argv);
+    Halcyon::Examples::ExampleDefinition definition{};
+    definition.title = "Halcyon Example 02 - Textured Model";
+    definition.startupTexturePath = "assets/models/monkey/color.png";
+    definition.startupMeshPath = "assets/models/monkey/monkey.obj";
+    return Halcyon::Examples::run(definition, argc, argv);
 }

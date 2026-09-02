@@ -9,6 +9,7 @@
 #include "../Scene/Camera.h"
 #include "../Scene/FramePacket.h"
 #include "GpuResourceManager.h"
+#include "Halcyon/RenderTypes.h"
 
 #include <array>
 #include <cstdint>
@@ -23,23 +24,8 @@ struct GLFWwindow;
 namespace Halcyon::Vulkan
 {
 
-enum class FeatureMode : std::uint8_t
-{
-    Disabled,
-    Auto,
-    Required,
-};
-
-struct Extent2D
-{
-    std::uint32_t width = 1280;
-    std::uint32_t height = 720;
-
-    [[nodiscard]] constexpr bool empty() const noexcept
-    {
-        return width == 0 || height == 0;
-    }
-};
+using FeatureMode = Halcyon::FeatureMode;
+using Extent2D = Halcyon::Extent2D;
 
 struct RendererConfig
 {
@@ -57,68 +43,16 @@ struct RendererConfig
     const char* startupMeshPath = nullptr;
 };
 
-// Compatibility aliases keep the original M1 public names source-compatible
-// while the canonical packet types live in the backend-neutral Scene module.
+// The Vulkan backend consumes the canonical packet types from the
+// backend-neutral scene module.
 using CameraData = Halcyon::Renderer::Scene::CameraData;
 using InstanceData = Halcyon::Renderer::Scene::InstanceData;
 using LightData = Halcyon::Renderer::Scene::LightData;
 using FramePacket = Halcyon::Renderer::Scene::FramePacket;
 
-struct QualityState
-{
-    float internalResolutionScale = 1.0f;
-    float shadowResolutionScale = 1.0f;
-    float lodBias = 0.0f;
-    bool rayQueryEnabled = false;
-};
-
-struct FrameStats
-{
-    struct PassTiming
-    {
-        std::string name;
-        double gpuFrameMs = -1.0;
-    };
-
-    double cpuFrameMs = 0.0;
-    double gpuFrameMs = -1.0;
-    std::vector<PassTiming> gpuPasses;
-    std::uint64_t deviceMemoryBytes = 0;
-    QualityState quality{};
-    std::uint32_t swapchainImageIndex = 0;
-    bool rendered = false;
-    bool recreatedSwapchain = false;
-    bool suboptimal = false;
-    bool minimized = false;
-    bool deviceLost = false;
-    bool fatalError = false;
-};
-
-struct Capabilities
-{
-    std::uint32_t instanceApiVersion = VK_API_VERSION_1_0;
-    std::uint32_t deviceApiVersion = VK_API_VERSION_1_0;
-    std::string deviceName;
-    std::uint32_t vendorId = 0;
-    std::uint32_t deviceId = 0;
-    std::uint64_t deviceLocalMemoryBytes = 0;
-    bool validationEnabled = false;
-    bool debugUtils = false;
-    bool dynamicRendering = false;
-    bool synchronization2 = false;
-    bool timelineSemaphore = false;
-    bool descriptorIndexing = false;
-    bool bindlessTable = false;
-    bool bufferDeviceAddress = false;
-    bool indirectCount = false;
-    bool fragmentBarycentric = false;
-    bool rayQuery = false;
-    bool depthD32 = false;
-    bool reversedZ = false;
-    bool swapchain = false;
-    std::uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
-    std::uint32_t presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
-};
+using QualityState = Halcyon::QualityState;
+using FrameStats = Halcyon::FrameStats;
+using Capabilities = Halcyon::Capabilities;
 
 class Renderer final
 {

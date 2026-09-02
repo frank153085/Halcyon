@@ -10,8 +10,8 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 ## Current Milestone: M2 first version (complete)
 
 - Reproducible Debug and RelWithDebInfo presets for MSVC v143 and Ninja.
-- Separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonSandbox`, and
-  `HalcyonCooker` targets.
+- Separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonEngine`,
+  `HalcyonApplication`, `HalcyonSandbox`, and `HalcyonCooker` targets.
 - Vulkan 1.3 instance and device selection, Validation Messenger, Dynamic
   Rendering, Synchronization2, and Timeline Semaphores.
 - Three frame contexts, swapchain recreation, and safe minimize, resize, and
@@ -103,6 +103,8 @@ Source/Renderer/Scene       Camera and FramePacket data contracts
 Source/Renderer/Graph       M2 RenderGraph and barrier planning
 Source/Renderer/Resources   Upload/deletion and bindless slot infrastructure
 Source/Renderer/Vulkan      Vulkan 1.3 backend
+Source/Engine                Backend-neutral Engine and View orchestration
+Source/Application           Window, input, lifecycle, and diagnostics layer
 Source/Sandbox              Runnable demonstration application
 Examples                    Independent executable examples
 Source/Cooker               Deterministic resource-manifest tool

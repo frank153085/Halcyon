@@ -89,7 +89,7 @@ and must not duplicate declarations.
 
 Public facades live under `Include/Halcyon/` and internal implementation headers live under
 `Source/`. Application code should prefer the facade include path, for example
-`#include "Halcyon/Renderer.h"`.
+`#include "Halcyon/Application.h"` or `#include "Halcyon/Engine.h"`.
 
 `.gitattributes` enforces LF text files and marks shader binaries, images, and compiled assets as
 binary. Do not override these attributes for individual commits.

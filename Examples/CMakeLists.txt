@@ -7,9 +7,8 @@ add_library(HalcyonExampleSupport STATIC
 )
 target_include_directories(HalcyonExampleSupport PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Common")
-target_link_libraries(HalcyonExampleSupport PUBLIC HalcyonRenderer glfw)
+target_link_libraries(HalcyonExampleSupport PUBLIC HalcyonApplication)
 target_compile_definitions(HalcyonExampleSupport PRIVATE
-    GLFW_INCLUDE_NONE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
     HALCYON_EXAMPLE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )

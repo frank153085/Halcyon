@@ -214,16 +214,56 @@ else()
     message(WARNING "DXC was not found. Embedded M1 shaders remain usable, but HLSL validation is disabled.")
 endif()
 
-add_executable(HalcyonSandbox Source/Sandbox/Main.cpp)
-set_target_properties(HalcyonSandbox PROPERTIES OUTPUT_NAME Halcyon)
-target_link_libraries(HalcyonSandbox PRIVATE HalcyonRenderer glfw)
-if(HALCYON_ENABLE_IMGUI)
-    target_link_libraries(HalcyonSandbox PRIVATE Halcyon::ImGui)
-endif()
-target_compile_definitions(HalcyonSandbox PRIVATE
+# Backend-neutral orchestration layer.  Engine owns scene extraction and the
+# Vulkan renderer while exposing only public Halcyon types to applications.
+add_library(HalcyonEngine STATIC
+    Include/Halcyon/Engine.h
+    Include/Halcyon/RenderTypes.h
+    Include/Halcyon/Scene.h
+    Include/Halcyon/View.h
+    Source/Engine/Engine.cpp
+    Source/Engine/EngineInternal.h
+    Source/Engine/View.cpp
+)
+target_include_directories(HalcyonEngine PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+target_link_libraries(HalcyonEngine PUBLIC HalcyonRenderer)
+target_compile_definitions(HalcyonEngine PUBLIC
+    HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>)
+halcyon_enable_warnings(HalcyonEngine)
+
+# Application owns the platform window and process/event loop.  GLFW remains
+# an implementation dependency and is not visible from public headers.
+add_library(HalcyonApplication STATIC
+    Include/Halcyon/Application.h
+    Include/Halcyon/Window.h
+    Source/Application/Application.cpp
+    Source/Application/DiagnosticsOverlay.cpp
+    Source/Application/DiagnosticsOverlay.h
+    Source/Application/Window.cpp
+    Source/Application/WindowInternal.h
+)
+target_include_directories(HalcyonApplication PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+target_link_libraries(HalcyonApplication PUBLIC HalcyonEngine PRIVATE glfw)
+target_compile_definitions(HalcyonApplication PRIVATE
     GLFW_INCLUDE_NONE
-    HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
-    HALCYON_ENABLE_IMGUI=$<BOOL:${HALCYON_ENABLE_IMGUI}>
+    HALCYON_ENABLE_IMGUI=$<BOOL:${HALCYON_ENABLE_IMGUI}>)
+if(HALCYON_ENABLE_IMGUI)
+    target_link_libraries(HalcyonApplication PRIVATE Halcyon::ImGui)
+endif()
+halcyon_enable_warnings(HalcyonApplication)
+
+add_executable(HalcyonSandbox Source/Sandbox/Main.cpp)
+target_sources(HalcyonSandbox PRIVATE
+    Source/Sandbox/SandboxExample.cpp
+    Source/Sandbox/SandboxExample.h)
+set_target_properties(HalcyonSandbox PROPERTIES OUTPUT_NAME Halcyon)
+target_include_directories(HalcyonSandbox PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source/Sandbox")
+target_link_libraries(HalcyonSandbox PRIVATE HalcyonApplication)
+target_compile_definitions(HalcyonSandbox PRIVATE
     HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>
 )
 halcyon_enable_warnings(HalcyonSandbox)

@@ -2,5 +2,7 @@
 
 int main(int argc, char** argv)
 {
-    return Halcyon::Examples::run({"Halcyon Example 01 - Triangle"}, argc, argv);
+    Halcyon::Examples::ExampleDefinition definition{};
+    definition.title = "Halcyon Example 01 - Triangle";
+    return Halcyon::Examples::run(definition, argc, argv);
 }
