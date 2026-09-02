@@ -5,6 +5,7 @@
 #include "VulkanCommon.h"
 
 #include <array>
+#include <utility>
 
 namespace Halcyon::Vulkan
 {
@@ -16,7 +17,24 @@ Halcyon::Result<void> VulkanPipeline::create(VkDevice device,
     VkDescriptorSetLayout textureSetLayout,
     bool texturedRequested)
 {
-    destroy();
+    VulkanPipeline candidate;
+    const auto result = candidate.createInternal(
+        device, colorFormat, depthFormat, extent, textureSetLayout, texturedRequested);
+    if (!result)
+    {
+        return result;
+    }
+    swap(candidate);
+    return result;
+}
+
+Halcyon::Result<void> VulkanPipeline::createInternal(VkDevice device,
+    VkFormat colorFormat,
+    VkFormat depthFormat,
+    VkExtent2D extent,
+    VkDescriptorSetLayout textureSetLayout,
+    bool texturedRequested)
+{
     if (device == VK_NULL_HANDLE || colorFormat == VK_FORMAT_UNDEFINED || extent.width == 0 ||
         extent.height == 0)
     {
@@ -181,6 +199,17 @@ Halcyon::Result<void> VulkanPipeline::create(VkDevice device,
         return fail(vkFailure("vkCreateGraphicsPipelines", result));
     }
     return VoidResult::success();
+}
+
+void VulkanPipeline::swap(VulkanPipeline& other) noexcept
+{
+    using std::swap;
+    swap(device_, other.device_);
+    swap(layout_, other.layout_);
+    swap(pipeline_, other.pipeline_);
+    swap(vertexShader_, other.vertexShader_);
+    swap(fragmentShader_, other.fragmentShader_);
+    swap(textured_, other.textured_);
 }
 
 void VulkanPipeline::destroy() noexcept

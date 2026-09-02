@@ -2,12 +2,12 @@
 
 [Project Roadmap](./ROADMAP.md)
 
-Halcyon is a real-time renderer built for individual study. The repository is
-currently at the M0/M1 vertical-slice milestone: lifecycle management,
-synchronization, and error paths are made reliable before more advanced
-rendering algorithms are introduced.
+Halcyon is a real-time renderer built for individual study. The repository
+now provides the first, intentionally small M2 infrastructure increment. The
+M0/M1 Vulkan vertical slice remains the correctness baseline while render
+graph, bindless, shader, and profiling foundations stay independently usable.
 
-## Current Milestone: M0/M1
+## Current Milestone: M2 first version (complete)
 
 - Reproducible Debug and RelWithDebInfo presets for MSVC v143 and Ninja.
 - Separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonSandbox`, and
@@ -21,13 +21,31 @@ rendering algorithms are introduced.
   shaders retained as an offline fallback.
 - CPU-side tests for generation handles, deferred deletion, and the upload
   ring foundation.
+- CPU render-graph compilation/execution, barrier planning, bindless slot
+  lifetime tracking, and frame-budget infrastructure.
+- A deliberately thin first-version scene ECS: generation-checked entities,
+  dense transform/renderable/light component stores, and extraction into an
+  immutable `FramePacket`. The renderer remains independent of ECS policy.
+- A Vulkan bindless descriptor-set companion that maps typed CPU slots to
+  sampled/storage image, sampler, uniform-buffer, and storage-buffer arrays.
+- Renderer-owned bindless slot collection is synchronized with the frame
+  timeline when descriptor indexing is available.
+- Shader module validation with an optional SPIR-V Tools pass, lightweight
+  descriptor reflection, and a reload-safe replacement API for development
+  builds.
+- Optional Dear ImGui diagnostics overlay; enable it with
+  `-DHALCYON_ENABLE_IMGUI=ON`.
+- Optional GoogleTest coverage; enable it with
+  `-DHALCYON_ENABLE_GOOGLETEST=ON`.
 
-Advanced GPU-driven rendering, the Visibility Buffer, ray-tracing extensions,
-and the frame-budget controller are assigned to later milestones from M4
-through M8. Existing
-RenderGraph, Bindless, and frame-budget prototypes are excluded from the
-default M0/M1 build. Enable them for isolated study with
-`-DHALCYON_BUILD_EXPERIMENTAL_M2=ON`.
+This first version deliberately stops at safe CPU-side graph execution,
+resource lifetime tracking, shader validation/reflection, and a Vulkan
+bindless companion. Tracy capture, binding the bindless set into the active
+demo pipeline, and general per-pass GPU timestamp routing are deferred until
+the renderer needs them. Advanced GPU-driven rendering, the Visibility Buffer,
+and ray-tracing extensions remain assigned to later milestones. M2
+infrastructure is enabled by default; pass
+`-DHALCYON_BUILD_EXPERIMENTAL_M2=OFF` to build only the M0/M1 baseline.
 
 ## Language Policy
 
@@ -82,8 +100,8 @@ replacing previous binaries.
 ```text
 Source/Core                 Backend-neutral results, logging, and stable handles
 Source/Renderer/Scene       Camera and FramePacket data contracts
-Source/Renderer/Graph       M2 RenderGraph prototype, disabled by default
-Source/Renderer/Resources   M1 upload/deletion and M2 Bindless prototypes
+Source/Renderer/Graph       M2 RenderGraph and barrier planning
+Source/Renderer/Resources   Upload/deletion and bindless slot infrastructure
 Source/Renderer/Vulkan      Vulkan 1.3 backend
 Source/Sandbox              Runnable demonstration application
 Examples                    Independent executable examples

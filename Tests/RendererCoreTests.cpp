@@ -3,7 +3,10 @@
 
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -71,6 +74,43 @@ void renderGraphDependencyAndCullingTests(TestContext& context)
     HALCYON_EXPECT(context, visibilityLifetime->lastUse == 1);
     HALCYON_EXPECT(context, hdrLifetime->firstUse == 1);
     HALCYON_EXPECT(context, hdrLifetime->lastUse == 2);
+
+    std::vector<std::string> execution;
+    auto executableGraph = Graph::RenderGraph{};
+    const auto output = executableGraph.createTexture({.name = "Output"});
+    auto producer = executableGraph.addPass("Producer");
+    producer.write(output, Graph::ResourceUsage::Storage)
+        .setExecute(
+            [&execution](const Graph::PassExecutionContext& pass)
+            {
+                execution.emplace_back(pass.name);
+            });
+    auto consumer = executableGraph.addPass("Consumer");
+    consumer.read(output, Graph::ResourceUsage::Sampled)
+        .setSideEffect()
+        .setExecute(
+            [&execution](const Graph::PassExecutionContext& pass)
+            {
+                execution.emplace_back(pass.name);
+            });
+    const auto executable = executableGraph.compile();
+    const auto executionResult = executable.execute();
+    HALCYON_EXPECT(context, executionResult);
+    HALCYON_EXPECT(context, executionResult.executedPasses == 2u);
+    HALCYON_EXPECT(context, execution.size() == 2u);
+    HALCYON_EXPECT(context, execution[0] == "Producer");
+    HALCYON_EXPECT(context, execution[1] == "Consumer");
+
+    auto failingGraph = Graph::RenderGraph{};
+    auto failingPass = failingGraph.addPass("Failing", true);
+    failingPass.setExecute(
+        [](const Graph::PassExecutionContext&)
+        {
+            throw std::runtime_error("test callback failure");
+        });
+    const auto failedExecution = failingGraph.compile().execute();
+    HALCYON_EXPECT(context, !failedExecution);
+    HALCYON_EXPECT(context, failedExecution.error.code == Graph::GraphErrorCode::ExecutionFailed);
 }
 
 void renderGraphCycleAndGenerationTests(TestContext& context)

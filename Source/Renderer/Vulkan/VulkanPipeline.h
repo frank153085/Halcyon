@@ -20,6 +20,10 @@ class VulkanPipeline final
 {
 public:
     VulkanPipeline() noexcept = default;
+    ~VulkanPipeline() noexcept
+    {
+        destroy();
+    }
     VulkanPipeline(const VulkanPipeline&) = delete;
     VulkanPipeline& operator=(const VulkanPipeline&) = delete;
 
@@ -45,6 +49,14 @@ public:
     }
 
 private:
+    [[nodiscard]] Halcyon::Result<void> createInternal(VkDevice device,
+        VkFormat colorFormat,
+        VkFormat depthFormat,
+        VkExtent2D extent,
+        VkDescriptorSetLayout textureSetLayout,
+        bool texturedRequested);
+    void swap(VulkanPipeline& other) noexcept;
+
     VkDevice device_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

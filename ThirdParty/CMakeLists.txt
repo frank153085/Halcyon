@@ -28,6 +28,14 @@ add_library(HalcyonImGui STATIC
     imgui/imgui_widgets.cpp
 )
 target_include_directories(HalcyonImGui PUBLIC "${CMAKE_CURRENT_LIST_DIR}/imgui")
+if(HALCYON_ENABLE_IMGUI)
+    target_sources(HalcyonImGui PRIVATE
+        imgui/backends/imgui_impl_glfw.cpp
+        imgui/backends/imgui_impl_vulkan.cpp)
+    target_include_directories(HalcyonImGui PUBLIC
+        "${CMAKE_CURRENT_LIST_DIR}/imgui/backends")
+    target_link_libraries(HalcyonImGui PUBLIC glfw Vulkan::Vulkan)
+endif()
 add_library(Halcyon::ImGui ALIAS HalcyonImGui)
 
 option(HALCYON_ENABLE_GOOGLETEST "Build the GoogleTest dependency" OFF)

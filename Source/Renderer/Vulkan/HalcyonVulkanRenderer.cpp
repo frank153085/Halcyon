@@ -2,6 +2,7 @@
 
 #include "GpuAllocator.h"
 #include "GpuUploader.h"
+#include "VulkanBindlessTable.h"
 #include "VulkanCommon.h"
 #include "VulkanDemoResources.h"
 #include "VulkanDevice.h"
@@ -16,6 +17,7 @@
 #define GLFW_INCLUDE_VULKAN
 #endif
 #include <GLFW/glfw3.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -25,8 +27,39 @@
 #include <utility>
 #include <vector>
 
+#ifndef HALCYON_BUILD_EXPERIMENTAL_M2
+#define HALCYON_BUILD_EXPERIMENTAL_M2 0
+#endif
+
 namespace Halcyon::Vulkan
 {
+namespace
+{
+
+[[nodiscard]] std::uint32_t descriptorCapacity(
+    std::uint32_t preferred, std::uint32_t perStageLimit, std::uint32_t setLimit) noexcept
+{
+    return std::max(1u, std::min({preferred, perStageLimit, setLimit}));
+}
+
+[[nodiscard]] Resources::BindlessTableConfig bindlessConfig(
+    const VkPhysicalDeviceLimits& limits) noexcept
+{
+    Resources::BindlessTableConfig config;
+    config.sampledImageCapacity = descriptorCapacity(
+        32u, limits.maxPerStageDescriptorSampledImages, limits.maxDescriptorSetSampledImages);
+    config.storageImageCapacity = descriptorCapacity(
+        8u, limits.maxPerStageDescriptorStorageImages, limits.maxDescriptorSetStorageImages);
+    config.uniformBufferCapacity = descriptorCapacity(
+        12u, limits.maxPerStageDescriptorUniformBuffers, limits.maxDescriptorSetUniformBuffers);
+    config.storageBufferCapacity = descriptorCapacity(
+        8u, limits.maxPerStageDescriptorStorageBuffers, limits.maxDescriptorSetStorageBuffers);
+    config.samplerCapacity = descriptorCapacity(
+        16u, limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers);
+    return config;
+}
+
+} // namespace
 
 struct Renderer::Impl
 {
@@ -87,6 +120,8 @@ struct Renderer::Impl
     GpuAllocator gpuAllocator;
     GpuUploader gpuUploader;
     VulkanDemoResources demoResources;
+    VulkanBindlessTable bindlessTable;
+    OverlayCallback overlayCallback = nullptr;
 
     ~Impl()
     {
@@ -113,6 +148,7 @@ struct Renderer::Impl
             (void)vkDeviceWaitIdle(device);
             cleanupSwapchain();
             demoResources.cleanup();
+            bindlessTable.shutdown();
             frameContext.cleanup(device);
             gpuAllocator.shutdown();
         }
@@ -126,6 +162,7 @@ struct Renderer::Impl
         framebufferResized = false;
         requestedExtent = {};
         window = nullptr;
+        overlayCallback = nullptr;
     }
 
     [[nodiscard]] VoidResult createTimelineSemaphore()
@@ -280,8 +317,23 @@ struct Renderer::Impl
             {
                 stats.gpuFrameMs = gpuMilliseconds;
             }
+            double sceneMilliseconds = -1.0;
+            if (frameContext.readPassTime(device, frame, 0u, sceneMilliseconds) == VK_SUCCESS)
+            {
+                stats.gpuPasses.push_back({"Scene", sceneMilliseconds});
+            }
         }
         frame.submitted = false;
+
+        if (bindlessTable.initialized())
+        {
+            std::uint64_t completedTimeline = 0;
+            if (vkGetSemaphoreCounterValue(
+                    device, frameContext.timelineSemaphore, &completedTimeline) == VK_SUCCESS)
+            {
+                (void)bindlessTable.collect(completedTimeline);
+            }
+        }
 
         result = swapchainState.acquire(frame.imageAvailable, stats.swapchainImageIndex);
         if (result == VK_ERROR_OUT_OF_DATE_KHR)
@@ -452,7 +504,10 @@ VoidResult Renderer::Impl::recordFrame(
 
     if (timestampsEnabled)
     {
-        vkCmdResetQueryPool(frame.commandBuffer, frameContext.timestampPool, frame.queryBase, 2);
+        vkCmdResetQueryPool(frame.commandBuffer,
+            frameContext.timestampPool,
+            frame.queryBase,
+            2u + frameContext.maxPassCount * 2u);
         vkCmdWriteTimestamp2(frame.commandBuffer,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
             frameContext.timestampPool,
@@ -569,6 +624,7 @@ VoidResult Renderer::Impl::recordFrame(
         scissor.extent = swapchainExtent;
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
+        (void)frameContext.writePassTimestamp(frame.commandBuffer, frame, 0u, true);
         vkCmdBindPipeline(
             frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.pipeline());
         if (graphicsPipeline.textured() &&
@@ -618,6 +674,11 @@ VoidResult Renderer::Impl::recordFrame(
             vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &triangleBuffer, &offset);
             vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         }
+        (void)frameContext.writePassTimestamp(frame.commandBuffer, frame, 0u, false);
+    }
+    if (overlayCallback != nullptr)
+    {
+        overlayCallback(frame.commandBuffer);
     }
     vkCmdEndRendering(frame.commandBuffer);
 
@@ -733,6 +794,14 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->cleanup();
             return result;
         }
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+        if (impl_->caps.descriptorIndexing)
+        {
+            const auto bindlessResult = impl_->bindlessTable.initialize(
+                impl_->device, bindlessConfig(impl_->physicalProperties.limits));
+            impl_->caps.bindlessTable = static_cast<bool>(bindlessResult);
+        }
+#endif
         result = impl_->swapchainState.initialize(impl_->physicalDevice,
             impl_->device,
             impl_->surface,
@@ -923,6 +992,34 @@ VkQueue Renderer::graphicsQueue() const noexcept
 VkQueue Renderer::presentQueue() const noexcept
 {
     return impl_ != nullptr ? impl_->presentQueue : VK_NULL_HANDLE;
+}
+
+VkFormat Renderer::swapchainFormat() const noexcept
+{
+    return impl_ != nullptr ? impl_->swapchainFormat : VK_FORMAT_UNDEFINED;
+}
+
+VkFormat Renderer::depthFormat() const noexcept
+{
+    return impl_ != nullptr ? impl_->depthFormat : VK_FORMAT_UNDEFINED;
+}
+
+VkExtent2D Renderer::swapchainExtent() const noexcept
+{
+    return impl_ != nullptr ? impl_->swapchainExtent : VkExtent2D{};
+}
+
+std::uint32_t Renderer::swapchainImageCount() const noexcept
+{
+    return impl_ != nullptr ? static_cast<std::uint32_t>(impl_->swapchainImages.size()) : 0u;
+}
+
+void Renderer::setOverlayCallback(OverlayCallback callback) noexcept
+{
+    if (impl_ != nullptr)
+    {
+        impl_->overlayCallback = callback;
+    }
 }
 
 } // namespace Halcyon::Vulkan

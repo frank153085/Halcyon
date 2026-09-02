@@ -201,6 +201,7 @@ enum class GraphErrorCode : std::uint8_t
     InvalidHandle,
     InvalidDeclaration,
     CycleDetected,
+    ExecutionFailed,
 };
 
 struct GraphError
@@ -249,6 +250,23 @@ struct CompileResult
     [[nodiscard]] const ResourceLifetime* lifetime(TextureHandle handle) const noexcept;
     [[nodiscard]] const CompiledPass* pass(PassHandle handle) const noexcept;
     [[nodiscard]] bool isCulled(PassHandle handle) const noexcept;
+
+    struct ExecutionResult
+    {
+        bool success = false;
+        std::size_t executedPasses = 0;
+        GraphError error{};
+
+        [[nodiscard]] explicit operator bool() const noexcept
+        {
+            return success;
+        }
+    };
+
+    // Execute callbacks in the compiled topological order.  This is the
+    // backend-neutral execution hook used by tests and by Vulkan command
+    // recording adapters; culled passes are never invoked.
+    [[nodiscard]] ExecutionResult execute() const;
 };
 
 class RenderGraph;

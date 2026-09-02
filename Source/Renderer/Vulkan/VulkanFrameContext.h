@@ -17,6 +17,7 @@ struct VulkanFrame
     VkFence fence = VK_NULL_HANDLE;
     std::uint64_t timelineValue = 0;
     std::uint32_t queryBase = 0;
+    std::uint32_t passQueryBase = 0;
     bool submitted = false;
 };
 
@@ -31,12 +32,14 @@ public:
     bool timestampsEnabled = false;
     float timestampPeriod = 1.0f;
     std::uint32_t presentTimestampValidBits = 0;
+    std::uint32_t maxPassCount = 16;
 
     [[nodiscard]] Halcyon::Result<void> initialize(VkDevice device,
         VkPhysicalDevice physicalDevice,
         const VkPhysicalDeviceProperties& physicalProperties,
         std::uint32_t graphicsQueueFamily,
-        std::uint32_t requestedFrameCount);
+        std::uint32_t requestedFrameCount,
+        std::uint32_t requestedPassCount = 16);
     void cleanup(VkDevice device) noexcept;
 
     [[nodiscard]] Halcyon::Result<void> createTimeline(VkDevice device);
@@ -44,7 +47,8 @@ public:
         VkPhysicalDevice physicalDevice,
         const VkPhysicalDeviceProperties& physicalProperties,
         std::uint32_t graphicsQueueFamily,
-        std::uint32_t requestedFrameCount);
+        std::uint32_t requestedFrameCount,
+        std::uint32_t requestedPassCount = 16);
 
     // Submit and present are kept with the per-frame synchronization state so
     // the renderer only orchestrates high-level frame flow.  The methods
@@ -57,6 +61,14 @@ public:
     [[nodiscard]] VkResult resetFence(VkDevice device, VulkanFrame& frame) const noexcept;
     [[nodiscard]] VkResult readGpuTime(
         VkDevice device, const VulkanFrame& frame, double& milliseconds) const noexcept;
+    [[nodiscard]] VkResult readPassTime(VkDevice device,
+        const VulkanFrame& frame,
+        std::uint32_t passIndex,
+        double& milliseconds) const noexcept;
+    [[nodiscard]] bool writePassTimestamp(VkCommandBuffer commandBuffer,
+        const VulkanFrame& frame,
+        std::uint32_t passIndex,
+        bool begin) const noexcept;
     [[nodiscard]] VkResult present(VkQueue presentQueue,
         VkSwapchainKHR swapchain,
         VkSemaphore presentReady,

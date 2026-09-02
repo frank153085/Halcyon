@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <exception>
 #include <sstream>
 
 namespace Halcyon::Renderer::Graph
@@ -71,6 +72,50 @@ bool CompileResult::isCulled(PassHandle handle) const noexcept
 {
     const auto* candidate = pass(handle);
     return candidate != nullptr && candidate->culled;
+}
+
+CompileResult::ExecutionResult CompileResult::execute() const
+{
+    ExecutionResult execution;
+    if (!success)
+    {
+        execution.error = error;
+        if (!execution.error)
+        {
+            execution.error.code = GraphErrorCode::InvalidDeclaration;
+            execution.error.message = "cannot execute an unsuccessful render graph";
+        }
+        return execution;
+    }
+
+    try
+    {
+        for (const PassHandle handle : executionOrder)
+        {
+            const CompiledPass* candidate = pass(handle);
+            if (candidate == nullptr || candidate->culled)
+            {
+                continue;
+            }
+            if (candidate->execute)
+            {
+                candidate->execute(PassExecutionContext{candidate->handle, candidate->name});
+            }
+            ++execution.executedPasses;
+        }
+        execution.success = true;
+    }
+    catch (const std::exception& exception)
+    {
+        execution.error.code = GraphErrorCode::ExecutionFailed;
+        execution.error.message = exception.what();
+    }
+    catch (...)
+    {
+        execution.error.code = GraphErrorCode::ExecutionFailed;
+        execution.error.message = "render graph pass callback threw an unknown exception";
+    }
+    return execution;
 }
 
 PassBuilder& PassBuilder::read(BufferHandle handle, ResourceUsage usage)

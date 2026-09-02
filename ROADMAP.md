@@ -50,6 +50,10 @@ The implementation order is fixed: complete Compute Culling plus Indexed Indirec
 
 - Static meshes, materials, textures, and initial instances enter a persistent `SceneDatabase` and upload only when created or changed.
 - `FramePacket` remains immutable and contains no Vulkan handles. It carries only camera data, lights, and dirty rigid-instance updates.
+- The first version uses a thin scene ECS façade (generation-checked entities,
+  dense component stores, and a render extractor). A scheduler, reflection
+  system, and gameplay-oriented ECS are intentionally deferred so this layer
+  can be replaced without changing renderer-facing packet contracts.
 - The CPU uses stable generation handles. The upload stage resolves them into dense 32-bit GPU Scene indices.
 - The GPU Scene uses SoA buffers for transforms, bounds, meshes, materials, LOD state, and flags.
 - `HalcyonCooker` produces deterministic caches with schema versions and content hashes, progressively adding glTF data, fixed LODs, meshlets, the cluster DAG, mesh SDFs, and Surface Cache proxy data.
@@ -107,7 +111,7 @@ Wait for the current frame timeline
 
 - [x] M0 Engineering Foundation
 - [x] M1 Vulkan Vertical Slice
-- [ ] M2 Core Infrastructure - CPU prototypes exist, but Vulkan integration and acceptance are incomplete
+- [x] M2 Core Infrastructure - first version complete; advanced integration remains deferred
 - [ ] M3 Traditional Quality Baseline
 - [ ] M4 GPU-Driven Foundation
 - [ ] M5 Virtualized Geometry V1
@@ -132,13 +136,13 @@ Wait for the current frame timeline
 
 **Acceptance gate:** The Sandbox runs for 300 frames and exits normally. Resize, minimize, and restoration do not crash. Debug validation reports no warnings or errors, and RenderDoc can capture a complete frame.
 
-### M2 Core Infrastructure (Preparing)
+### M2 Core Infrastructure (First Version)
 
 **Dependencies:** M1.
 
-**Core deliverables:** VMA, GPU resource pools, timeline-based deferred deletion, a Vulkan Bindless Descriptor Table, RenderGraph compilation and execution, Barrier2 planning, HLSL compilation/reflection/hot reload, ImGui, Tracy, and per-pass timestamps. Existing RenderGraph, Bindless, and budget-control code remains a CPU prototype until Vulkan integration is complete.
+**Core deliverables:** VMA, GPU resource pools, timeline-based deferred deletion, a Vulkan Bindless Descriptor Table companion, RenderGraph compilation and CPU execution, Barrier2 planning, HLSL compilation/reflection/hot reload, an optional ImGui diagnostics overlay, and the initial GPU timestamp hooks. The implementation enables CPU RenderGraph and Bindless infrastructure by default, adds callback execution and cycle-safe diagnostics, provides capability-clamped descriptor tables with typed image/buffer writes and frame-timeline collection, validates SPIR-V modules, provides lightweight reflection metadata, and provides transactional shader/pipeline replacement. The scene pass is timed in the demo and optional GoogleTest coverage is available.
 
-**Acceptance gate:** RenderGraph topology, cycle detection, culling, lifetime, and barrier tests pass. No live resource allocations remain after shutdown. Bindless slots are not reused before their timeline completes. A failed shader reload preserves the last valid pipeline.
+**Acceptance gate:** RenderGraph topology, cycle detection, culling, lifetime, barrier, and callback execution tests pass. No live resource allocations remain after shutdown. Bindless slots are not reused before their timeline completes. Invalid shader binaries are rejected, and failed shader or pipeline replacement leaves the last valid object active. The first version is complete after these CPU and local Vulkan checks. Tracy capture, renderer-level descriptor-set consumption, and general per-pass timestamp routing are intentionally deferred to a later integration increment and are not prerequisites for this simple version.
 
 ### M3 Traditional Quality Baseline (Planned)
 
@@ -237,7 +241,7 @@ A milestone is complete only after its functionality, fallbacks, tests, and arti
 
 - The primary platform is Windows 11 with Vulkan. Halcyon does not build a cross-API RHI; D3D12, Linux, and Metal remain independent extensions.
 - Only static and rigid scenes are in scope. Skeletal animation, morph targets, hair, and complex transparent materials are excluded.
-- Editors, ECS, physics, audio, scripting, networking, and a complete game framework are excluded.
+- Editors, a full gameplay ECS, physics, audio, scripting, networking, and a complete game framework are excluded. The small scene ECS façade used by the first version is limited to render extraction.
 - Feature-complete, commercial-engine-scale virtualized geometry and dynamic global illumination are out of scope; Halcyon implements only the constrained learning paths defined above. General virtual texturing, path tracing, ReSTIR GI, and neural frame generation are excluded.
 - Mesh Shaders, compute rasterization, Ray Query, and neural modules must never become hard runtime requirements.
 - Performance conclusions apply only to documented test environments and do not claim that an individual algorithm outperforms a complete commercial engine.

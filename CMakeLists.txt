@@ -5,7 +5,7 @@ project(Halcyon VERSION 0.1.0 LANGUAGES C CXX)
 option(HALCYON_BUILD_TESTS "Build Halcyon CPU-side tests" ON)
 option(HALCYON_ENABLE_VALIDATION "Enable Vulkan validation by default" ON)
 option(HALCYON_BUILD_EXPERIMENTAL_M2
-    "Build unfinished M2+ RenderGraph, bindless and frame-budget prototypes" OFF)
+    "Build M2 RenderGraph, bindless, budget and shader validation infrastructure" ON)
 option(HALCYON_BUILD_EXAMPLES
     "Build standalone examples with isolated output directories" ON)
 
@@ -81,6 +81,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/VulkanCommon.h
     Source/Renderer/Vulkan/VulkanShaderModule.cpp
     Source/Renderer/Vulkan/VulkanShaderModule.h
+    Source/Renderer/Shaders/ShaderReflection.cpp
+    Source/Renderer/Shaders/ShaderReflection.h
     Source/Renderer/Vulkan/ShaderLibrary.h
     Source/Renderer/Vulkan/ShaderLibrary.cpp
     Source/Renderer/Vulkan/VulkanPipeline.cpp
@@ -89,6 +91,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/VulkanSwapchain.h
     Source/Renderer/Vulkan/VulkanDevice.cpp
     Source/Renderer/Vulkan/VulkanDevice.h
+    Source/Renderer/Vulkan/VulkanBindlessTable.cpp
+    Source/Renderer/Vulkan/VulkanBindlessTable.h
     Source/Renderer/Vulkan/VulkanFrameContext.cpp
     Source/Renderer/Vulkan/VulkanFrameContext.h
     Source/Renderer/Vulkan/VulkanDemoResources.cpp
@@ -100,6 +104,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/GpuResourceManager.cpp
     Source/Renderer/Vulkan/GpuResourceManager.h
     Source/Renderer/Resources/ResourceTypes.h
+    Source/Renderer/Resources/BindlessTable.cpp
+    Source/Renderer/Resources/BindlessTable.h
     Source/Renderer/Resources/UploadRing.h
 )
 target_include_directories(HalcyonRenderer PUBLIC
@@ -111,13 +117,19 @@ target_link_libraries(HalcyonRenderer
     PUBLIC Halcyon::RobinMap
     PRIVATE glfw
 )
-target_compile_definitions(HalcyonRenderer PRIVATE GLFW_INCLUDE_NONE)
+target_compile_definitions(HalcyonRenderer PRIVATE
+    GLFW_INCLUDE_NONE
+    HALCYON_BUILD_EXPERIMENTAL_M2=$<BOOL:${HALCYON_BUILD_EXPERIMENTAL_M2}>)
 halcyon_enable_warnings(HalcyonRenderer)
 target_compile_definitions(HalcyonRenderer PRIVATE HALCYON_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/Shaders")
 
-# These CPU-only prototypes belong to M2 and later milestones.  Keeping them
-# in a separate opt-in target prevents unfinished advanced work from becoming
-# part of the M0/M1 renderer's build or public dependency closure.
+if(HALCYON_ENABLE_SPIRV_TOOLS)
+    target_compile_definitions(HalcyonRenderer PRIVATE HALCYON_ENABLE_SPIRV_TOOLS=1)
+    target_link_libraries(HalcyonRenderer PRIVATE Halcyon::SPIRVTools)
+endif()
+
+# M2 infrastructure remains a separate target so its graph, barrier, bindless,
+# and quality code can evolve independently of the Vulkan frame loop.
 if(HALCYON_BUILD_EXPERIMENTAL_M2)
     add_library(HalcyonRendererExperimental STATIC
         Source/Renderer/Graph/RenderGraph.cpp
@@ -196,6 +208,7 @@ endif()
 target_compile_definitions(HalcyonSandbox PRIVATE
     GLFW_INCLUDE_NONE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
+    HALCYON_ENABLE_IMGUI=$<BOOL:${HALCYON_ENABLE_IMGUI}>
 )
 halcyon_enable_warnings(HalcyonSandbox)
 
@@ -233,6 +246,23 @@ if(HALCYON_BUILD_TESTS)
             PRIVATE HalcyonRendererExperimental)
         halcyon_enable_warnings(HalcyonRendererCoreTests)
         add_test(NAME Halcyon.RendererCore COMMAND HalcyonRendererCoreTests)
+
+        add_executable(HalcyonShaderReflectionTests
+            Tests/ShaderReflectionTests.cpp
+            Source/Renderer/Shaders/ShaderReflection.cpp)
+        target_link_libraries(HalcyonShaderReflectionTests PRIVATE HalcyonCore)
+        target_include_directories(HalcyonShaderReflectionTests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+        halcyon_enable_warnings(HalcyonShaderReflectionTests)
+        add_test(NAME Halcyon.ShaderReflection COMMAND HalcyonShaderReflectionTests)
+
+        if(HALCYON_ENABLE_GOOGLETEST)
+            add_executable(HalcyonM2GoogleTests Tests/M2GoogleTests.cpp)
+            target_link_libraries(HalcyonM2GoogleTests
+                PRIVATE HalcyonRendererExperimental Halcyon::GoogleTest)
+            halcyon_enable_warnings(HalcyonM2GoogleTests)
+            add_test(NAME Halcyon.M2Google COMMAND HalcyonM2GoogleTests)
+        endif()
     endif()
 
     add_executable(HalcyonCameraTests
@@ -284,6 +314,9 @@ if(HALCYON_BUILD_TESTS)
         HalcyonInfrastructureTests
         HalcyonDeferredDeletionTests)
     if(HALCYON_BUILD_EXPERIMENTAL_M2)
-        add_dependencies(HalcyonTests HalcyonRendererCoreTests)
+        add_dependencies(HalcyonTests HalcyonRendererCoreTests HalcyonShaderReflectionTests)
+        if(HALCYON_ENABLE_GOOGLETEST)
+            add_dependencies(HalcyonTests HalcyonM2GoogleTests)
+        endif()
     endif()
 endif()

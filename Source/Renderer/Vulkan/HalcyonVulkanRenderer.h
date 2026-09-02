@@ -15,6 +15,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 struct GLFWwindow;
@@ -73,8 +74,15 @@ struct QualityState
 
 struct FrameStats
 {
+    struct PassTiming
+    {
+        std::string name;
+        double gpuFrameMs = -1.0;
+    };
+
     double cpuFrameMs = 0.0;
     double gpuFrameMs = -1.0;
+    std::vector<PassTiming> gpuPasses;
     std::uint64_t deviceMemoryBytes = 0;
     QualityState quality{};
     std::uint32_t swapchainImageIndex = 0;
@@ -100,6 +108,7 @@ struct Capabilities
     bool synchronization2 = false;
     bool timelineSemaphore = false;
     bool descriptorIndexing = false;
+    bool bindlessTable = false;
     bool bufferDeviceAddress = false;
     bool indirectCount = false;
     bool fragmentBarycentric = false;
@@ -114,6 +123,12 @@ struct Capabilities
 class Renderer final
 {
 public:
+    // An optional overlay callback is invoked while the active dynamic
+    // rendering scope is open. Applications can use it for diagnostics (for
+    // example Dear ImGui) without taking ownership of the frame command
+    // buffer.
+    using OverlayCallback = void (*)(VkCommandBuffer commandBuffer) noexcept;
+
     Renderer() noexcept;
     ~Renderer();
 
@@ -155,6 +170,12 @@ public:
     [[nodiscard]] VkDevice device() const noexcept;
     [[nodiscard]] VkQueue graphicsQueue() const noexcept;
     [[nodiscard]] VkQueue presentQueue() const noexcept;
+    [[nodiscard]] VkFormat swapchainFormat() const noexcept;
+    [[nodiscard]] VkFormat depthFormat() const noexcept;
+    [[nodiscard]] VkExtent2D swapchainExtent() const noexcept;
+    [[nodiscard]] std::uint32_t swapchainImageCount() const noexcept;
+
+    void setOverlayCallback(OverlayCallback callback) noexcept;
 
 private:
     struct Impl;

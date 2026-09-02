@@ -6,7 +6,18 @@
 #include "Renderer/Scene/Camera.h"
 #include "Renderer/Scene/Ecs/RenderExtractor.h"
 
+#ifndef HALCYON_ENABLE_IMGUI
+#define HALCYON_ENABLE_IMGUI 0
+#endif
+
+#if HALCYON_ENABLE_IMGUI
+#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_vulkan.h>
+#include <imgui.h>
+#endif
+
 #include <GLFW/glfw3.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -25,6 +36,77 @@
 
 namespace
 {
+
+#if HALCYON_ENABLE_IMGUI
+bool initializeImGui(GLFWwindow* window, const Halcyon::Vulkan::Renderer& renderer)
+{
+    if (window == nullptr || renderer.instance() == VK_NULL_HANDLE ||
+        renderer.physicalDevice() == VK_NULL_HANDLE || renderer.device() == VK_NULL_HANDLE ||
+        renderer.graphicsQueue() == VK_NULL_HANDLE ||
+        renderer.swapchainFormat() == VK_FORMAT_UNDEFINED ||
+        renderer.depthFormat() == VK_FORMAT_UNDEFINED)
+    {
+        return false;
+    }
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    if (!ImGui_ImplGlfw_InitForVulkan(window, true))
+    {
+        ImGui::DestroyContext();
+        return false;
+    }
+
+    const std::uint32_t imageCount = std::max(2u, renderer.swapchainImageCount());
+    VkFormat colorFormat = renderer.swapchainFormat();
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.ApiVersion = VK_API_VERSION_1_3;
+    initInfo.Instance = renderer.instance();
+    initInfo.PhysicalDevice = renderer.physicalDevice();
+    initInfo.Device = renderer.device();
+    initInfo.QueueFamily = renderer.capabilities().graphicsQueueFamily;
+    initInfo.Queue = renderer.graphicsQueue();
+    initInfo.DescriptorPoolSize = 1000;
+    initInfo.MinImageCount = imageCount;
+    initInfo.ImageCount = imageCount;
+    initInfo.UseDynamicRendering = true;
+    initInfo.PipelineInfoMain.RenderPass = VK_NULL_HANDLE;
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+    initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.depthAttachmentFormat =
+        renderer.depthFormat();
+    if (!ImGui_ImplVulkan_Init(&initInfo))
+    {
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        return false;
+    }
+    return true;
+}
+
+void shutdownImGui(Halcyon::Vulkan::Renderer& renderer) noexcept
+{
+    renderer.setOverlayCallback(nullptr);
+    if (renderer.device() != VK_NULL_HANDLE)
+    {
+        (void)vkDeviceWaitIdle(renderer.device());
+    }
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+}
+
+void renderImGui(VkCommandBuffer commandBuffer) noexcept
+{
+    if (ImDrawData* drawData = ImGui::GetDrawData(); drawData != nullptr)
+    {
+        ImGui_ImplVulkan_RenderDrawData(drawData, commandBuffer);
+    }
+}
+#endif
 
 void glfwErrorCallback(int error, const char* description)
 {
@@ -67,6 +149,8 @@ void logCapabilities(const Halcyon::Vulkan::Capabilities& capabilities)
         capabilities.timelineSemaphore);
     HALCYON_LOG_INFO("GPU-driven tier: descriptorIndexing=",
         capabilities.descriptorIndexing,
+        ", bindlessTable=",
+        capabilities.bindlessTable,
         ", bufferDeviceAddress=",
         capabilities.bufferDeviceAddress,
         ", indirectCount=",
@@ -265,6 +349,19 @@ int main(int argc, char** argv)
         HALCYON_LOG_INFO("Resource playback mode is enabled; assets are loaded by the renderer.");
     }
 
+#if HALCYON_ENABLE_IMGUI
+    const bool imguiEnabled = initializeImGui(window, renderer);
+    if (imguiEnabled)
+    {
+        renderer.setOverlayCallback(renderImGui);
+        HALCYON_LOG_INFO("Dear ImGui diagnostics overlay enabled");
+    }
+    else
+    {
+        HALCYON_LOG_WARN("Dear ImGui diagnostics overlay could not be initialized");
+    }
+#endif
+
     // The sandbox owns example-specific scene policy.  The renderer only
     // consumes these values through FramePacket and remains independent of
     // this camera placement, projection choice, and animation speed.
@@ -282,6 +379,12 @@ int main(int argc, char** argv)
     {
         HALCYON_LOG_CRITICAL("Failed to initialize sandbox camera");
         glfwSetWindowUserPointer(window, nullptr);
+#if HALCYON_ENABLE_IMGUI
+        if (imguiEnabled)
+        {
+            shutdownImGui(renderer);
+        }
+#endif
         renderer.shutdown();
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -297,6 +400,12 @@ int main(int argc, char** argv)
     {
         HALCYON_LOG_CRITICAL("Failed to create sandbox ECS transform");
         glfwSetWindowUserPointer(window, nullptr);
+#if HALCYON_ENABLE_IMGUI
+        if (imguiEnabled)
+        {
+            shutdownImGui(renderer);
+        }
+#endif
         renderer.shutdown();
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -304,6 +413,7 @@ int main(int argc, char** argv)
     }
 
     std::uint64_t frameIndex = 0;
+    Halcyon::Vulkan::FrameStats previousStats{};
     const float rotationSpeedRadiansPerSecond = glm::radians(30.0f);
     const auto playbackStart = std::chrono::steady_clock::now();
     int exitCode = EXIT_SUCCESS;
@@ -312,6 +422,36 @@ int main(int argc, char** argv)
            (commandLine.frameLimit == 0 || frameIndex < commandLine.frameLimit))
     {
         glfwPollEvents();
+
+#if HALCYON_ENABLE_IMGUI
+        if (imguiEnabled)
+        {
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            ImGui::Begin("Halcyon Diagnostics");
+            ImGui::Text("Frame: %llu", static_cast<unsigned long long>(frameIndex));
+            ImGui::Text("CPU: %.3f ms", previousStats.cpuFrameMs);
+            if (previousStats.gpuFrameMs >= 0.0)
+            {
+                ImGui::Text("GPU: %.3f ms", previousStats.gpuFrameMs);
+            }
+            else
+            {
+                ImGui::TextUnformatted("GPU: waiting for timestamp");
+            }
+            for (const auto& pass : previousStats.gpuPasses)
+            {
+                ImGui::Text("Pass %s: %.3f ms", pass.name.c_str(), pass.gpuFrameMs);
+            }
+            ImGui::Text("Device memory: %llu bytes",
+                static_cast<unsigned long long>(previousStats.deviceMemoryBytes));
+            ImGui::Text("Swapchain image: %u", previousStats.swapchainImageIndex);
+            ImGui::Text("Rendered: %s", previousStats.rendered ? "yes" : "no");
+            ImGui::End();
+            ImGui::Render();
+        }
+#endif
 
         int currentFramebufferWidth = 0;
         int currentFramebufferHeight = 0;
@@ -331,6 +471,7 @@ int main(int argc, char** argv)
         auto ownedPacket = Halcyon::Renderer::Scene::Ecs::RenderExtractor::extract(
             scene, camera.data(), frameIndex++);
         const Halcyon::Vulkan::FrameStats stats = renderer.render(ownedPacket.view());
+        previousStats = stats;
 
         if (stats.deviceLost)
         {
@@ -375,6 +516,12 @@ int main(int argc, char** argv)
     }
 
     glfwSetWindowUserPointer(window, nullptr);
+#if HALCYON_ENABLE_IMGUI
+    if (imguiEnabled)
+    {
+        shutdownImGui(renderer);
+    }
+#endif
     renderer.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();

@@ -19,16 +19,22 @@ Halcyon::Result<void> VulkanFrameContext::initialize(VkDevice device,
     VkPhysicalDevice physicalDevice,
     const VkPhysicalDeviceProperties& physicalProperties,
     std::uint32_t graphicsQueueFamily,
-    std::uint32_t requestedFrameCount)
+    std::uint32_t requestedFrameCount,
+    std::uint32_t requestedPassCount)
 {
     cleanup(device);
+    maxPassCount = std::clamp(requestedPassCount, 1u, 64u);
     auto result = createTimeline(device);
     if (!result)
     {
         return result;
     }
-    result = createResources(
-        device, physicalDevice, physicalProperties, graphicsQueueFamily, requestedFrameCount);
+    result = createResources(device,
+        physicalDevice,
+        physicalProperties,
+        graphicsQueueFamily,
+        requestedFrameCount,
+        maxPassCount);
     if (!result)
     {
         cleanup(device);
@@ -57,8 +63,11 @@ Halcyon::Result<void> VulkanFrameContext::createResources(VkDevice device,
     VkPhysicalDevice physicalDevice,
     const VkPhysicalDeviceProperties& physicalProperties,
     std::uint32_t graphicsQueueFamily,
-    std::uint32_t requestedFrameCount)
+    std::uint32_t requestedFrameCount,
+    std::uint32_t requestedPassCount)
 {
+    const std::uint32_t passCount = std::clamp(requestedPassCount, 1u, 64u);
+    maxPassCount = passCount;
     const std::uint32_t frameCount =
         std::clamp(requestedFrameCount == 0 ? kDefaultFramesInFlight : requestedFrameCount,
             2u,
@@ -101,7 +110,8 @@ Halcyon::Result<void> VulkanFrameContext::createResources(VkDevice device,
         {
             return fail(vkFailure("vkCreateFence", result));
         }
-        frame.queryBase = i * 2;
+        frame.queryBase = i * (2u + passCount * 2u);
+        frame.passQueryBase = frame.queryBase + 2u;
     }
     std::uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
@@ -118,7 +128,7 @@ Halcyon::Result<void> VulkanFrameContext::createResources(VkDevice device,
         VkQueryPoolCreateInfo queryInfo{};
         queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        queryInfo.queryCount = frameCount * 2;
+        queryInfo.queryCount = frameCount * (2u + passCount * 2u);
         const VkResult result = vkCreateQueryPool(device, &queryInfo, nullptr, &timestampPool);
         if (result == VK_SUCCESS)
         {
@@ -164,6 +174,7 @@ void VulkanFrameContext::cleanup(VkDevice device) noexcept
     timestampsEnabled = false;
     timestampPeriod = 1.0f;
     presentTimestampValidBits = 0;
+    maxPassCount = 16;
 }
 
 VkResult VulkanFrameContext::submit(
@@ -277,6 +288,58 @@ VkResult VulkanFrameContext::readGpuTime(
     milliseconds =
         static_cast<double>(elapsedTicks) * static_cast<double>(timestampPeriod) / 1'000'000.0;
     return VK_SUCCESS;
+}
+
+VkResult VulkanFrameContext::readPassTime(VkDevice device,
+    const VulkanFrame& frame,
+    std::uint32_t passIndex,
+    double& milliseconds) const noexcept
+{
+    if (!timestampsEnabled)
+    {
+        return VK_NOT_READY;
+    }
+    if (device == VK_NULL_HANDLE || timestampPool == VK_NULL_HANDLE || passIndex >= maxPassCount)
+    {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    std::array<std::uint64_t, 2> timestampValues{};
+    const VkResult result = vkGetQueryPoolResults(device,
+        timestampPool,
+        frame.passQueryBase + passIndex * 2u,
+        2,
+        sizeof(timestampValues),
+        timestampValues.data(),
+        sizeof(std::uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS)
+    {
+        return result;
+    }
+    const std::uint64_t validMask = presentTimestampValidBits >= 64
+                                        ? ~std::uint64_t{0}
+                                        : ((std::uint64_t{1} << presentTimestampValidBits) - 1u);
+    const std::uint64_t elapsedTicks =
+        ((timestampValues[1] & validMask) - (timestampValues[0] & validMask)) & validMask;
+    milliseconds =
+        static_cast<double>(elapsedTicks) * static_cast<double>(timestampPeriod) / 1'000'000.0;
+    return VK_SUCCESS;
+}
+
+bool VulkanFrameContext::writePassTimestamp(VkCommandBuffer commandBuffer,
+    const VulkanFrame& frame,
+    std::uint32_t passIndex,
+    bool begin) const noexcept
+{
+    if (!timestampsEnabled || commandBuffer == VK_NULL_HANDLE || passIndex >= maxPassCount)
+    {
+        return false;
+    }
+    vkCmdWriteTimestamp2(commandBuffer,
+        begin ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+        timestampPool,
+        frame.passQueryBase + passIndex * 2u + (begin ? 0u : 1u));
+    return true;
 }
 
 VkResult VulkanFrameContext::present(VkQueue presentQueue,
