@@ -3,6 +3,7 @@
 #include "Core/Result.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -18,6 +19,9 @@ struct VulkanFrame
     std::uint64_t timelineValue = 0;
     std::uint32_t queryBase = 0;
     std::uint32_t passQueryBase = 0;
+    // Names are copied from the compiled graph for delayed timestamp reads.
+    // They are kept per frame because the graph can change between frames.
+    std::vector<std::string> passNames;
     bool submitted = false;
 };
 

@@ -1,5 +1,6 @@
 #include "HalcyonVulkanRenderer.h"
 
+#include "Core/Profiler.h"
 #include "GpuAllocator.h"
 #include "GpuUploader.h"
 #include "VulkanBindlessTable.h"
@@ -9,6 +10,15 @@
 #include "VulkanFrameContext.h"
 #include "VulkanPipeline.h"
 #include "VulkanSwapchain.h"
+
+#ifndef HALCYON_BUILD_EXPERIMENTAL_M2
+#define HALCYON_BUILD_EXPERIMENTAL_M2 0
+#endif
+
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+#include "../Graph/BarrierPlanner.h"
+#include "../Graph/RenderGraph.h"
+#endif
 
 // GLFW is included here (rather than in the public header) so applications
 // can choose their own GLFW include policy.  The Vulkan include guard makes
@@ -27,15 +37,15 @@
 #include <utility>
 #include <vector>
 
-#ifndef HALCYON_BUILD_EXPERIMENTAL_M2
-#define HALCYON_BUILD_EXPERIMENTAL_M2 0
-#endif
-
 namespace Halcyon::Vulkan
 {
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+namespace Graph = Halcyon::Renderer::Graph;
+#endif
 namespace
 {
 
+#if HALCYON_BUILD_EXPERIMENTAL_M2
 [[nodiscard]] std::uint32_t descriptorCapacity(
     std::uint32_t preferred, std::uint32_t perStageLimit, std::uint32_t setLimit) noexcept
 {
@@ -58,6 +68,7 @@ namespace
         16u, limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers);
     return config;
 }
+#endif
 
 } // namespace
 
@@ -211,6 +222,7 @@ struct Renderer::Impl
             depthFormat,
             swapchainExtent,
             demoResources.textureSetLayout(),
+            bindlessTable.initialized() ? bindlessTable.layout() : VK_NULL_HANDLE,
             demoResources.textured());
         // A textured pipeline can be unavailable (for example when its
         // generated SPIR-V is missing); VulkanPipeline falls back to the
@@ -223,6 +235,7 @@ struct Renderer::Impl
 
     [[nodiscard]] FrameStats render(const FramePacket& packet)
     {
+        HALCYON_PROFILE_SCOPE("Renderer::render");
         FrameStats stats{};
         stats.quality.rayQueryEnabled = rayQueryEnabled;
         stats.deviceMemoryBytes = static_cast<std::uint64_t>(deviceMemoryBytes);
@@ -317,10 +330,16 @@ struct Renderer::Impl
             {
                 stats.gpuFrameMs = gpuMilliseconds;
             }
-            double sceneMilliseconds = -1.0;
-            if (frameContext.readPassTime(device, frame, 0u, sceneMilliseconds) == VK_SUCCESS)
+            for (std::uint32_t passIndex = 0;
+                passIndex < frame.passNames.size() && passIndex < frameContext.maxPassCount;
+                ++passIndex)
             {
-                stats.gpuPasses.push_back({"Scene", sceneMilliseconds});
+                double passMilliseconds = -1.0;
+                if (frameContext.readPassTime(device, frame, passIndex, passMilliseconds) ==
+                    VK_SUCCESS)
+                {
+                    stats.gpuPasses.push_back({frame.passNames[passIndex], passMilliseconds});
+                }
             }
         }
         frame.submitted = false;
@@ -473,6 +492,7 @@ struct Renderer::Impl
         stats.deviceMemoryBytes = static_cast<std::uint64_t>(deviceMemoryBytes);
         stats.quality.rayQueryEnabled = rayQueryEnabled;
         stats.cpuFrameMs = elapsedMilliseconds(begin);
+        HALCYON_PROFILE_FRAME();
         return stats;
     }
 
@@ -486,6 +506,7 @@ struct Renderer::Impl
 VoidResult Renderer::Impl::recordFrame(
     FrameContext& frame, std::uint32_t imageIndex, const FramePacket& packet)
 {
+    HALCYON_PROFILE_SCOPE("Renderer::recordFrame");
     (void)packet; // Scene uploads are introduced by the next milestone.
     if (imageIndex >= swapchainImages.size() || imageIndex >= swapchainImageViews.size())
     {
@@ -577,110 +598,215 @@ VoidResult Renderer::Impl::recordFrame(
     dependency.pImageMemoryBarriers = &depthBarrier;
     vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
 
-    VkClearValue clearValue{};
-    clearValue.color.float32[0] = 0.018f;
-    clearValue.color.float32[1] = 0.028f;
-    clearValue.color.float32[2] = 0.055f;
-    clearValue.color.float32[3] = 1.0f;
-    VkRenderingAttachmentInfo colorAttachment{};
-    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachment.imageView = swapchainImageViews[imageIndex];
-    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.clearValue = clearValue;
-
-    VkClearValue depthClear{};
-    depthClear.depthStencil.depth = 0.0f;
-    depthClear.depthStencil.stencil = 0;
-    VkRenderingAttachmentInfo depthAttachment{};
-    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = depthImageView;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depthAttachment.clearValue = depthClear;
-
-    VkRenderingInfo rendering{};
-    rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering.renderArea.offset = {0, 0};
-    rendering.renderArea.extent = swapchainExtent;
-    rendering.layerCount = 1;
-    rendering.colorAttachmentCount = 1;
-    rendering.pColorAttachments = &colorAttachment;
-    rendering.pDepthAttachment = &depthAttachment;
-    vkCmdBeginRendering(frame.commandBuffer, &rendering);
-    if (graphicsPipeline.pipeline() != VK_NULL_HANDLE)
+    auto recordScenePass = [&]() -> VoidResult
     {
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = static_cast<float>(swapchainExtent.width);
-        viewport.height = static_cast<float>(swapchainExtent.height);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = swapchainExtent;
-        vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
-        vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-        (void)frameContext.writePassTimestamp(frame.commandBuffer, frame, 0u, true);
-        vkCmdBindPipeline(
-            frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.pipeline());
-        if (graphicsPipeline.textured() &&
-            demoResources.demoMesh().vertexBuffer.buffer != VK_NULL_HANDLE)
+        VkClearValue clearValue{};
+        clearValue.color.float32[0] = 0.018f;
+        clearValue.color.float32[1] = 0.028f;
+        clearValue.color.float32[2] = 0.055f;
+        clearValue.color.float32[3] = 1.0f;
+        VkRenderingAttachmentInfo colorAttachment{};
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.imageView = swapchainImageViews[imageIndex];
+        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.clearValue = clearValue;
+
+        VkClearValue depthClear{};
+        depthClear.depthStencil.depth = 0.0f;
+        depthClear.depthStencil.stencil = 0;
+        VkRenderingAttachmentInfo depthAttachment{};
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = depthImageView;
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.clearValue = depthClear;
+
+        VkRenderingInfo rendering{};
+        rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        rendering.renderArea.offset = {0, 0};
+        rendering.renderArea.extent = swapchainExtent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &colorAttachment;
+        rendering.pDepthAttachment = &depthAttachment;
+        vkCmdBeginRendering(frame.commandBuffer, &rendering);
+        if (graphicsPipeline.pipeline() != VK_NULL_HANDLE)
         {
-            // Rendering is driven entirely by the immutable packet.  The
-            // backend does not own a scene camera or animation policy:
-            // callers provide the camera matrix and (optionally) the first
-            // instance transform.  Missing instance data means identity.
-            const glm::mat4 viewProjection = packet.camera.viewProjection;
-            glm::mat4 model{1.0f};
-            if (!packet.instances.empty())
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(swapchainExtent.width);
+            viewport.height = static_cast<float>(swapchainExtent.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            VkRect2D scissor{};
+            scissor.offset = {0, 0};
+            scissor.extent = swapchainExtent;
+            vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
+            vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
+            vkCmdBindPipeline(
+                frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline.pipeline());
+            if (graphicsPipeline.textured() &&
+                demoResources.demoMesh().vertexBuffer.buffer != VK_NULL_HANDLE)
             {
-                static_assert(sizeof(glm::mat4) == sizeof(std::array<float, 16>));
-                std::memcpy(glm::value_ptr(model),
-                    packet.instances.front().transform.data(),
-                    sizeof(model));
+                // Rendering is driven entirely by the immutable packet.  The
+                // backend does not own a scene camera or animation policy:
+                // callers provide the camera matrix and (optionally) the first
+                // instance transform.  Missing instance data means identity.
+                const glm::mat4 viewProjection = packet.camera.viewProjection;
+                glm::mat4 model{1.0f};
+                if (!packet.instances.empty())
+                {
+                    static_assert(sizeof(glm::mat4) == sizeof(std::array<float, 16>));
+                    std::memcpy(glm::value_ptr(model),
+                        packet.instances.front().transform.data(),
+                        sizeof(model));
+                }
+                const TexturedPushConstants pushConstants{viewProjection, model};
+                const VkDeviceSize offset = 0;
+                const auto& demoMesh = demoResources.demoMesh();
+                vkCmdBindVertexBuffers(
+                    frame.commandBuffer, 0, 1, &demoMesh.vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(
+                    frame.commandBuffer, demoMesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                const VkDescriptorSet textureDescriptorSet = demoResources.textureDescriptorSet();
+                vkCmdBindDescriptorSets(frame.commandBuffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    graphicsPipeline.layout(),
+                    0,
+                    1,
+                    &textureDescriptorSet,
+                    0,
+                    nullptr);
+                if (graphicsPipeline.bindless() && bindlessTable.descriptorSet() != VK_NULL_HANDLE)
+                {
+                    const VkDescriptorSet bindlessSet = bindlessTable.descriptorSet();
+                    vkCmdBindDescriptorSets(frame.commandBuffer,
+                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        graphicsPipeline.layout(),
+                        1,
+                        1,
+                        &bindlessSet,
+                        0,
+                        nullptr);
+                }
+                vkCmdPushConstants(frame.commandBuffer,
+                    graphicsPipeline.layout(),
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    sizeof(TexturedPushConstants),
+                    &pushConstants);
+                vkCmdDrawIndexed(frame.commandBuffer, demoMesh.indexCount, 1, 0, 0, 0);
             }
-            const TexturedPushConstants pushConstants{viewProjection, model};
-            const VkDeviceSize offset = 0;
-            const auto& demoMesh = demoResources.demoMesh();
-            vkCmdBindVertexBuffers(
-                frame.commandBuffer, 0, 1, &demoMesh.vertexBuffer.buffer, &offset);
-            vkCmdBindIndexBuffer(
-                frame.commandBuffer, demoMesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-            const VkDescriptorSet textureDescriptorSet = demoResources.textureDescriptorSet();
-            vkCmdBindDescriptorSets(frame.commandBuffer,
-                VK_PIPELINE_BIND_POINT_GRAPHICS,
-                graphicsPipeline.layout(),
-                0,
-                1,
-                &textureDescriptorSet,
-                0,
-                nullptr);
-            vkCmdPushConstants(frame.commandBuffer,
-                graphicsPipeline.layout(),
-                VK_SHADER_STAGE_VERTEX_BIT,
-                0,
-                sizeof(TexturedPushConstants),
-                &pushConstants);
-            vkCmdDrawIndexed(frame.commandBuffer, demoMesh.indexCount, 1, 0, 0, 0);
+            else if (demoResources.triangleVertexBuffer().buffer != VK_NULL_HANDLE)
+            {
+                const VkDeviceSize offset = 0;
+                const VkBuffer triangleBuffer = demoResources.triangleVertexBuffer().buffer;
+                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &triangleBuffer, &offset);
+                vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+            }
         }
-        else if (demoResources.triangleVertexBuffer().buffer != VK_NULL_HANDLE)
+        if (overlayCallback != nullptr)
         {
-            const VkDeviceSize offset = 0;
-            const VkBuffer triangleBuffer = demoResources.triangleVertexBuffer().buffer;
-            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &triangleBuffer, &offset);
-            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+            overlayCallback(frame.commandBuffer);
         }
-        (void)frameContext.writePassTimestamp(frame.commandBuffer, frame, 0u, false);
-    }
-    if (overlayCallback != nullptr)
+        vkCmdEndRendering(frame.commandBuffer);
+        return ok();
+    };
+
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+    Graph::RenderGraph graph;
+    Graph::BarrierPlanner barrierPlanner;
+    bool sceneRecordFailed = false;
+    std::string sceneRecordError;
+    const auto color = graph.importTexture(Graph::TextureDesc{.name = "SwapchainColor",
+        .width = swapchainExtent.width,
+        .height = swapchainExtent.height,
+        .depth = 1,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .format = Graph::TextureFormat::Unknown,
+        .transient = false});
+    const auto depth = graph.importTexture(Graph::TextureDesc{.name = "Depth",
+        .width = swapchainExtent.width,
+        .height = swapchainExtent.height,
+        .depth = 1,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .format = Graph::TextureFormat::D32Float,
+        .transient = false});
+    auto scenePass = graph.addPass("Scene", true);
+    scenePass.write(color, Graph::ResourceUsage::ColorAttachment)
+        .write(depth, Graph::ResourceUsage::DepthAttachment)
+        .output(color)
+        .setExecute(
+            [&recordScenePass, &sceneRecordFailed, &sceneRecordError](
+                const Graph::PassExecutionContext&)
+            {
+                HALCYON_PROFILE_SCOPE("RenderGraph::pass");
+                const VoidResult result = recordScenePass();
+                if (!result)
+                {
+                    sceneRecordFailed = true;
+                    sceneRecordError = result.error().describe();
+                }
+            });
+
+    const Graph::CompileResult compiled = graph.compile();
+    if (!compiled)
     {
-        overlayCallback(frame.commandBuffer);
+        return fail(compiled.error.message, Halcyon::ErrorCode::InvalidState);
     }
-    vkCmdEndRendering(frame.commandBuffer);
+    frame.passNames.clear();
+    frame.passNames.reserve(compiled.executionOrder.size());
+    for (const auto handle : compiled.executionOrder)
+    {
+        if (const auto* pass = compiled.pass(handle); pass != nullptr)
+        {
+            frame.passNames.push_back(pass->name);
+        }
+    }
+    Graph::ExecuteOptions executeOptions;
+    executeOptions.userData = &frame;
+    executeOptions.onBegin = [this, &frame, &compiled, &barrierPlanner](
+                                 const Graph::PassExecutionContext& context)
+    {
+        if (const auto* pass = compiled.pass(context.handle); pass != nullptr)
+        {
+            // The planner translates semantic graph accesses into a compact
+            // Barrier2 intent before the Vulkan-specific frame barriers are
+            // emitted.  Keeping this step at the pass boundary ensures the
+            // graph and command recording cannot silently diverge.
+            const auto barriers = barrierPlanner.plan(pass->accesses, pass->queue);
+            (void)barriers;
+        }
+        (void)frameContext.writePassTimestamp(
+            frame.commandBuffer, frame, context.executionIndex, true);
+    };
+    executeOptions.onEnd = [this, &frame](const Graph::PassExecutionContext& context)
+    {
+        (void)frameContext.writePassTimestamp(
+            frame.commandBuffer, frame, context.executionIndex, false);
+    };
+    const auto execution = compiled.execute(executeOptions);
+    if (!execution)
+    {
+        return fail(execution.error.message, Halcyon::ErrorCode::InvalidState);
+    }
+    if (sceneRecordFailed)
+    {
+        return fail(sceneRecordError, Halcyon::ErrorCode::InvalidState);
+    }
+#else
+    const VoidResult sceneResult = recordScenePass();
+    if (!sceneResult)
+    {
+        return sceneResult;
+    }
+#endif
 
     // Keep the depth image in DEPTH_ATTACHMENT_OPTIMAL between frames.  The
     // frame fence serialises reuse, so no needless layout churn is required;

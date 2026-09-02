@@ -61,6 +61,7 @@ public:
     {
         return descriptorSet_;
     }
+
     [[nodiscard]] bool initialized() const noexcept
     {
         return device_ != VK_NULL_HANDLE && descriptorSet_ != VK_NULL_HANDLE;

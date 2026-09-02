@@ -180,9 +180,24 @@ struct PassExecutionContext
 {
     PassHandle handle{};
     std::string_view name{};
+    // Position in CompileResult::executionOrder.  This is stable for the
+    // lifetime of a compiled graph and lets backend adapters assign per-pass
+    // timestamp slots without coupling the graph to a graphics API.
+    std::uint32_t executionIndex = 0;
+    // Optional caller-owned context.  The graph never dereferences this
+    // pointer; Vulkan and other backends may use it to record commands.
+    void* userData = nullptr;
 };
 
 using PassExecuteCallback = std::function<void(const PassExecutionContext&)>;
+using PassBoundaryCallback = std::function<void(const PassExecutionContext&)>;
+
+struct ExecuteOptions
+{
+    void* userData = nullptr;
+    PassBoundaryCallback onBegin;
+    PassBoundaryCallback onEnd;
+};
 
 struct CompiledPass
 {
@@ -265,8 +280,9 @@ struct CompileResult
 
     // Execute callbacks in the compiled topological order.  This is the
     // backend-neutral execution hook used by tests and by Vulkan command
-    // recording adapters; culled passes are never invoked.
-    [[nodiscard]] ExecutionResult execute() const;
+    // recording adapters; culled passes are never invoked. Optional boundary
+    // callbacks are called immediately before and after each pass callback.
+    [[nodiscard]] ExecutionResult execute(const ExecuteOptions& options = {}) const;
 };
 
 class RenderGraph;

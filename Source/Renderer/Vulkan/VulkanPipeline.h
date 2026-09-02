@@ -32,6 +32,7 @@ public:
         VkFormat depthFormat,
         VkExtent2D extent,
         VkDescriptorSetLayout textureSetLayout,
+        VkDescriptorSetLayout bindlessSetLayout,
         bool texturedRequested);
     void destroy() noexcept;
 
@@ -47,6 +48,10 @@ public:
     {
         return textured_;
     }
+    [[nodiscard]] bool bindless() const noexcept
+    {
+        return bindless_;
+    }
 
 private:
     [[nodiscard]] Halcyon::Result<void> createInternal(VkDevice device,
@@ -54,6 +59,7 @@ private:
         VkFormat depthFormat,
         VkExtent2D extent,
         VkDescriptorSetLayout textureSetLayout,
+        VkDescriptorSetLayout bindlessSetLayout,
         bool texturedRequested);
     void swap(VulkanPipeline& other) noexcept;
 
@@ -63,6 +69,7 @@ private:
     VkShaderModule vertexShader_ = VK_NULL_HANDLE;
     VkShaderModule fragmentShader_ = VK_NULL_HANDLE;
     bool textured_ = false;
+    bool bindless_ = false;
 };
 
 } // namespace Halcyon::Vulkan

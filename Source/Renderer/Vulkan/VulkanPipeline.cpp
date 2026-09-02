@@ -15,11 +15,17 @@ Halcyon::Result<void> VulkanPipeline::create(VkDevice device,
     VkFormat depthFormat,
     VkExtent2D extent,
     VkDescriptorSetLayout textureSetLayout,
+    VkDescriptorSetLayout bindlessSetLayout,
     bool texturedRequested)
 {
     VulkanPipeline candidate;
-    const auto result = candidate.createInternal(
-        device, colorFormat, depthFormat, extent, textureSetLayout, texturedRequested);
+    const auto result = candidate.createInternal(device,
+        colorFormat,
+        depthFormat,
+        extent,
+        textureSetLayout,
+        bindlessSetLayout,
+        texturedRequested);
     if (!result)
     {
         return result;
@@ -33,6 +39,7 @@ Halcyon::Result<void> VulkanPipeline::createInternal(VkDevice device,
     VkFormat depthFormat,
     VkExtent2D extent,
     VkDescriptorSetLayout textureSetLayout,
+    VkDescriptorSetLayout bindlessSetLayout,
     bool texturedRequested)
 {
     if (device == VK_NULL_HANDLE || colorFormat == VK_FORMAT_UNDEFINED || extent.width == 0 ||
@@ -91,11 +98,15 @@ Halcyon::Result<void> VulkanPipeline::createInternal(VkDevice device,
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    std::array<VkDescriptorSetLayout, 2> setLayouts{};
     VkPushConstantRange pushConstantRange{};
     if (textured_)
     {
-        layoutInfo.setLayoutCount = 1;
-        layoutInfo.pSetLayouts = &textureSetLayout;
+        setLayouts[0] = textureSetLayout;
+        setLayouts[1] = bindlessSetLayout;
+        layoutInfo.setLayoutCount = bindlessSetLayout != VK_NULL_HANDLE ? 2u : 1u;
+        layoutInfo.pSetLayouts = setLayouts.data();
+        bindless_ = bindlessSetLayout != VK_NULL_HANDLE;
         pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         pushConstantRange.size = sizeof(TexturedPushConstants);
         layoutInfo.pushConstantRangeCount = 1;
@@ -210,6 +221,7 @@ void VulkanPipeline::swap(VulkanPipeline& other) noexcept
     swap(vertexShader_, other.vertexShader_);
     swap(fragmentShader_, other.fragmentShader_);
     swap(textured_, other.textured_);
+    swap(bindless_, other.bindless_);
 }
 
 void VulkanPipeline::destroy() noexcept
@@ -238,6 +250,7 @@ void VulkanPipeline::destroy() noexcept
     vertexShader_ = VK_NULL_HANDLE;
     fragmentShader_ = VK_NULL_HANDLE;
     textured_ = false;
+    bindless_ = false;
 }
 
 } // namespace Halcyon::Vulkan

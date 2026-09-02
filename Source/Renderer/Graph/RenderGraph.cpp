@@ -74,7 +74,7 @@ bool CompileResult::isCulled(PassHandle handle) const noexcept
     return candidate != nullptr && candidate->culled;
 }
 
-CompileResult::ExecutionResult CompileResult::execute() const
+CompileResult::ExecutionResult CompileResult::execute(const ExecuteOptions& options) const
 {
     ExecutionResult execution;
     if (!success)
@@ -90,6 +90,7 @@ CompileResult::ExecutionResult CompileResult::execute() const
 
     try
     {
+        std::uint32_t executionIndex = 0;
         for (const PassHandle handle : executionOrder)
         {
             const CompiledPass* candidate = pass(handle);
@@ -97,11 +98,22 @@ CompileResult::ExecutionResult CompileResult::execute() const
             {
                 continue;
             }
+            const PassExecutionContext context{
+                candidate->handle, candidate->name, executionIndex, options.userData};
+            if (options.onBegin)
+            {
+                options.onBegin(context);
+            }
             if (candidate->execute)
             {
-                candidate->execute(PassExecutionContext{candidate->handle, candidate->name});
+                candidate->execute(context);
+            }
+            if (options.onEnd)
+            {
+                options.onEnd(context);
             }
             ++execution.executedPasses;
+            ++executionIndex;
         }
         execution.success = true;
     }
