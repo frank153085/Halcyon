@@ -5,7 +5,7 @@ project(Halcyon VERSION 0.1.0 LANGUAGES C CXX)
 option(HALCYON_BUILD_TESTS "Build Halcyon CPU-side tests" ON)
 option(HALCYON_ENABLE_VALIDATION "Enable Vulkan validation by default" ON)
 option(HALCYON_BUILD_EXPERIMENTAL_M2
-    "Build M2 RenderGraph, bindless, budget and shader validation infrastructure" ON)
+    "Build M2 FrameGraph, bindless, budget and shader validation infrastructure" ON)
 option(HALCYON_BUILD_EXAMPLES
     "Build standalone examples with isolated output directories" ON)
 
@@ -145,17 +145,36 @@ endif()
 # M2 infrastructure remains a separate target so its graph, barrier, bindless,
 # and quality code can evolve independently of the Vulkan frame loop.
 if(HALCYON_BUILD_EXPERIMENTAL_M2)
-    add_library(HalcyonRendererExperimental STATIC
-        Source/Renderer/Graph/RenderGraph.cpp
-        Source/Renderer/Graph/RenderGraphBuilder.cpp
-        Source/Renderer/Graph/RenderGraphCompiler.cpp
-        Source/Renderer/Graph/RenderGraphExecution.cpp
-        Source/Renderer/Graph/FrameGraphCulling.cpp
-        Source/Renderer/Graph/FrameGraphLifetime.cpp
-        Source/Renderer/Graph/FrameGraphNode.cpp
-        Source/Renderer/Graph/BarrierPlanner.cpp
-        Source/Renderer/Graph/RenderGraph.h
+    add_library(HalcyonFrameGraph STATIC
+        Source/Renderer/Graph/FrameGraph.cpp
+        Source/Renderer/Graph/FrameGraphCompiler.cpp
+        Source/Renderer/Graph/FrameGraphExecutor.cpp
+        Source/Renderer/Graph/FrameGraphResources.cpp
+        Source/Core/Memory/FrameArena.cpp
+        Source/Core/Memory/LinearAllocator.cpp
         Source/Renderer/Graph/FrameGraph.h
+        Source/Renderer/Graph/DependencyGraph.h
+        Source/Renderer/Graph/PassNode.h
+        Source/Renderer/Graph/PresentPassNode.h
+        Source/Renderer/Graph/ResourceNode.h
+        Source/Renderer/Graph/VirtualResource.h
+        Source/Renderer/Graph/FrameGraphCompiler.h
+        Source/Renderer/Graph/FrameGraphExecutor.h
+        Source/Renderer/Graph/FrameGraphArena.h
+        Include/Halcyon/FrameGraph.h
+        Include/Halcyon/FrameGraphId.h
+        Include/Halcyon/FrameGraphPass.h
+        Include/Halcyon/FrameGraphResources.h
+        Include/Halcyon/FrameGraphTypes.h
+        Include/Halcyon/Blackboard.h)
+    target_include_directories(HalcyonFrameGraph PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+    target_link_libraries(HalcyonFrameGraph PUBLIC HalcyonCore)
+    halcyon_enable_warnings(HalcyonFrameGraph)
+
+    add_library(HalcyonRendererExperimental STATIC
+        Source/Renderer/Graph/BarrierPlanner.cpp
         Source/Renderer/Graph/FrameGraphNode.h
         Source/Renderer/Graph/BarrierPlanner.h
         Source/Renderer/Resources/BindlessTable.cpp
@@ -165,7 +184,7 @@ if(HALCYON_BUILD_EXPERIMENTAL_M2)
     )
     target_include_directories(HalcyonRendererExperimental
         PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Source")
-    target_link_libraries(HalcyonRendererExperimental PUBLIC HalcyonCore)
+    target_link_libraries(HalcyonRendererExperimental PUBLIC HalcyonCore HalcyonFrameGraph)
     halcyon_enable_warnings(HalcyonRendererExperimental)
     target_link_libraries(HalcyonRenderer PRIVATE HalcyonRendererExperimental)
 endif()

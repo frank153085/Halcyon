@@ -1,4 +1,4 @@
-#include "Renderer/Graph/RenderGraph.h"
+#include "Renderer/Graph/FrameGraph.h"
 #include "Renderer/Quality/FrameBudgetController.h"
 
 #include <gtest/gtest.h>
@@ -9,10 +9,10 @@ int main(int argc, char** argv)
     return RUN_ALL_TESTS();
 }
 
-TEST(M2RenderGraph, ExecutesDependenciesInTopologicalOrder)
+TEST(M2FrameGraph, ExecutesDependenciesInTopologicalOrder)
 {
     using namespace Halcyon::Renderer::Graph;
-    RenderGraph graph;
+    FrameGraph graph;
     const auto output = graph.createTexture({.name = "Output"});
     auto producer = graph.addPass("Producer");
     producer.write(output, ResourceUsage::Storage);

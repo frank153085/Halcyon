@@ -100,7 +100,7 @@ replacing previous binaries.
 ```text
 Source/Core                 Backend-neutral results, logging, and stable handles
 Source/Renderer/Scene       Camera and FramePacket data contracts
-Source/Renderer/Graph       M2 RenderGraph and barrier planning
+Source/Renderer/Graph       M2 FrameGraph and barrier planning
 Source/Renderer/Resources   Upload/deletion and bindless slot infrastructure
 Source/Renderer/Vulkan      Vulkan 1.3 backend
 Source/Engine                Backend-neutral Engine and View orchestration

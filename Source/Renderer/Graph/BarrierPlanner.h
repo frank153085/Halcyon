@@ -1,11 +1,11 @@
 #pragma once
 
-// Translation of RenderGraph's semantic usages into synchronization intent.
+// Translation of FrameGraph semantic usages into synchronization intent.
 // This layer deliberately stops before Vulkan enums: a backend can map these
 // compact masks to VkPipelineStageFlags2/VkAccessFlags2 and image layouts,
 // while unit tests can validate hazard decisions without a GPU.
 
-#include "RenderGraph.h"
+#include "Halcyon/FrameGraph.h"
 
 #include <cstdint>
 #include <span>

@@ -57,7 +57,7 @@ The implementation order is fixed: complete Compute Culling plus Indexed Indirec
 - The CPU uses stable generation handles. The upload stage resolves them into dense 32-bit GPU Scene indices.
 - The GPU Scene uses SoA buffers for transforms, bounds, meshes, materials, LOD state, and flags.
 - `HalcyonCooker` produces deterministic caches with schema versions and content hashes, progressively adding glTF data, fixed LODs, meshlets, the cluster DAG, mesh SDFs, and Surface Cache proxy data.
-- Every RenderGraph pass declares resource reads, writes, queue class, and access type. The first implementation executes on the graphics queue; asynchronous compute is enabled only after correctness is stable and timestamp data demonstrates a benefit.
+- Every FrameGraph pass declares resource reads, writes, queue class, and access type. The first implementation executes on the graphics queue; asynchronous compute is enabled only after correctness is stable and timestamp data demonstrates a benefit.
 
 ### Reversed-Z Hi-Z Convention
 
@@ -84,7 +84,7 @@ The capability tier is selected at startup and the renderer does not switch back
 
 ## Per-Frame Data Flow
 
-The RenderGraph prunes passes that are unavailable at the current milestone or capability tier. The target data flow is:
+The FrameGraph prunes passes that are unavailable at the current milestone or capability tier. The target data flow is:
 
 ```text
 Wait for the current frame timeline
@@ -140,9 +140,9 @@ Wait for the current frame timeline
 
 **Dependencies:** M1.
 
-**Core deliverables:** VMA, GPU resource pools, timeline-based deferred deletion, a Vulkan Bindless Descriptor Table companion, RenderGraph compilation and CPU execution, Barrier2 planning, HLSL compilation/reflection/hot reload, an optional ImGui diagnostics overlay, and the initial GPU timestamp hooks. The implementation enables CPU RenderGraph and Bindless infrastructure by default, adds callback execution and cycle-safe diagnostics, provides capability-clamped descriptor tables with typed image/buffer writes and frame-timeline collection, validates SPIR-V modules, provides lightweight reflection metadata, and provides transactional shader/pipeline replacement. The scene pass is timed in the demo and optional GoogleTest coverage is available.
+**Core deliverables:** VMA, GPU resource pools, timeline-based deferred deletion, a Vulkan Bindless Descriptor Table companion, FrameGraph compilation and CPU execution, Barrier2 planning, HLSL compilation/reflection/hot reload, an optional ImGui diagnostics overlay, and the initial GPU timestamp hooks. The implementation enables CPU FrameGraph and Bindless infrastructure by default, adds callback execution and cycle-safe diagnostics, provides capability-clamped descriptor tables with typed image/buffer writes and frame-timeline collection, validates SPIR-V modules, provides lightweight reflection metadata, and provides transactional shader/pipeline replacement. The scene pass is timed in the demo and optional GoogleTest coverage is available.
 
-**Acceptance gate:** RenderGraph topology, cycle detection, culling, lifetime, barrier, and callback execution tests pass. No live resource allocations remain after shutdown. Bindless slots are not reused before their timeline completes. Invalid shader binaries are rejected, and failed shader or pipeline replacement leaves the last valid object active. The Vulkan bridge executes the compiled scene pass, binds the optional bindless set, routes timestamps for every compiled pass, and keeps Tracy instrumentation optional. The first version is complete after these CPU and local Vulkan checks; explicit backend barrier translation and shader-side bindless indexing remain deliberately small follow-up tasks.
+**Acceptance gate:** FrameGraph topology, cycle detection, culling, lifetime, barrier, and callback execution tests pass. No live resource allocations remain after shutdown. Bindless slots are not reused before their timeline completes. Invalid shader binaries are rejected, and failed shader or pipeline replacement leaves the last valid object active. The Vulkan bridge executes the compiled scene pass, binds the optional bindless set, routes timestamps for every compiled pass, and keeps Tracy instrumentation optional. The first version is complete after these CPU and local Vulkan checks; explicit backend barrier translation and shader-side bindless indexing remain deliberately small follow-up tasks.
 
 ### M3 Traditional Quality Baseline (Planned)
 
@@ -205,7 +205,7 @@ Wait for the current frame timeline
 ### CPU Unit Tests
 
 - Generation handles, default resource slots, deferred deletion, and timeline-based slot recycling.
-- RenderGraph topology, cycle detection, pass culling, resource lifetimes, and barrier-state mapping.
+- FrameGraph topology, cycle detection, pass culling, resource lifetimes, and barrier-state mapping.
 - Shader reflection layouts, 16-byte C++/HLSL alignment, and cache-version compatibility.
 - Meshlet boundaries, LOD error, cluster-DAG acyclicity, reference ranges, and Cooker determinism.
 - Frame-budget thresholds, cooldowns, upgrade/downgrade selection, and decision logs.
