@@ -12,6 +12,7 @@ option(HALCYON_BUILD_EXAMPLES
 option(HALCYON_ENABLE_GOOGLETEST "Build the GoogleTest dependency" OFF)
 option(HALCYON_ENABLE_IMGUI "Build Dear ImGui" OFF)
 option(HALCYON_ENABLE_SPIRV_TOOLS "Build SPIR-V validation and optimization tools" OFF)
+option(HALCYON_ENABLE_TRACY "Enable optional Tracy CPU instrumentation" OFF)
 option(HALCYON_ENABLE_BASISU "Build Basis Universal texture tooling" OFF)
 option(HALCYON_ENABLE_MESHOPTIMIZER "Build meshoptimizer" OFF)
 option(HALCYON_ENABLE_DRACO "Build Draco geometry compression" OFF)
@@ -37,6 +38,11 @@ set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(ThirdParty/glm)
 add_subdirectory(ThirdParty)
 
+set(HALCYON_TRACY_ACTIVE OFF)
+if(HALCYON_ENABLE_TRACY AND TARGET Halcyon::Tracy)
+    set(HALCYON_TRACY_ACTIVE ON)
+endif()
+
 function(halcyon_enable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /Zc:__cplusplus)
@@ -56,6 +62,7 @@ target_compile_definitions(HalcyonCore INTERFACE
 )
 
 add_library(HalcyonRenderer STATIC
+    Source/Core/Profiler.h
     Source/Renderer/Resources/DeferredDeletionQueue.h
     Source/Renderer/Scene/Camera.cpp
     Source/Renderer/Scene/Camera.h
@@ -119,13 +126,20 @@ target_link_libraries(HalcyonRenderer
 )
 target_compile_definitions(HalcyonRenderer PRIVATE
     GLFW_INCLUDE_NONE
-    HALCYON_BUILD_EXPERIMENTAL_M2=$<BOOL:${HALCYON_BUILD_EXPERIMENTAL_M2}>)
+    HALCYON_BUILD_EXPERIMENTAL_M2=$<BOOL:${HALCYON_BUILD_EXPERIMENTAL_M2}>
+    HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
 halcyon_enable_warnings(HalcyonRenderer)
 target_compile_definitions(HalcyonRenderer PRIVATE HALCYON_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/Shaders")
 
 if(HALCYON_ENABLE_SPIRV_TOOLS)
     target_compile_definitions(HalcyonRenderer PRIVATE HALCYON_ENABLE_SPIRV_TOOLS=1)
     target_link_libraries(HalcyonRenderer PRIVATE Halcyon::SPIRVTools)
+endif()
+
+if(HALCYON_TRACY_ACTIVE)
+    target_link_libraries(HalcyonRenderer PRIVATE Halcyon::Tracy)
+elseif(HALCYON_ENABLE_TRACY)
+    message(WARNING "HALCYON_ENABLE_TRACY is ON but the Tracy target is unavailable")
 endif()
 
 # M2 infrastructure remains a separate target so its graph, barrier, bindless,
@@ -145,6 +159,7 @@ if(HALCYON_BUILD_EXPERIMENTAL_M2)
         PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Source")
     target_link_libraries(HalcyonRendererExperimental PUBLIC HalcyonCore)
     halcyon_enable_warnings(HalcyonRendererExperimental)
+    target_link_libraries(HalcyonRenderer PRIVATE HalcyonRendererExperimental)
 endif()
 
 find_program(HALCYON_DXC_EXECUTABLE
@@ -209,6 +224,7 @@ target_compile_definitions(HalcyonSandbox PRIVATE
     GLFW_INCLUDE_NONE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
     HALCYON_ENABLE_IMGUI=$<BOOL:${HALCYON_ENABLE_IMGUI}>
+    HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>
 )
 halcyon_enable_warnings(HalcyonSandbox)
 

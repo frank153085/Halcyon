@@ -101,6 +101,32 @@ void renderGraphDependencyAndCullingTests(TestContext& context)
     HALCYON_EXPECT(context, execution[0] == "Producer");
     HALCYON_EXPECT(context, execution[1] == "Consumer");
 
+    std::vector<std::string> boundaries;
+    std::vector<std::uint32_t> indices;
+    bool callbackUserDataValid = false;
+    Graph::ExecuteOptions executeOptions;
+    executeOptions.userData = &boundaries;
+    executeOptions.onBegin = [&boundaries, &indices, &callbackUserDataValid](
+                                 const Graph::PassExecutionContext& pass)
+    {
+        boundaries.emplace_back("begin:" + std::string(pass.name));
+        indices.push_back(pass.executionIndex);
+        callbackUserDataValid = callbackUserDataValid || pass.userData != nullptr;
+    };
+    executeOptions.onEnd = [&boundaries](const Graph::PassExecutionContext& pass)
+    {
+        boundaries.emplace_back("end:" + std::string(pass.name));
+    };
+    const auto boundaryResult = executable.execute(executeOptions);
+    HALCYON_EXPECT(context, boundaryResult);
+    HALCYON_EXPECT(context, boundaries.size() == 4u);
+    HALCYON_EXPECT(context, boundaries[0] == "begin:Producer");
+    HALCYON_EXPECT(context, boundaries[1] == "end:Producer");
+    HALCYON_EXPECT(context, boundaries[2] == "begin:Consumer");
+    HALCYON_EXPECT(context, boundaries[3] == "end:Consumer");
+    HALCYON_EXPECT(context, indices.size() == 2u && indices[0] == 0u && indices[1] == 1u);
+    HALCYON_EXPECT(context, callbackUserDataValid);
+
     auto failingGraph = Graph::RenderGraph{};
     auto failingPass = failingGraph.addPass("Failing", true);
     failingPass.setExecute(

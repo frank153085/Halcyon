@@ -38,13 +38,13 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Optional GoogleTest coverage; enable it with
   `-DHALCYON_ENABLE_GOOGLETEST=ON`.
 
-This first version deliberately stops at safe CPU-side graph execution,
-resource lifetime tracking, shader validation/reflection, and a Vulkan
-bindless companion. Tracy capture, binding the bindless set into the active
-demo pipeline, and general per-pass GPU timestamp routing are deferred until
-the renderer needs them. Advanced GPU-driven rendering, the Visibility Buffer,
-and ray-tracing extensions remain assigned to later milestones. M2
-infrastructure is enabled by default; pass
+This first version deliberately keeps the backend bridge small: the graph owns
+semantic ordering and lifetime decisions, while Vulkan retains explicit image
+barriers and command recording. Optional Tracy CPU instrumentation, binding of
+the bindless set into the demo pipeline, and generic per-pass GPU timestamp
+routing are available without making them mandatory for the base renderer.
+Advanced GPU-driven rendering, the Visibility Buffer, and ray-tracing
+extensions remain assigned to later milestones. M2 infrastructure is enabled by default; pass
 `-DHALCYON_BUILD_EXPERIMENTAL_M2=OFF` to build only the M0/M1 baseline.
 
 ## Language Policy
