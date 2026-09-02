@@ -60,6 +60,19 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/Camera.cpp
     Source/Renderer/Scene/Camera.h
     Source/Renderer/Scene/FramePacket.h
+    Source/Renderer/Scene/Ecs/Entity.h
+    Source/Renderer/Scene/Ecs/Ecs.h
+    Source/Renderer/Scene/Ecs/EntityManager.cpp
+    Source/Renderer/Scene/Ecs/EntityManager.h
+    Source/Renderer/Scene/Ecs/DenseComponentManager.h
+    Source/Renderer/Scene/Ecs/TransformManager.cpp
+    Source/Renderer/Scene/Ecs/TransformManager.h
+    Source/Renderer/Scene/Ecs/RenderableManager.h
+    Source/Renderer/Scene/Ecs/LightManager.h
+    Source/Renderer/Scene/Ecs/Scene.cpp
+    Source/Renderer/Scene/Ecs/Scene.h
+    Source/Renderer/Scene/Ecs/RenderExtractor.cpp
+    Source/Renderer/Scene/Ecs/RenderExtractor.h
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.cpp
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
     Source/Renderer/Vulkan/EmbeddedTriangleShaders.cpp
@@ -94,7 +107,8 @@ target_include_directories(HalcyonRenderer PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(HalcyonRenderer
     PUBLIC HalcyonCore glm::glm Vulkan::Vulkan
-    PRIVATE Halcyon::Vma Halcyon::Stb Halcyon::RobinMap
+    PRIVATE Halcyon::Vma Halcyon::Stb
+    PUBLIC Halcyon::RobinMap
     PRIVATE glfw
 )
 target_compile_definitions(HalcyonRenderer PRIVATE GLFW_INCLUDE_NONE)
@@ -229,6 +243,17 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonCameraTests)
     add_test(NAME Halcyon.Camera COMMAND HalcyonCameraTests)
 
+    add_executable(HalcyonEcsTests
+        Tests/EcsTests.cpp
+        Source/Renderer/Scene/Ecs/EntityManager.cpp
+        Source/Renderer/Scene/Ecs/TransformManager.cpp
+        Source/Renderer/Scene/Ecs/Scene.cpp
+        Source/Renderer/Scene/Ecs/RenderExtractor.cpp)
+    target_link_libraries(HalcyonEcsTests PRIVATE HalcyonCore glm::glm Halcyon::RobinMap)
+    target_include_directories(HalcyonEcsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    halcyon_enable_warnings(HalcyonEcsTests)
+    add_test(NAME Halcyon.Ecs COMMAND HalcyonEcsTests)
+
     add_executable(HalcyonInfrastructureTests Tests/RendererInfrastructureTests.cpp)
     target_link_libraries(HalcyonInfrastructureTests PRIVATE HalcyonCore)
     target_include_directories(HalcyonInfrastructureTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
@@ -255,6 +280,7 @@ if(HALCYON_BUILD_TESTS)
         HalcyonCoreTests
         HalcyonMemoryAllocatorTests
         HalcyonCameraTests
+        HalcyonEcsTests
         HalcyonInfrastructureTests
         HalcyonDeferredDeletionTests)
     if(HALCYON_BUILD_EXPERIMENTAL_M2)

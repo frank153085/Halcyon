@@ -7,6 +7,7 @@
 #include "Core/Log.h"
 #include "Halcyon/Renderer.h"
 #include "Renderer/Scene/Camera.h"
+#include "Renderer/Scene/Ecs/RenderExtractor.h"
 
 #include <GLFW/glfw3.h>
 #include <chrono>
@@ -308,8 +309,22 @@ int run(const ExampleDefinition& definition, int argc, char** argv)
         return EXIT_FAILURE;
     }
 
+    Halcyon::Renderer::Scene::Ecs::Scene scene;
+    const auto modelEntity = scene.createEntity();
+    (void)scene.transforms().add(modelEntity);
+    (void)scene.renderables().add(modelEntity);
+    auto* modelTransform = scene.transforms().get(modelEntity);
+    if (modelTransform == nullptr)
+    {
+        HALCYON_LOG_CRITICAL("Failed to create example ECS transform");
+        glfwSetWindowUserPointer(window, nullptr);
+        renderer.shutdown();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
+
     std::uint64_t frameIndex = 0;
-    Halcyon::Vulkan::InstanceData instance{};
     const float rotationSpeedRadiansPerSecond = glm::radians(30.0f);
     const auto playbackStart = std::chrono::steady_clock::now();
     int exitCode = EXIT_SUCCESS;
@@ -319,8 +334,6 @@ int run(const ExampleDefinition& definition, int argc, char** argv)
     {
         glfwPollEvents();
 
-        Halcyon::Vulkan::FramePacket packet;
-        packet.frameIndex = frameIndex++;
         int currentFramebufferWidth = 0;
         int currentFramebufferHeight = 0;
         glfwGetFramebufferSize(window, &currentFramebufferWidth, &currentFramebufferHeight);
@@ -329,15 +342,16 @@ int run(const ExampleDefinition& definition, int argc, char** argv)
             (void)camera.setViewport({static_cast<std::uint32_t>(currentFramebufferWidth),
                 static_cast<std::uint32_t>(currentFramebufferHeight)});
         }
-        packet.camera = camera.data();
-
         const double elapsedSeconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - playbackStart).count();
         const float angle = static_cast<float>(elapsedSeconds) * rotationSpeedRadiansPerSecond;
         const glm::mat4 model = glm::rotate(glm::mat4{1.0f}, angle, glm::vec3{0.0f, 1.0f, 0.0f});
-        std::memcpy(instance.transform.data(), glm::value_ptr(model), sizeof(model));
-        packet.instances = std::span<const Halcyon::Vulkan::InstanceData>{&instance, 1};
-        const Halcyon::Vulkan::FrameStats stats = renderer.render(packet);
+        modelTransform->localTransform = model;
+        modelTransform->dirty = true;
+        scene.updateTransforms();
+        auto ownedPacket = Halcyon::Renderer::Scene::Ecs::RenderExtractor::extract(
+            scene, camera.data(), frameIndex++);
+        const Halcyon::Vulkan::FrameStats stats = renderer.render(ownedPacket.view());
 
         if (stats.deviceLost)
         {
