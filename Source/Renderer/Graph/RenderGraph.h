@@ -8,6 +8,7 @@
 // the declared accesses into native barriers at execution time.
 
 #include "../../Core/Handle.h"
+#include "FrameGraphNode.h"
 
 #include <array>
 #include <cstdint>
@@ -285,7 +286,8 @@ struct CompileResult
     [[nodiscard]] ExecutionResult execute(const ExecuteOptions& options = {}) const;
 };
 
-class RenderGraph;
+class FrameGraph;
+using RenderGraph = FrameGraph;
 
 class PassBuilder
 {
@@ -328,28 +330,28 @@ public:
     PassBuilder& setExecute(PassExecuteCallback callback);
 
 private:
-    friend class RenderGraph;
-    PassBuilder(RenderGraph* graph, PassHandle pass)
+    friend class FrameGraph;
+    PassBuilder(FrameGraph* graph, PassHandle pass)
             : graph_(graph),
               pass_(pass)
     {
     }
 
-    RenderGraph* graph_ = nullptr;
+    FrameGraph* graph_ = nullptr;
     PassHandle pass_{};
 };
 
-class RenderGraph
+class FrameGraph
 {
 public:
     using SetupCallback = std::function<void(PassBuilder&)>;
 
-    RenderGraph() = default;
-    RenderGraph(const RenderGraph&) = delete;
-    RenderGraph& operator=(const RenderGraph&) = delete;
-    RenderGraph(RenderGraph&&) noexcept = default;
-    RenderGraph& operator=(RenderGraph&&) noexcept = default;
-    ~RenderGraph() = default;
+    FrameGraph() = default;
+    FrameGraph(const FrameGraph&) = delete;
+    FrameGraph& operator=(const FrameGraph&) = delete;
+    FrameGraph(FrameGraph&&) noexcept = default;
+    FrameGraph& operator=(FrameGraph&&) noexcept = default;
+    ~FrameGraph() = default;
 
     [[nodiscard]] BufferHandle createBuffer(BufferDesc desc = {});
     [[nodiscard]] TextureHandle createTexture(TextureDesc desc = {});
@@ -397,6 +399,7 @@ private:
 
     struct ResourceNode
     {
+        NodeId nodeId{0, NodeKind::Resource};
         ResourceKind kind = ResourceKind::Buffer;
         std::uint32_t generation = 1;
         bool alive = true;
@@ -407,6 +410,7 @@ private:
     };
     struct PassNode
     {
+        NodeId nodeId{0, NodeKind::Pass};
         std::uint32_t generation = 1;
         bool alive = true;
         std::string name;
@@ -435,6 +439,10 @@ private:
     [[nodiscard]] PassHandle makePassHandle(std::uint32_t index) const noexcept;
     [[nodiscard]] std::uint32_t allocateResourceGeneration() noexcept;
     [[nodiscard]] std::uint32_t allocatePassGeneration() noexcept;
+
+    [[nodiscard]] std::vector<bool> cullPasses(
+        const CompileOptions& options, const DependencyGraph& cullingDependencies) const;
+    void analyzeResourceLifetimes(CompileResult& result) const;
 
     std::vector<ResourceNode> resources_;
     std::vector<std::uint32_t> freeBufferSlots_;

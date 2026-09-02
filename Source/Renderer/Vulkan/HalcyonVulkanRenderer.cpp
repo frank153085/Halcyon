@@ -17,7 +17,7 @@
 
 #if HALCYON_BUILD_EXPERIMENTAL_M2
 #include "../Graph/BarrierPlanner.h"
-#include "../Graph/RenderGraph.h"
+#include "../Graph/FrameGraph.h"
 #endif
 
 // GLFW is included here (rather than in the public header) so applications
@@ -718,7 +718,7 @@ VoidResult Renderer::Impl::recordFrame(
     };
 
 #if HALCYON_BUILD_EXPERIMENTAL_M2
-    Graph::RenderGraph graph;
+    Graph::FrameGraph graph;
     Graph::BarrierPlanner barrierPlanner;
     bool sceneRecordFailed = false;
     std::string sceneRecordError;
@@ -746,7 +746,7 @@ VoidResult Renderer::Impl::recordFrame(
             [&recordScenePass, &sceneRecordFailed, &sceneRecordError](
                 const Graph::PassExecutionContext&)
             {
-                HALCYON_PROFILE_SCOPE("RenderGraph::pass");
+                HALCYON_PROFILE_SCOPE("FrameGraph::pass");
                 const VoidResult result = recordScenePass();
                 if (!result)
                 {

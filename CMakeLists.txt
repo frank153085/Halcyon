@@ -147,8 +147,16 @@ endif()
 if(HALCYON_BUILD_EXPERIMENTAL_M2)
     add_library(HalcyonRendererExperimental STATIC
         Source/Renderer/Graph/RenderGraph.cpp
+        Source/Renderer/Graph/RenderGraphBuilder.cpp
+        Source/Renderer/Graph/RenderGraphCompiler.cpp
+        Source/Renderer/Graph/RenderGraphExecution.cpp
+        Source/Renderer/Graph/FrameGraphCulling.cpp
+        Source/Renderer/Graph/FrameGraphLifetime.cpp
+        Source/Renderer/Graph/FrameGraphNode.cpp
         Source/Renderer/Graph/BarrierPlanner.cpp
         Source/Renderer/Graph/RenderGraph.h
+        Source/Renderer/Graph/FrameGraph.h
+        Source/Renderer/Graph/FrameGraphNode.h
         Source/Renderer/Graph/BarrierPlanner.h
         Source/Renderer/Resources/BindlessTable.cpp
         Source/Renderer/Resources/BindlessTable.h

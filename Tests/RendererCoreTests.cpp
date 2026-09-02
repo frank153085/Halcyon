@@ -1,4 +1,5 @@
-#include "Renderer/Graph/RenderGraph.h"
+#include "Renderer/Graph/FrameGraph.h"
+#include "Renderer/Graph/FrameGraphNode.h"
 #include "Renderer/Quality/FrameBudgetController.h"
 
 #include <cstdint>
@@ -40,7 +41,7 @@ void renderGraphDependencyAndCullingTests(TestContext& context)
 {
     namespace Graph = Halcyon::Renderer::Graph;
 
-    Graph::RenderGraph graph;
+    Graph::FrameGraph graph;
     const auto visibility = graph.createTexture({.name = "Visibility"});
     const auto hdr = graph.createTexture({.name = "HDR"});
     const auto unused = graph.createTexture({.name = "Unused"});
@@ -76,7 +77,7 @@ void renderGraphDependencyAndCullingTests(TestContext& context)
     HALCYON_EXPECT(context, hdrLifetime->lastUse == 2);
 
     std::vector<std::string> execution;
-    auto executableGraph = Graph::RenderGraph{};
+    auto executableGraph = Graph::FrameGraph{};
     const auto output = executableGraph.createTexture({.name = "Output"});
     auto producer = executableGraph.addPass("Producer");
     producer.write(output, Graph::ResourceUsage::Storage)
@@ -127,7 +128,7 @@ void renderGraphDependencyAndCullingTests(TestContext& context)
     HALCYON_EXPECT(context, indices.size() == 2u && indices[0] == 0u && indices[1] == 1u);
     HALCYON_EXPECT(context, callbackUserDataValid);
 
-    auto failingGraph = Graph::RenderGraph{};
+    auto failingGraph = Graph::FrameGraph{};
     auto failingPass = failingGraph.addPass("Failing", true);
     failingPass.setExecute(
         [](const Graph::PassExecutionContext&)
@@ -143,7 +144,7 @@ void renderGraphCycleAndGenerationTests(TestContext& context)
 {
     namespace Graph = Halcyon::Renderer::Graph;
 
-    Graph::RenderGraph graph;
+    Graph::FrameGraph graph;
     const auto oldBuffer = graph.createBuffer({.name = "Old", .size = 64});
     HALCYON_EXPECT(context, graph.valid(oldBuffer));
     HALCYON_EXPECT(context, graph.destroy(oldBuffer));
@@ -202,6 +203,31 @@ void frameBudgetDowngradeAndUpgradeTests(TestContext& context)
     HALCYON_EXPECT(context, controller.decisionLog().size() == 2);
 }
 
+void frameGraphNodeStructureTests(TestContext& context)
+{
+    namespace Graph = Halcyon::Renderer::Graph;
+
+    Graph::FrameGraph graph;
+    const auto output = graph.createTexture({.name = "FrameGraphOutput"});
+    auto pass = graph.addPass("FrameGraph pass");
+    pass.write(output).setSideEffect();
+    const auto compiled = graph.compile();
+    HALCYON_EXPECT(context, compiled);
+    HALCYON_EXPECT(context, compiled.executionOrder.size() == 1u);
+
+    Graph::DependencyGraph dependencies(3);
+    dependencies.addEdge(
+        Graph::NodeId{0, Graph::NodeKind::Pass}, Graph::NodeId{1, Graph::NodeKind::Resource});
+    dependencies.addEdge(
+        Graph::NodeId{1, Graph::NodeKind::Resource}, Graph::NodeId{2, Graph::NodeKind::Pass});
+    HALCYON_EXPECT(context, dependencies.size() == 3u);
+    HALCYON_EXPECT(context, dependencies.successors(0).size() == 1u);
+    HALCYON_EXPECT(context, dependencies.predecessors(2).size() == 1u);
+    const auto indegrees = dependencies.indegrees();
+    HALCYON_EXPECT(context,
+        indegrees.size() == 3u && indegrees[0] == 0u && indegrees[1] == 1u && indegrees[2] == 1u);
+}
+
 } // namespace
 
 int main()
@@ -210,6 +236,7 @@ int main()
     renderGraphDependencyAndCullingTests(context);
     renderGraphCycleAndGenerationTests(context);
     frameBudgetDowngradeAndUpgradeTests(context);
+    frameGraphNodeStructureTests(context);
 
     if (context.failures() != 0)
     {
