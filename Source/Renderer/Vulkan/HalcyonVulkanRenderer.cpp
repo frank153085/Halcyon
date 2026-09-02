@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <limits>
 #include <new>
 #include <set>
@@ -29,6 +30,31 @@ namespace Halcyon::Vulkan
 {
 namespace
 {
+
+[[nodiscard]] std::vector<std::uint32_t> loadSpirvFile(const char* name)
+{
+#ifdef HALCYON_SHADER_DIR
+    std::string path = std::string(HALCYON_SHADER_DIR) + "/" + name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (file)
+    {
+        const auto size = file.tellg();
+        if (size > 0 && (size % static_cast<std::streamoff>(sizeof(std::uint32_t))) == 0)
+        {
+            std::vector<std::uint32_t> code(static_cast<std::size_t>(size) / sizeof(std::uint32_t));
+            file.seekg(0);
+            file.read(reinterpret_cast<char*>(code.data()), size);
+            if (file)
+            {
+                return code;
+            }
+        }
+    }
+#else
+    (void)name;
+#endif
+    return {};
+}
 
 constexpr std::uint32_t kRequiredApiVersion = VK_API_VERSION_1_3;
 constexpr std::uint32_t kDefaultFramesInFlight = 3;
@@ -919,6 +945,12 @@ struct Renderer::Impl
     GpuUploader gpuUploader;
     GpuResourceManager gpuResources;
     BufferAllocation triangleVertexBuffer{};
+    TextureResource demoTexture{};
+    MeshResource demoMesh{};
+    VkDescriptorSetLayout textureSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool textureDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet textureDescriptorSet = VK_NULL_HANDLE;
+    bool texturedDemo = false;
 
     ~Impl()
     {
@@ -993,6 +1025,20 @@ struct Renderer::Impl
             cleanupSwapchain();
             gpuAllocator.destroy(triangleVertexBuffer);
             triangleVertexBuffer = {};
+            gpuResources.destroy(demoTexture);
+            gpuResources.destroy(demoMesh);
+            if (textureDescriptorPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(device, textureDescriptorPool, nullptr);
+                textureDescriptorPool = VK_NULL_HANDLE;
+                textureDescriptorSet = VK_NULL_HANDLE;
+            }
+            if (textureSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(device, textureSetLayout, nullptr);
+                textureSetLayout = VK_NULL_HANDLE;
+            }
+            texturedDemo = false;
             gpuResources.shutdown();
             if (timestampPool != VK_NULL_HANDLE)
             {
@@ -2383,16 +2429,26 @@ VoidResult Renderer::Impl::createTrianglePipeline()
 
     VkShaderModuleCreateInfo shaderInfo{};
     shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shaderInfo.codeSize = kTriangleVertexSpirv.size() * sizeof(std::uint32_t);
-    shaderInfo.pCode = kTriangleVertexSpirv.data();
+    const auto texturedVertex =
+        texturedDemo ? loadSpirvFile("textured.vert.spv") : std::vector<std::uint32_t>{};
+    const auto texturedFragment =
+        texturedDemo ? loadSpirvFile("textured.frag.spv") : std::vector<std::uint32_t>{};
+    const bool useTexturedShaders =
+        texturedDemo && !texturedVertex.empty() && !texturedFragment.empty();
+    texturedDemo = useTexturedShaders;
+    shaderInfo.codeSize = useTexturedShaders ? texturedVertex.size() * sizeof(std::uint32_t)
+                                             : kTriangleVertexSpirv.size() * sizeof(std::uint32_t);
+    shaderInfo.pCode = useTexturedShaders ? texturedVertex.data() : kTriangleVertexSpirv.data();
     VkResult result = vkCreateShaderModule(device, &shaderInfo, nullptr, &triangleVertexShader);
     if (result != VK_SUCCESS)
     {
         triangleVertexShader = VK_NULL_HANDLE;
         return fail(vkFailure("vkCreateShaderModule(vertex)", result));
     }
-    shaderInfo.codeSize = kTriangleFragmentSpirv.size() * sizeof(std::uint32_t);
-    shaderInfo.pCode = kTriangleFragmentSpirv.data();
+    shaderInfo.codeSize = useTexturedShaders
+                              ? texturedFragment.size() * sizeof(std::uint32_t)
+                              : kTriangleFragmentSpirv.size() * sizeof(std::uint32_t);
+    shaderInfo.pCode = useTexturedShaders ? texturedFragment.data() : kTriangleFragmentSpirv.data();
     result = vkCreateShaderModule(device, &shaderInfo, nullptr, &triangleFragmentShader);
     if (result != VK_SUCCESS)
     {
@@ -2404,6 +2460,11 @@ VoidResult Renderer::Impl::createTrianglePipeline()
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    if (useTexturedShaders)
+    {
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &textureSetLayout;
+    }
     result = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &trianglePipelineLayout);
     if (result != VK_SUCCESS)
     {
@@ -2428,6 +2489,20 @@ VoidResult Renderer::Impl::createTrianglePipeline()
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkVertexInputBindingDescription vertexBinding{
+        0, sizeof(MeshVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    std::array<VkVertexInputAttributeDescription, 3> vertexAttributes = {
+        VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+        VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
+        VkVertexInputAttributeDescription{2, 0, VK_FORMAT_R32G32_SFLOAT, 24}};
+    if (useTexturedShaders)
+    {
+        vertexInput.vertexBindingDescriptionCount = 1;
+        vertexInput.pVertexBindingDescriptions = &vertexBinding;
+        vertexInput.vertexAttributeDescriptionCount =
+            static_cast<std::uint32_t>(vertexAttributes.size());
+        vertexInput.pVertexAttributeDescriptions = vertexAttributes.data();
+    }
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -2658,13 +2733,30 @@ VoidResult Renderer::Impl::recordFrame(
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trianglePipeline);
-        if (triangleVertexBuffer.buffer != VK_NULL_HANDLE)
+        if (texturedDemo && demoMesh.vertexBuffer.buffer != VK_NULL_HANDLE)
+        {
+            const VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(
+                frame.commandBuffer, 0, 1, &demoMesh.vertexBuffer.buffer, &offset);
+            vkCmdBindIndexBuffer(
+                frame.commandBuffer, demoMesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindDescriptorSets(frame.commandBuffer,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                trianglePipelineLayout,
+                0,
+                1,
+                &textureDescriptorSet,
+                0,
+                nullptr);
+            vkCmdDrawIndexed(frame.commandBuffer, demoMesh.indexCount, 1, 0, 0, 0);
+        }
+        else if (triangleVertexBuffer.buffer != VK_NULL_HANDLE)
         {
             const VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(
                 frame.commandBuffer, 0, 1, &triangleVertexBuffer.buffer, &offset);
+            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         }
-        vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
     }
     vkCmdEndRendering(frame.commandBuffer);
 
@@ -2827,6 +2919,72 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->graphicsQueue,
             impl_->gpuAllocator,
             impl_->gpuUploader);
+        const auto textureResult =
+            impl_->gpuResources.loadTexture2D("assets/models/monkey/color.png");
+        const auto meshResult = impl_->gpuResources.loadObj("assets/models/monkey/monkey.obj");
+        if (textureResult && meshResult)
+        {
+            impl_->demoTexture = textureResult.value();
+            impl_->demoMesh = meshResult.value();
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding = 0;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo layoutInfo{};
+            layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layoutInfo.bindingCount = 1;
+            layoutInfo.pBindings = &binding;
+            if (vkCreateDescriptorSetLayout(
+                    impl_->device, &layoutInfo, nullptr, &impl_->textureSetLayout) == VK_SUCCESS)
+            {
+                VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+                VkDescriptorPoolCreateInfo poolInfo{};
+                poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                poolInfo.maxSets = 1;
+                poolInfo.poolSizeCount = 1;
+                poolInfo.pPoolSizes = &poolSize;
+                if (vkCreateDescriptorPool(
+                        impl_->device, &poolInfo, nullptr, &impl_->textureDescriptorPool) ==
+                    VK_SUCCESS)
+                {
+                    VkDescriptorSetAllocateInfo allocateInfo{};
+                    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                    allocateInfo.descriptorPool = impl_->textureDescriptorPool;
+                    allocateInfo.descriptorSetCount = 1;
+                    allocateInfo.pSetLayouts = &impl_->textureSetLayout;
+                    if (vkAllocateDescriptorSets(impl_->device,
+                            &allocateInfo,
+                            &impl_->textureDescriptorSet) == VK_SUCCESS)
+                    {
+                        VkDescriptorImageInfo imageInfo{impl_->demoTexture.sampler,
+                            impl_->demoTexture.view,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                        VkWriteDescriptorSet write{};
+                        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        write.dstSet = impl_->textureDescriptorSet;
+                        write.descriptorCount = 1;
+                        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        write.pImageInfo = &imageInfo;
+                        vkUpdateDescriptorSets(impl_->device, 1, &write, 0, nullptr);
+                        impl_->texturedDemo = true;
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (textureResult)
+            {
+                auto texture = textureResult.value();
+                impl_->gpuResources.destroy(texture);
+            }
+            if (meshResult)
+            {
+                auto mesh = meshResult.value();
+                impl_->gpuResources.destroy(mesh);
+            }
+        }
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         if (window != nullptr)

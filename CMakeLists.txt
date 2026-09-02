@@ -79,6 +79,7 @@ target_link_libraries(HalcyonRenderer
 )
 target_compile_definitions(HalcyonRenderer PRIVATE GLFW_INCLUDE_NONE)
 halcyon_enable_warnings(HalcyonRenderer)
+target_compile_definitions(HalcyonRenderer PRIVATE HALCYON_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/Shaders")
 
 # These CPU-only prototypes belong to M2 and later milestones.  Keeping them
 # in a separate opt-in target prevents unfinished advanced work from becoming
@@ -132,8 +133,20 @@ if(HALCYON_DXC_EXECUTABLE)
         VERBATIM
         COMMENT "Compiling triangle fragment shader"
     )
+    set(HALCYON_TEXTURED_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/textured.vert.spv")
+    set(HALCYON_TEXTURED_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/textured.frag.spv")
+    add_custom_command(OUTPUT "${HALCYON_TEXTURED_VERTEX_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
+                -Fo "${HALCYON_TEXTURED_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/textured.vert.hlsl"
+        DEPENDS Shaders/textured.vert.hlsl VERBATIM COMMENT "Compiling textured vertex shader")
+    add_custom_command(OUTPUT "${HALCYON_TEXTURED_FRAGMENT_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
+                -Fo "${HALCYON_TEXTURED_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/textured.frag.hlsl"
+        DEPENDS Shaders/textured.frag.hlsl VERBATIM COMMENT "Compiling textured fragment shader")
     add_custom_target(HalcyonShaders ALL
-        DEPENDS "${HALCYON_VERTEX_SPIRV}" "${HALCYON_FRAGMENT_SPIRV}"
+        DEPENDS "${HALCYON_VERTEX_SPIRV}" "${HALCYON_FRAGMENT_SPIRV}" "${HALCYON_TEXTURED_VERTEX_SPIRV}" "${HALCYON_TEXTURED_FRAGMENT_SPIRV}"
     )
     add_dependencies(HalcyonRenderer HalcyonShaders)
 else()
