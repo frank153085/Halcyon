@@ -1,0 +1,1 @@
+halcyon_add_example(HalcyonExample02TexturedModel Main.cpp)

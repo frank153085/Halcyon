@@ -70,6 +70,13 @@ Available options are `--width N`, `--height N`, `--frames N`,
 `--no-validation`, and `--help`. The render loop pauses image acquisition while
 the window is minimized and recreates the swapchain after restoration.
 
+## Standalone Examples
+
+The repository also builds independent examples with isolated output
+directories.  See [Examples/README.md](./Examples/README.md) for the available
+targets, run commands, and the procedure for adding a new example without
+replacing previous binaries.
+
 ## Repository Layout
 
 ```text
@@ -79,6 +86,7 @@ Source/Renderer/Graph       M2 RenderGraph prototype, disabled by default
 Source/Renderer/Resources   M1 upload/deletion and M2 Bindless prototypes
 Source/Renderer/Vulkan      Vulkan 1.3 backend
 Source/Sandbox              Runnable demonstration application
+Examples                    Independent executable examples
 Source/Cooker               Deterministic resource-manifest tool
 Tests                       CPU unit tests
 ```

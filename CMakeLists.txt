@@ -6,6 +6,8 @@ option(HALCYON_BUILD_TESTS "Build Halcyon CPU-side tests" ON)
 option(HALCYON_ENABLE_VALIDATION "Enable Vulkan validation by default" ON)
 option(HALCYON_BUILD_EXPERIMENTAL_M2
     "Build unfinished M2+ RenderGraph, bindless and frame-budget prototypes" OFF)
+option(HALCYON_BUILD_EXAMPLES
+    "Build standalone examples with isolated output directories" ON)
 
 option(HALCYON_ENABLE_GOOGLETEST "Build the GoogleTest dependency" OFF)
 option(HALCYON_ENABLE_IMGUI "Build Dear ImGui" OFF)
@@ -182,6 +184,10 @@ target_compile_definitions(HalcyonSandbox PRIVATE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
 )
 halcyon_enable_warnings(HalcyonSandbox)
+
+if(HALCYON_BUILD_EXAMPLES)
+    add_subdirectory(Examples)
+endif()
 
 # The cooker deliberately has no renderer/Vulkan dependency.  Keeping it as a
 # separate executable makes asset-pipeline experiments buildable on machines
