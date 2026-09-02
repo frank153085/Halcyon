@@ -3,12 +3,17 @@
 #endif
 #include "Core/Log.h"
 #include "Halcyon/Renderer.h"
+#include "Renderer/Scene/Camera.h"
 
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -80,6 +85,7 @@ struct CommandLine
     int height = 720;
     std::uint64_t frameLimit = 0; // zero means run until the window is closed.
     bool validation = HALCYON_ENABLE_VALIDATION != 0;
+    bool resourceTest = false;
     bool help = false;
 };
 
@@ -158,6 +164,11 @@ bool parseCommandLine(int argc, char** argv, CommandLine& commandLine)
             commandLine.validation = true;
             continue;
         }
+        if (argument == "--resource-test")
+        {
+            commandLine.resourceTest = true;
+            continue;
+        }
 
         HALCYON_LOG_ERROR("Unknown or malformed command-line option: ", argument);
         return false;
@@ -172,6 +183,7 @@ void printUsage()
                 "  --width N        initial window width (default: 1280)\n"
                 "  --height N       initial window height (default: 720)\n"
                 "  --no-validation  disable Vulkan validation layers\n"
+                "  --resource-test  load the sample OBJ and PNG before playback\n"
                 "  --help           show this message\n");
 }
 
@@ -230,6 +242,8 @@ int main(int argc, char** argv)
     // Ray Query belongs to the optional M6 experiment.  Keep the M0/M1
     // sandbox on the portable base tier even when the GPU advertises RT.
     config.rayQuery = Halcyon::Vulkan::FeatureMode::Disabled;
+    config.startupTexturePath = "assets/models/monkey/color.png";
+    config.startupMeshPath = "assets/models/monkey/monkey.obj";
 
     const auto initializeResult = renderer.initialize(window, config);
     if (!initializeResult)
@@ -244,8 +258,37 @@ int main(int argc, char** argv)
     glfwSetWindowUserPointer(window, &renderer);
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
     logCapabilities(renderer.capabilities());
+    if (commandLine.resourceTest)
+    {
+        HALCYON_LOG_INFO("Resource playback mode is enabled; assets are loaded by the renderer.");
+    }
+
+    // The sandbox owns example-specific scene policy.  The renderer only
+    // consumes these values through FramePacket and remains independent of
+    // this camera placement, projection choice, and animation speed.
+    Halcyon::Renderer::Scene::Camera camera;
+    Halcyon::Renderer::Scene::Perspective perspective{};
+    perspective.verticalFovRadians = glm::radians(55.0f);
+    perspective.nearPlane = 0.1f;
+    perspective.farPlane = 100.0f;
+    const auto cameraPerspectiveResult = camera.setPerspective(perspective);
+    const auto cameraViewportResult = camera.setViewport(
+        Halcyon::Renderer::Scene::ViewportExtent{config.initialExtent.width,
+            config.initialExtent.height});
+    const auto cameraLookAtResult = camera.lookAt(
+        glm::vec3{0.0f, 0.15f, 3.2f}, glm::vec3{0.0f, 0.0f, 0.0f});
+    if (!cameraPerspectiveResult || !cameraViewportResult || !cameraLookAtResult)
+    {
+        HALCYON_LOG_CRITICAL("Failed to initialize sandbox camera");
+        glfwSetWindowUserPointer(window, nullptr);
+        renderer.shutdown();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
 
     std::uint64_t frameIndex = 0;
+    Halcyon::Vulkan::InstanceData instance{};
     int exitCode = EXIT_SUCCESS;
     std::string reportedError;
     while (glfwWindowShouldClose(window) == GLFW_FALSE &&
@@ -255,6 +298,23 @@ int main(int argc, char** argv)
 
         Halcyon::Vulkan::FramePacket packet;
         packet.frameIndex = frameIndex++;
+        int currentFramebufferWidth = 0;
+        int currentFramebufferHeight = 0;
+        glfwGetFramebufferSize(window, &currentFramebufferWidth, &currentFramebufferHeight);
+        if (currentFramebufferWidth > 0 && currentFramebufferHeight > 0)
+        {
+            (void)camera.setViewport({static_cast<std::uint32_t>(currentFramebufferWidth),
+                static_cast<std::uint32_t>(currentFramebufferHeight)});
+        }
+        packet.camera = camera.data();
+
+        // Keep the sample animation in the application layer.  The transform
+        // is serialized into the backend-neutral InstanceData layout.
+        const float angle = static_cast<float>(packet.frameIndex) * 0.01f;
+        const glm::mat4 model = glm::rotate(
+            glm::mat4{1.0f}, angle, glm::vec3{0.0f, 1.0f, 0.0f});
+        std::memcpy(instance.transform.data(), glm::value_ptr(model), sizeof(model));
+        packet.instances = std::span<const Halcyon::Vulkan::InstanceData>{&instance, 1};
         const Halcyon::Vulkan::FrameStats stats = renderer.render(packet);
 
         if (stats.deviceLost)

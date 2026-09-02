@@ -18,6 +18,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <new>
 #include <set>
@@ -59,6 +60,13 @@ namespace
 constexpr std::uint32_t kRequiredApiVersion = VK_API_VERSION_1_3;
 constexpr std::uint32_t kDefaultFramesInFlight = 3;
 constexpr std::uint32_t kMaxFramesInFlight = 4;
+
+struct alignas(16) TexturedPushConstants
+{
+    glm::mat4 viewProjection{1.0f};
+    glm::mat4 model{1.0f};
+};
+static_assert(sizeof(TexturedPushConstants) == sizeof(glm::mat4) * 2);
 
 using VoidResult = Halcyon::Result<void>;
 
@@ -2460,10 +2468,16 @@ VoidResult Renderer::Impl::createTrianglePipeline()
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    VkPushConstantRange pushConstantRange{};
     if (useTexturedShaders)
     {
         layoutInfo.setLayoutCount = 1;
         layoutInfo.pSetLayouts = &textureSetLayout;
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(TexturedPushConstants);
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushConstantRange;
     }
     result = vkCreatePipelineLayout(device, &layoutInfo, nullptr, &trianglePipelineLayout);
     if (result != VK_SUCCESS)
@@ -2735,6 +2749,20 @@ VoidResult Renderer::Impl::recordFrame(
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trianglePipeline);
         if (texturedDemo && demoMesh.vertexBuffer.buffer != VK_NULL_HANDLE)
         {
+            // Rendering is driven entirely by the immutable packet.  The
+            // backend does not own a scene camera or animation policy:
+            // callers provide the camera matrix and (optionally) the first
+            // instance transform.  Missing instance data means identity.
+            const glm::mat4 viewProjection = packet.camera.viewProjection;
+            glm::mat4 model{1.0f};
+            if (!packet.instances.empty())
+            {
+                static_assert(sizeof(glm::mat4) == sizeof(std::array<float, 16>));
+                std::memcpy(glm::value_ptr(model),
+                    packet.instances.front().transform.data(),
+                    sizeof(model));
+            }
+            const TexturedPushConstants pushConstants{viewProjection, model};
             const VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(
                 frame.commandBuffer, 0, 1, &demoMesh.vertexBuffer.buffer, &offset);
@@ -2748,6 +2776,12 @@ VoidResult Renderer::Impl::recordFrame(
                 &textureDescriptorSet,
                 0,
                 nullptr);
+            vkCmdPushConstants(frame.commandBuffer,
+                trianglePipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(TexturedPushConstants),
+                &pushConstants);
             vkCmdDrawIndexed(frame.commandBuffer, demoMesh.indexCount, 1, 0, 0, 0);
         }
         else if (triangleVertexBuffer.buffer != VK_NULL_HANDLE)
@@ -2919,9 +2953,18 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->graphicsQueue,
             impl_->gpuAllocator,
             impl_->gpuUploader);
-        const auto textureResult =
-            impl_->gpuResources.loadTexture2D("assets/models/monkey/color.png");
-        const auto meshResult = impl_->gpuResources.loadObj("assets/models/monkey/monkey.obj");
+        Halcyon::Result<TextureResource> textureResult =
+            Halcyon::Result<TextureResource>::failure(
+                {Halcyon::ErrorCode::InvalidState, "no startup texture configured"});
+        Halcyon::Result<MeshResource> meshResult = Halcyon::Result<MeshResource>::failure(
+            {Halcyon::ErrorCode::InvalidState, "no startup mesh configured"});
+        if (impl_->config.startupTexturePath != nullptr &&
+            impl_->config.startupMeshPath != nullptr)
+        {
+            textureResult =
+                impl_->gpuResources.loadTexture2D(impl_->config.startupTexturePath);
+            meshResult = impl_->gpuResources.loadObj(impl_->config.startupMeshPath);
+        }
         if (textureResult && meshResult)
         {
             impl_->demoTexture = textureResult.value();

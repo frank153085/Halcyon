@@ -49,6 +49,11 @@ struct RendererConfig
     FeatureMode rayQuery = FeatureMode::Auto;
     const char* applicationName = "Halcyon";
     std::uint32_t applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    // Optional startup resources.  The renderer treats these as external
+    // inputs; applications may leave them null and provide resources through
+    // a different loading path.
+    const char* startupTexturePath = nullptr;
+    const char* startupMeshPath = nullptr;
 };
 
 // Compatibility aliases keep the original M1 public names source-compatible
@@ -122,9 +127,9 @@ public:
     [[nodiscard]] Halcyon::Result<void> initialize(
         GLFWwindow* window, const RendererConfig& config = {});
 
-    // Records one clear (and, when the embedded shader modules are valid, a
-    // small triangle) and presents it.  A minimized/out-of-date surface is
-    // reported in FrameStats instead of being treated as a fatal error.
+    // Records one frame from the supplied immutable packet and presents it.
+    // A minimized/out-of-date surface is reported in FrameStats instead of
+    // being treated as a fatal error.
     [[nodiscard]] FrameStats render(const FramePacket& packet = {});
 
     // The actual recreation is deferred until a non-zero framebuffer extent
