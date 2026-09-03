@@ -897,6 +897,11 @@ FrameGraph& FrameGraph::compile() noexcept
 
 void FrameGraph::execute(CommandContext& commands) noexcept
 {
+    execute(commands, ExecuteOptions{});
+}
+
+void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options) noexcept
+{
     if (!compiled_.success)
     {
         return;
@@ -940,6 +945,12 @@ void FrameGraph::execute(CommandContext& commands) noexcept
         commands.queue_ = p.object->queue_;
         commands.executionIndex_ = static_cast<std::uint32_t>(i);
         FrameGraphResources resources(this, h);
+        PassExecutionContext executionContext{h, p.object->name_,
+            static_cast<std::uint32_t>(i), options.userData};
+        if (options.onBegin)
+        {
+            options.onBegin(executionContext);
+        }
         if (h.index() < passNodes_.size() && passNodes_[h.index()])
         {
             if (auto* renderPass = dynamic_cast<RenderPassNode*>(passNodes_[h.index()].get()))
@@ -972,6 +983,10 @@ void FrameGraph::execute(CommandContext& commands) noexcept
                                           : p.object->errorMessage())),
                 {}};
             return;
+        }
+        if (options.onEnd)
+        {
+            options.onEnd(executionContext);
         }
         for (auto& r : resources_)
         {

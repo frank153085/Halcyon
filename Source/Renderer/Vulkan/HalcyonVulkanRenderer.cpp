@@ -68,6 +68,59 @@ namespace
         16u, limits.maxPerStageDescriptorSamplers, limits.maxDescriptorSetSamplers);
     return config;
 }
+
+[[nodiscard]] VkPipelineStageFlags2 toVkStages(Graph::PipelineStage stages) noexcept
+{
+    VkPipelineStageFlags2 result = VK_PIPELINE_STAGE_2_NONE;
+    if (Graph::any(stages & Graph::PipelineStage::VertexInput)) result |= VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::VertexShader)) result |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::FragmentShader)) result |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::ComputeShader)) result |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::ColorOutput)) result |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::DepthTest)) result |= VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::Transfer)) result |= VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::DrawIndirect)) result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::Host)) result |= VK_PIPELINE_STAGE_2_HOST_BIT;
+    if (Graph::any(stages & Graph::PipelineStage::AllCommands)) result |= VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    return result;
+}
+
+[[nodiscard]] VkAccessFlags2 toVkAccess(Graph::AccessFlags access) noexcept
+{
+    VkAccessFlags2 result = VK_ACCESS_2_NONE;
+    if (Graph::any(access & Graph::AccessFlags::VertexRead)) result |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::IndexRead)) result |= VK_ACCESS_2_INDEX_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::UniformRead)) result |= VK_ACCESS_2_UNIFORM_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::ShaderSampledRead)) result |= VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::ShaderStorageRead)) result |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::ShaderStorageWrite)) result |= VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    if (Graph::any(access & Graph::AccessFlags::IndirectRead)) result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::ColorWrite)) result |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    if (Graph::any(access & Graph::AccessFlags::DepthRead)) result |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::DepthWrite)) result |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    if (Graph::any(access & Graph::AccessFlags::TransferRead)) result |= VK_ACCESS_2_TRANSFER_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::TransferWrite)) result |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    if (Graph::any(access & Graph::AccessFlags::HostWrite)) result |= VK_ACCESS_2_HOST_WRITE_BIT;
+    if (Graph::any(access & Graph::AccessFlags::ColorRead)) result |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+    if (Graph::any(access & Graph::AccessFlags::PresentRead)) result |= VK_ACCESS_2_NONE;
+    return result;
+}
+
+[[nodiscard]] VkImageLayout toVkLayout(Graph::ImageLayout layout) noexcept
+{
+    switch (layout)
+    {
+    case Graph::ImageLayout::Undefined: return VK_IMAGE_LAYOUT_UNDEFINED;
+    case Graph::ImageLayout::General: return VK_IMAGE_LAYOUT_GENERAL;
+    case Graph::ImageLayout::ShaderReadOnly: return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    case Graph::ImageLayout::ColorAttachment: return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    case Graph::ImageLayout::DepthAttachment: return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    case Graph::ImageLayout::TransferSource: return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    case Graph::ImageLayout::TransferDestination: return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    case Graph::ImageLayout::Present: return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    }
+    return VK_IMAGE_LAYOUT_GENERAL;
+}
 #endif
 
 } // namespace
@@ -535,70 +588,24 @@ VoidResult Renderer::Impl::recordFrame(
             frame.queryBase);
     }
 
-    const bool initializedImage = swapchainImageInitialized[imageIndex];
-    VkImageMemoryBarrier2 acquireBarrier{};
-    acquireBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    acquireBarrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-    acquireBarrier.srcAccessMask = VK_ACCESS_2_NONE;
-    acquireBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    acquireBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    acquireBarrier.oldLayout =
-        initializedImage ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED;
-    acquireBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    acquireBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    acquireBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    acquireBarrier.image = swapchainImages[imageIndex];
-    acquireBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    acquireBarrier.subresourceRange.baseMipLevel = 0;
-    acquireBarrier.subresourceRange.levelCount = 1;
-    acquireBarrier.subresourceRange.baseArrayLayer = 0;
-    acquireBarrier.subresourceRange.layerCount = 1;
-
-    VkDependencyInfo dependency{};
-    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependency.imageMemoryBarrierCount = 1;
-    dependency.pImageMemoryBarriers = &acquireBarrier;
-    vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
-
     if (depthImage == VK_NULL_HANDLE || depthImageView == VK_NULL_HANDLE)
     {
         return fail("Depth resources are not available for the active swapchain",
             Halcyon::ErrorCode::InvalidState);
     }
-    // The depth target is shared by the frames-in-flight.  Queue submission
-    // order prevents simultaneous execution, but a submission boundary is
-    // not itself a memory dependency.  Emit a same-layout barrier on every
-    // frame so a previous attachment write is visible before the next clear
-    // and depth test; the first use still performs the UNDEFINED transition.
-    VkImageMemoryBarrier2 depthBarrier{};
-    depthBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    depthBarrier.srcStageMask = depthImageInitialized
-                                    ? (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                                          VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT)
-                                    : VK_PIPELINE_STAGE_2_NONE;
-    depthBarrier.srcAccessMask = depthImageInitialized
-                                     ? (VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-                                     : VK_ACCESS_2_NONE;
-    depthBarrier.dstStageMask =
-        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    depthBarrier.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    depthBarrier.oldLayout = depthImageInitialized ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
-                                                   : VK_IMAGE_LAYOUT_UNDEFINED;
-    depthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthBarrier.image = depthImage;
-    depthBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    depthBarrier.subresourceRange.baseMipLevel = 0;
-    depthBarrier.subresourceRange.levelCount = 1;
-    depthBarrier.subresourceRange.baseArrayLayer = 0;
-    depthBarrier.subresourceRange.layerCount = 1;
-    dependency.pImageMemoryBarriers = &depthBarrier;
-    vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+    struct DynamicRenderingTarget
+    {
+        VkImageView colorView = VK_NULL_HANDLE;
+        VkImageView depthView = VK_NULL_HANDLE;
+    } dynamicTarget{swapchainImageViews[imageIndex], depthImageView};
+#endif
 
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+    auto recordScenePass = [&](const Graph::FrameGraphResources* frameGraphResources) -> VoidResult
+#else
     auto recordScenePass = [&]() -> VoidResult
+#endif
     {
         VkClearValue clearValue{};
         clearValue.color.float32[0] = 0.018f;
@@ -632,6 +639,38 @@ VoidResult Renderer::Impl::recordFrame(
         rendering.colorAttachmentCount = 1;
         rendering.pColorAttachments = &colorAttachment;
         rendering.pDepthAttachment = &depthAttachment;
+#if HALCYON_BUILD_EXPERIMENTAL_M2
+        if (frameGraphResources != nullptr)
+        {
+            const auto passInfo = frameGraphResources->getRenderPassInfo(0);
+            if (passInfo.target.token == &dynamicTarget)
+            {
+                colorAttachment.imageView = dynamicTarget.colorView;
+                depthAttachment.imageView = dynamicTarget.depthView;
+                colorAttachment.loadOp = any(passInfo.clearFlags & Graph::FrameGraphAttachmentFlags::Color0)
+                                             ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                             : VK_ATTACHMENT_LOAD_OP_LOAD;
+                depthAttachment.loadOp = any(passInfo.clearFlags & Graph::FrameGraphAttachmentFlags::Depth)
+                                             ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                             : VK_ATTACHMENT_LOAD_OP_LOAD;
+                colorAttachment.storeOp = any(passInfo.discardEnd & Graph::FrameGraphAttachmentFlags::Color0)
+                                              ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                              : VK_ATTACHMENT_STORE_OP_STORE;
+                depthAttachment.storeOp = any(passInfo.discardEnd & Graph::FrameGraphAttachmentFlags::Depth)
+                                              ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                              : VK_ATTACHMENT_STORE_OP_STORE;
+                colorAttachment.clearValue.color.float32[0] = passInfo.descriptor.clearColor.r;
+                colorAttachment.clearValue.color.float32[1] = passInfo.descriptor.clearColor.g;
+                colorAttachment.clearValue.color.float32[2] = passInfo.descriptor.clearColor.b;
+                colorAttachment.clearValue.color.float32[3] = passInfo.descriptor.clearColor.a;
+                rendering.renderArea.offset = {passInfo.descriptor.viewport.left,
+                    passInfo.descriptor.viewport.top};
+                rendering.renderArea.extent = {passInfo.descriptor.viewport.width,
+                    passInfo.descriptor.viewport.height};
+                rendering.layerCount = passInfo.descriptor.layerCount;
+            }
+        }
+#endif
         vkCmdBeginRendering(frame.commandBuffer, &rendering);
         if (graphicsPipeline.pipeline() != VK_NULL_HANDLE)
         {
@@ -722,14 +761,18 @@ VoidResult Renderer::Impl::recordFrame(
     Graph::BarrierPlanner barrierPlanner;
     bool sceneRecordFailed = false;
     std::string sceneRecordError;
-    const auto color = graph.importTexture(Graph::TextureDesc{.name = "SwapchainColor",
-        .width = swapchainExtent.width,
-        .height = swapchainExtent.height,
-        .depth = 1,
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .format = Graph::TextureFormat::Unknown,
-        .transient = false});
+    Graph::FrameGraphRenderPass::ImportDescriptor importedTargetDescriptor{};
+    importedTargetDescriptor.attachments = Graph::FrameGraphAttachmentFlags::Color0 |
+                                           Graph::FrameGraphAttachmentFlags::Depth;
+    importedTargetDescriptor.viewport.width = swapchainExtent.width;
+    importedTargetDescriptor.viewport.height = swapchainExtent.height;
+    importedTargetDescriptor.clearColor = {0.018f, 0.028f, 0.055f, 1.0f};
+    importedTargetDescriptor.clearFlags = Graph::FrameGraphAttachmentFlags::Color0 |
+                                          Graph::FrameGraphAttachmentFlags::Depth;
+    importedTargetDescriptor.keepOverrideStart = Graph::FrameGraphAttachmentFlags::All;
+    importedTargetDescriptor.keepOverrideEnd = Graph::FrameGraphAttachmentFlags::All;
+    const auto color = graph.import("SwapchainRenderTarget", importedTargetDescriptor,
+        Graph::FrameGraphNativeResource{&dynamicTarget});
     const auto depth = graph.importTexture(Graph::TextureDesc{.name = "Depth",
         .width = swapchainExtent.width,
         .height = swapchainExtent.height,
@@ -738,22 +781,33 @@ VoidResult Renderer::Impl::recordFrame(
         .arrayLayers = 1,
         .format = Graph::TextureFormat::D32Float,
         .transient = false});
-    auto scenePass = graph.addPass("Scene", true);
-    scenePass.write(color, Graph::ResourceUsage::ColorAttachment)
-        .write(depth, Graph::ResourceUsage::DepthAttachment)
-        .output(color)
-        .setExecute(
-            [&recordScenePass, &sceneRecordFailed, &sceneRecordError](
-                const Graph::PassExecutionContext&)
+    graph.addPass<Graph::FrameGraph::Empty>("Scene",
+        [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            const auto colorOutput = builder.write(color, Graph::ResourceUsage::ColorAttachment);
+            const auto depthOutput = builder.write(depth, Graph::ResourceUsage::DepthAttachment);
+            Graph::FrameGraphRenderPass::Descriptor descriptor{};
+            descriptor.attachments.color[0] = colorOutput;
+            descriptor.attachments.depth = depthOutput;
+            descriptor.viewport.width = swapchainExtent.width;
+            descriptor.viewport.height = swapchainExtent.height;
+            descriptor.clearColor = importedTargetDescriptor.clearColor;
+            descriptor.clearFlags = importedTargetDescriptor.clearFlags;
+            builder.declareRenderPass("Scene", descriptor);
+            builder.sideEffect();
+        },
+        [&](const Graph::FrameGraphResources& resources,
+            const Graph::FrameGraph::Empty&,
+            Graph::CommandContext&)
+        {
+            HALCYON_PROFILE_SCOPE("FrameGraph::pass");
+            const VoidResult result = recordScenePass(&resources);
+            if (!result)
             {
-                HALCYON_PROFILE_SCOPE("FrameGraph::pass");
-                const VoidResult result = recordScenePass();
-                if (!result)
-                {
-                    sceneRecordFailed = true;
-                    sceneRecordError = result.error().describe();
-                }
-            });
+                sceneRecordFailed = true;
+                sceneRecordError = result.error().describe();
+            }
+        });
 
     const Graph::CompileResult compiled = graph.compile();
     if (!compiled)
@@ -769,9 +823,26 @@ VoidResult Renderer::Impl::recordFrame(
             frame.passNames.push_back(pass->name);
         }
     }
+    barrierPlanner.begin();
+    barrierPlanner.setState(Graph::ResourceKind::Texture, color.index(), color.version(),
+        Graph::BarrierState{Graph::PipelineStage::None,
+            Graph::AccessFlags::None,
+            swapchainImageInitialized[imageIndex] ? Graph::ImageLayout::Present
+                                                   : Graph::ImageLayout::Undefined,
+            Graph::QueueClass::Graphics,
+            false});
+    barrierPlanner.setState(Graph::ResourceKind::Texture, depth.index(), depth.version(),
+        Graph::BarrierState{depthImageInitialized ? Graph::PipelineStage::DepthTest
+                                                  : Graph::PipelineStage::None,
+            depthImageInitialized ? (Graph::AccessFlags::DepthRead | Graph::AccessFlags::DepthWrite)
+                                  : Graph::AccessFlags::None,
+            depthImageInitialized ? Graph::ImageLayout::DepthAttachment
+                                  : Graph::ImageLayout::Undefined,
+            Graph::QueueClass::Graphics,
+            depthImageInitialized});
     Graph::ExecuteOptions executeOptions;
     executeOptions.userData = &frame;
-    executeOptions.onBegin = [this, &frame, &compiled, &barrierPlanner](
+    executeOptions.onBegin = [this, &frame, &compiled, &barrierPlanner, color, depth, imageIndex](
                                  const Graph::PassExecutionContext& context)
     {
         if (const auto* pass = compiled.pass(context.handle); pass != nullptr)
@@ -781,7 +852,55 @@ VoidResult Renderer::Impl::recordFrame(
             // emitted.  Keeping this step at the pass boundary ensures the
             // graph and command recording cannot silently diverge.
             const auto barriers = barrierPlanner.plan(pass->accesses, pass->queue);
-            (void)barriers;
+            std::vector<VkImageMemoryBarrier2> imageBarriers;
+            imageBarriers.reserve(barriers.size());
+            for (const auto& barrier : barriers)
+            {
+                if (!barrier.required || barrier.access.kind != Graph::ResourceKind::Texture)
+                {
+                    continue;
+                }
+                VkImage image = VK_NULL_HANDLE;
+                VkImageAspectFlags aspect = 0;
+                if (barrier.access.resourceIndex == color.index())
+                {
+                    image = swapchainImages[imageIndex];
+                    aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+                }
+                else if (barrier.access.resourceIndex == depth.index())
+                {
+                    image = depthImage;
+                    aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+                }
+                if (image == VK_NULL_HANDLE)
+                {
+                    continue;
+                }
+                VkImageMemoryBarrier2 vkBarrier{};
+                vkBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                vkBarrier.srcStageMask = toVkStages(barrier.before.stage);
+                vkBarrier.srcAccessMask = toVkAccess(barrier.before.access);
+                vkBarrier.dstStageMask = toVkStages(barrier.after.stage);
+                vkBarrier.dstAccessMask = toVkAccess(barrier.after.access);
+                vkBarrier.oldLayout = toVkLayout(barrier.before.layout);
+                vkBarrier.newLayout = toVkLayout(barrier.after.layout);
+                vkBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkBarrier.image = image;
+                vkBarrier.subresourceRange.aspectMask = aspect;
+                vkBarrier.subresourceRange.levelCount = 1;
+                vkBarrier.subresourceRange.layerCount = 1;
+                imageBarriers.push_back(vkBarrier);
+            }
+            if (!imageBarriers.empty())
+            {
+                VkDependencyInfo dependency{};
+                dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dependency.imageMemoryBarrierCount =
+                    static_cast<std::uint32_t>(imageBarriers.size());
+                dependency.pImageMemoryBarriers = imageBarriers.data();
+                vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
+            }
         }
         (void)frameContext.writePassTimestamp(
             frame.commandBuffer, frame, context.executionIndex, true);
@@ -791,10 +910,11 @@ VoidResult Renderer::Impl::recordFrame(
         (void)frameContext.writePassTimestamp(
             frame.commandBuffer, frame, context.executionIndex, false);
     };
-    const auto execution = compiled.execute(executeOptions);
-    if (!execution)
+    Graph::CommandContext graphCommands;
+    graph.execute(graphCommands, executeOptions);
+    if (graph.lastError())
     {
-        return fail(execution.error.message, Halcyon::ErrorCode::InvalidState);
+        return fail(graph.lastError().message, Halcyon::ErrorCode::InvalidState);
     }
     if (sceneRecordFailed)
     {
@@ -823,7 +943,14 @@ VoidResult Renderer::Impl::recordFrame(
     presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     presentBarrier.image = swapchainImages[imageIndex];
-    presentBarrier.subresourceRange = acquireBarrier.subresourceRange;
+    presentBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    presentBarrier.subresourceRange.baseMipLevel = 0;
+    presentBarrier.subresourceRange.levelCount = 1;
+    presentBarrier.subresourceRange.baseArrayLayer = 0;
+    presentBarrier.subresourceRange.layerCount = 1;
+    VkDependencyInfo dependency{};
+    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependency.imageMemoryBarrierCount = 1;
     dependency.pImageMemoryBarriers = &presentBarrier;
     vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
 

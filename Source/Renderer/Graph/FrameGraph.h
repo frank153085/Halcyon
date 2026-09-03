@@ -442,6 +442,7 @@ public:
         return compile();
     }
     void execute(CommandContext&) noexcept;
+    void execute(CommandContext&, const ExecuteOptions&) noexcept;
     CompileResult::ExecutionResult execute(const ExecuteOptions& options = {}) const;
     operator CompileResult() const
     {

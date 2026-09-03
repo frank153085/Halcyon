@@ -128,6 +128,11 @@ class BarrierPlanner
 {
 public:
     void begin() noexcept;
+    // Seed a resource with the state established outside the frame graph
+    // (for example a swapchain image acquired in PRESENT layout). This avoids
+    // treating every frame's first use as an UNDEFINED transition.
+    void setState(ResourceKind kind, std::uint32_t index, std::uint32_t generation,
+        BarrierState state);
     [[nodiscard]] std::vector<ResourceBarrier> plan(
         std::span<const ResourceAccess> accesses, QueueClass queue);
     [[nodiscard]] const BarrierState* state(

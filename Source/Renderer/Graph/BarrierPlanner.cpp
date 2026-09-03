@@ -198,6 +198,12 @@ void BarrierPlanner::begin() noexcept
     states_.clear();
 }
 
+void BarrierPlanner::setState(ResourceKind kind, std::uint32_t index,
+    std::uint32_t generation, BarrierState state)
+{
+    states_[Key{kind, index, generation}] = state;
+}
+
 std::vector<ResourceBarrier> BarrierPlanner::plan(
     std::span<const ResourceAccess> accesses, QueueClass queue)
 {
