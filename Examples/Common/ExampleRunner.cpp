@@ -2,7 +2,6 @@
 
 #include "Halcyon/Application.h"
 
-#include <filesystem>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
@@ -12,33 +11,10 @@ namespace Halcyon::Examples
 namespace
 {
 
-std::string resolveStartupPath(const char* path)
-{
-    if (path == nullptr || *path == '\0')
-    {
-        return {};
-    }
-    namespace fs = std::filesystem;
-    std::error_code error;
-    const fs::path relativePath(path);
-    if (relativePath.is_absolute() || fs::exists(relativePath, error))
-    {
-        return relativePath.string();
-    }
-#ifdef HALCYON_EXAMPLE_SOURCE_DIR
-    const fs::path sourcePath = fs::path(HALCYON_EXAMPLE_SOURCE_DIR) / relativePath;
-    error.clear();
-    if (fs::exists(sourcePath, error))
-    {
-        return sourcePath.string();
-    }
-#endif
-    return relativePath.string();
-}
-
 struct State
 {
     Entity modelEntity{};
+    std::string instanceName;
 };
 
 ApplicationCallbacks makeCallbacks(
@@ -68,13 +44,14 @@ ApplicationCallbacks makeCallbacks(
             return result;
         }
 
-        state->modelEntity = engine.scene().createEntity();
-        (void)engine.scene().transforms().add(state->modelEntity);
-        (void)engine.scene().renderables().add(state->modelEntity);
+        const SceneInstanceHandle instance =
+            engine.sceneManager().findInstance(state->instanceName);
+        state->modelEntity = engine.sceneManager().rootEntity(instance);
         if (engine.scene().transforms().get(state->modelEntity) == nullptr)
         {
-            return Result<void>::failure(
-                MakeError(ErrorCode::Backend, "failed to create model transform", "Example"));
+            return Result<void>::failure(MakeError(ErrorCode::NotFound,
+                "configured scene instance is unavailable: " + state->instanceName,
+                "Example"));
         }
         return Result<void>::success();
     };
@@ -92,13 +69,9 @@ ApplicationCallbacks makeCallbacks(
         transform->dirty = true;
         return Result<void>::success();
     };
-    callbacks.onShutdown = [state](Engine& engine)
+    callbacks.onShutdown = [state](Engine&)
     {
-        if (state->modelEntity.isValid())
-        {
-            engine.scene().destroyEntity(state->modelEntity);
-            state->modelEntity = Entity::invalid();
-        }
+        state->modelEntity = Entity::invalid();
     };
     if (definition.onInitialize)
     {
@@ -117,16 +90,52 @@ ApplicationCallbacks makeCallbacks(
 
 } // namespace
 
+StaticScene makeTriangleScene()
+{
+    StaticScene scene;
+    scene.sourcePath = "memory://halcyon/example-triangle";
+    StaticSceneMaterial material;
+    material.name = "TriangleMaterial";
+    material.pbr.baseColor = {1.0f, 0.35f, 0.18f, 1.0f};
+    material.pbr.roughness = 0.75f;
+    scene.materials.push_back(material);
+
+    StaticScenePrimitive primitive;
+    primitive.vertices = {
+        StaticSceneVertex{{0.0f, -0.72f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.5f, 1.0f}},
+        StaticSceneVertex{{0.72f, 0.72f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        StaticSceneVertex{{-0.72f, 0.72f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+    };
+    primitive.indices = {0, 1, 2};
+    primitive.boundsMin = {-0.72f, -0.72f, 0.0f};
+    primitive.boundsMax = {0.72f, 0.72f, 0.0f};
+    scene.primitives.push_back(std::move(primitive));
+
+    StaticSceneNode node;
+    node.name = "Triangle";
+    node.primitiveIndices.push_back(0);
+    scene.nodes.push_back(std::move(node));
+    return scene;
+}
+
 int run(const ExampleDefinition& definition, int argc, char** argv)
 {
     ApplicationConfig config;
     config.window.title = definition.title != nullptr ? definition.title : "Halcyon Example";
-    const std::string startupTexture = resolveStartupPath(definition.startupTexturePath);
-    const std::string startupMesh = resolveStartupPath(definition.startupMeshPath);
-    config.engine.startupTexturePath = startupTexture;
-    config.engine.startupMeshPath = startupMesh;
+    config.engine.scene = definition.scene;
+#ifdef HALCYON_ASSET_ROOT
+    if (config.engine.scene.assetRoot.empty())
+    {
+        config.engine.scene.assetRoot = HALCYON_ASSET_ROOT;
+    }
+#endif
 
     auto state = std::make_shared<State>();
+    state->instanceName = definition.animatedInstanceName;
+    if (state->instanceName.empty() && !definition.scene.instances.empty())
+    {
+        state->instanceName = definition.scene.instances.front().name;
+    }
     return Application::run(argc, argv, std::move(config), makeCallbacks(state, definition));
 }
 

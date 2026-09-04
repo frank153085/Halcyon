@@ -1,11 +1,11 @@
 #pragma once
 
+#include "../Scene/SceneDatabase.h"
 #include "GpuAllocator.h"
 #include "GpuUploader.h"
-#include "../Scene/StaticSceneLoader.h"
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -56,9 +56,8 @@ public:
     // and black for metallic/emissive channels when an image is absent.
     [[nodiscard]] Halcyon::Result<TextureResource> loadSolidColorTexture(
         std::array<std::uint8_t, 4> rgba, bool srgb = false);
-    [[nodiscard]] Halcyon::Result<MeshResource> loadObj(const std::string& path);
-    [[nodiscard]] Halcyon::Result<MeshResource> uploadPrimitive(
-        const Halcyon::Renderer::Scene::StaticScenePrimitive& primitive);
+    [[nodiscard]] Halcyon::Result<MeshResource> uploadMesh(
+        const Halcyon::Renderer::Scene::SceneMesh& mesh);
     void destroy(TextureResource& texture) noexcept;
     void destroy(MeshResource& mesh) noexcept;
     void shutdown() noexcept;

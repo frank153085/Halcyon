@@ -3,7 +3,6 @@
 #include "Application/WindowInternal.h"
 #include "EngineInternal.h"
 #include "Halcyon/Window.h"
-#include "Renderer/Scene/Ecs/RenderExtractor.h"
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.h"
 
 #include <exception>
@@ -17,12 +16,10 @@ struct Engine::Impl
 {
     Platform::Window* window = nullptr;
     Vulkan::Renderer renderer{};
-    Scene scene{};
-    SceneDatabase sceneDatabase{};
+    SceneManager sceneManager{};
     View view{};
     Capabilities capabilities{};
     bool initialized = false;
-    std::filesystem::path loadedScenePath{};
 };
 
 namespace
@@ -132,18 +129,6 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.framesInFlight = config.framesInFlight;
     backendConfig.enableValidation = config.enableValidation;
     backendConfig.rayQuery = static_cast<Vulkan::FeatureMode>(config.rayQuery);
-    backendConfig.startupTexturePath = config.startupTexturePath.empty()
-                                           ? nullptr
-                                           : config.startupTexturePath.c_str();
-    backendConfig.startupMeshPath = config.startupMeshPath.empty()
-                                        ? nullptr
-                                        : config.startupMeshPath.c_str();
-    // Engine owns the scene database/ECS population and performs the upload
-    // through loadStaticScene below.  Do not ask the renderer to upload the
-    // same asset during initialization and then immediately tear it down for
-    // a second upload; some Vulkan drivers report heap corruption when image
-    // views and descriptor pools are recreated in that back-to-back pattern.
-    backendConfig.startupScenePath = nullptr;
     backendConfig.exposure = config.exposure;
     backendConfig.enableTaa = config.enableTaa;
     backendConfig.enableClusteredLighting = config.enableClusteredLighting;
@@ -182,19 +167,25 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     Engine* engine = new (std::nothrow) Engine(std::move(impl));
     if (engine == nullptr)
     {
+        // The renderer is already initialized at this point; release it
+        // before returning so an allocation failure cannot leak the Vulkan
+        // device and its surface. A nothrow new-expression does not run the
+        // initializer when allocation fails, so local ownership is retained.
+        if (impl != nullptr)
+        {
+            impl->renderer.shutdown();
+        }
         return Result<std::unique_ptr<Engine>>::failure(
             MakeError(ErrorCode::OutOfMemory, "engine allocation failed", "Engine::create"));
     }
     auto resultEngine = std::unique_ptr<Engine>(engine);
-    if (!config.startupScenePath.empty())
+    const auto sceneResult =
+        resultEngine->impl_->sceneManager.initialize(config.scene, resultEngine->impl_->renderer);
+    if (!sceneResult)
     {
-        const auto sceneResult = resultEngine->loadStaticScene(config.startupScenePath);
-        if (!sceneResult)
-        {
-            resultEngine->shutdown();
-            return Result<std::unique_ptr<Engine>>::failure(
-                sceneResult.error().withContext("Engine::create"));
-        }
+        resultEngine->shutdown();
+        return Result<std::unique_ptr<Engine>>::failure(
+            sceneResult.error().withContext("Engine::create"));
     }
     return Result<std::unique_ptr<Engine>>::success(std::move(resultEngine));
 }
@@ -203,6 +194,7 @@ void Engine::shutdown() noexcept
 {
     if (impl_ != nullptr)
     {
+        impl_->sceneManager.shutdown();
         impl_->renderer.shutdown();
         impl_->initialized = false;
         impl_->window = nullptr;
@@ -212,13 +204,25 @@ void Engine::shutdown() noexcept
 Scene& Engine::scene() noexcept
 {
     static Scene empty{};
-    return impl_ != nullptr ? impl_->scene : empty;
+    return impl_ != nullptr ? impl_->sceneManager.scene() : empty;
 }
 
 const Scene& Engine::scene() const noexcept
 {
     static const Scene empty{};
-    return impl_ != nullptr ? impl_->scene : empty;
+    return impl_ != nullptr ? impl_->sceneManager.scene() : empty;
+}
+
+SceneManager& Engine::sceneManager() noexcept
+{
+    static SceneManager empty{};
+    return impl_ != nullptr ? impl_->sceneManager : empty;
+}
+
+const SceneManager& Engine::sceneManager() const noexcept
+{
+    static const SceneManager empty{};
+    return impl_ != nullptr ? impl_->sceneManager : empty;
 }
 
 View& Engine::defaultView() noexcept
@@ -243,9 +247,8 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
 
     try
     {
-        impl_->scene.updateTransforms();
-        auto packet = Renderer::Scene::Ecs::RenderExtractor::extract(
-            impl_->scene, impl_->view.camera().data(), frameIndex);
+        impl_->sceneManager.scene().updateTransforms();
+        auto packet = impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
         const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.view());
         const FrameStats stats = translateStats(backendStats);
         if (stats.deviceLost)
@@ -305,87 +308,12 @@ Result<void> Engine::resize(Extent2D extent)
     return Result<void>::success();
 }
 
-Result<void> Engine::loadStaticScene(const std::filesystem::path& path)
-{
-    if (impl_ == nullptr || !impl_->initialized)
-    {
-        return Result<void>::failure(
-            MakeError(ErrorCode::InvalidState, "engine is not initialized", "Engine::loadStaticScene"));
-    }
-    if (path.empty())
-    {
-        return Result<void>::failure(
-            MakeError(ErrorCode::InvalidArgument, "scene path is empty", "Engine::loadStaticScene"));
-    }
-    const std::filesystem::path normalized = path.lexically_normal();
-    if (impl_->loadedScenePath == normalized && !impl_->scene.members().empty())
-    {
-        return Result<void>::success();
-    }
-    const auto loaded = Renderer::Scene::loadStaticScene(normalized);
-    if (!loaded)
-    {
-        return Result<void>::failure(loaded.error().withContext("Engine::loadStaticScene"));
-    }
-    impl_->sceneDatabase.clear();
-    const auto imported = impl_->sceneDatabase.importStaticScene(loaded.value());
-    if (!imported)
-    {
-        return Result<void>::failure(imported.error().withContext("Engine::loadStaticScene"));
-    }
-    const auto rendererResult = impl_->renderer.loadStaticScene(normalized.string().c_str());
-    if (!rendererResult)
-    {
-        return rendererResult.error().withContext("Engine::loadStaticScene");
-    }
-    impl_->scene.clear();
-    for (std::size_t i = 0; i < loaded.value().primitives.size(); ++i)
-    {
-        const auto entity = impl_->scene.createEntity();
-        (void)impl_->scene.transforms().add(entity);
-        auto* transform = impl_->scene.transforms().get(entity);
-        if (transform != nullptr)
-        {
-            transform->localTransform = loaded.value().primitives[i].worldTransform;
-            transform->dirty = true;
-        }
-        RenderableComponent renderable{};
-        if (i < imported.value().meshes.size()) renderable.mesh = imported.value().meshes[i];
-        const auto materialIndex = loaded.value().primitives[i].materialIndex;
-        if (materialIndex < imported.value().materials.size())
-        {
-            renderable.material = imported.value().materials[materialIndex];
-        }
-        renderable.flags = static_cast<std::uint32_t>(RenderableFlags::CastShadow) |
-                           static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow);
-        if (materialIndex < loaded.value().materials.size())
-        {
-            const auto& material = loaded.value().materials[materialIndex];
-            if (material.transparent)
-            {
-                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::Transparent);
-            }
-            if (material.doubleSided)
-            {
-                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::DoubleSided);
-            }
-            if (material.alphaMasked)
-            {
-                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::AlphaMasked);
-            }
-        }
-        (void)impl_->scene.renderables().add(entity, renderable);
-    }
-    impl_->loadedScenePath = normalized;
-    return Result<void>::success();
-}
-
 Result<void> Engine::captureScreenshot(const std::filesystem::path& path)
 {
     if (impl_ == nullptr || !impl_->initialized)
     {
-        return Result<void>::failure(
-            MakeError(ErrorCode::InvalidState, "engine is not initialized", "Engine::captureScreenshot"));
+        return Result<void>::failure(MakeError(
+            ErrorCode::InvalidState, "engine is not initialized", "Engine::captureScreenshot"));
     }
     return impl_->renderer.captureScreenshot(path);
 }

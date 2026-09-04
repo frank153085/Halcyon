@@ -55,8 +55,8 @@ Halcyon::Result<void> VulkanPipeline::createInternal(VkDevice device,
         {Halcyon::ErrorCode::NotFound, "fragment shader is unavailable"});
     if (texturedRequested && textureSetLayout != VK_NULL_HANDLE)
     {
-        vertex = shaderLibrary.create("textured.vert.spv");
-        fragment = shaderLibrary.create("textured.frag.spv");
+        vertex = shaderLibrary.create("textured.vert.spv", EmbeddedShaders::kSceneVertexSpirv);
+        fragment = shaderLibrary.create("textured.frag.spv", EmbeddedShaders::kSceneFragmentSpirv);
         textured_ = vertex && fragment;
         if (!textured_)
         {

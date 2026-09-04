@@ -12,9 +12,8 @@ struct State
 {
     Entity model{};
     std::string scene;
-    bool ownsModel = false;
 };
-}
+} // namespace
 
 ApplicationCallbacks makeCallbacks(const std::string& sceneName)
 {
@@ -28,9 +27,15 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
         perspective.nearPlane = 0.05f;
         perspective.farPlane = state->scene == "sponza" ? 300.0f : 100.0f;
         auto result = engine.defaultView().setPerspective(perspective);
-        if (!result) return result;
+        if (!result)
+        {
+            return result;
+        }
         result = engine.defaultView().setViewport(engine.defaultView().viewport());
-        if (!result) return result;
+        if (!result)
+        {
+            return result;
+        }
         result = state->scene == "sponza"
                      // The Khronos Sponza asset is authored in a roughly
                      // 30x12x20 metre envelope after its root 0.008 scale.
@@ -39,23 +44,19 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
                      // wall close-up.
                      ? engine.defaultView().lookAt({0.0f, 2.5f, 0.0f}, {0.0f, 2.5f, -1.0f})
                      : engine.defaultView().lookAt({0.0f, 0.1f, 2.6f}, {0.0f, 0.0f, 0.0f});
-        if (!result) return result;
-        if (!engine.scene().renderables().entities().empty())
+        if (!result)
         {
-            // Engine::loadStaticScene already created one ECS entity per
-            // primitive.  Keep those authored transforms intact; the Vulkan
-            // resource upload uses the same ranges and material indices.
-            state->model = engine.scene().renderables().entities().front();
+            return result;
         }
-        else
+        const SceneInstanceHandle instance = engine.sceneManager().findInstance("main");
+        state->model = engine.sceneManager().rootEntity(instance);
+        if (!state->model.isValid())
         {
-            state->model = engine.scene().createEntity();
-            (void)engine.scene().transforms().add(state->model);
-            (void)engine.scene().renderables().add(state->model);
-            state->ownsModel = true;
+            return Result<void>::failure(MakeError(
+                ErrorCode::NotFound, "configured M3 scene instance is unavailable", "M3Demo"));
         }
-        // A deterministic sun and fill light make the fallback and downloaded
-        // scenes visibly lit even when no environment file is present.
+        // A deterministic sun and fill light keep downloaded scenes visibly
+        // lit even when no environment file is present.
         const Entity sun = engine.scene().createEntity();
         LightComponent sunLight{};
         sunLight.type = LightType::Directional;
@@ -75,12 +76,15 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
     };
     callbacks.onFrame = [state](Engine& engine, const FrameInfo& frame) -> Result<void>
     {
-        if (!state->ownsModel) return Result<void>::success();
+        if (state->scene == "sponza")
+        {
+            return Result<void>::success();
+        }
         auto* transform = engine.scene().transforms().get(state->model);
         if (transform == nullptr)
         {
-            return Result<void>::failure(MakeError(ErrorCode::InvalidState,
-                "M3 model transform is unavailable", "M3Demo"));
+            return Result<void>::failure(
+                MakeError(ErrorCode::InvalidState, "M3 model transform is unavailable", "M3Demo"));
         }
         // Keep the camera and exposure deterministic by default.  A very slow
         // rigid rotation still exercises motion vectors and TAA when enabled.
@@ -89,9 +93,9 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
         transform->dirty = true;
         return Result<void>::success();
     };
-    callbacks.onShutdown = [state](Engine& engine)
+    callbacks.onShutdown = [state](Engine&)
     {
-        if (state->ownsModel && state->model.isValid()) engine.scene().destroyEntity(state->model);
+        state->model = Entity::invalid();
     };
     return callbacks;
 }

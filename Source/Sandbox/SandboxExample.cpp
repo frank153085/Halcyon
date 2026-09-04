@@ -43,13 +43,13 @@ ApplicationCallbacks makeCallbacks()
             return result;
         }
 
-        state->modelEntity = engine.scene().createEntity();
-        (void)engine.scene().transforms().add(state->modelEntity);
-        (void)engine.scene().renderables().add(state->modelEntity);
+        const SceneInstanceHandle instance = engine.sceneManager().findInstance("main");
+        state->modelEntity = engine.sceneManager().rootEntity(instance);
         if (engine.scene().transforms().get(state->modelEntity) == nullptr)
         {
-            return Result<void>::failure(
-                MakeError(ErrorCode::Backend, "failed to create model transform", "Sandbox"));
+            return Result<void>::failure(MakeError(ErrorCode::NotFound,
+                "configured sandbox scene instance is unavailable",
+                "Sandbox"));
         }
         return Result<void>::success();
     };
@@ -67,13 +67,9 @@ ApplicationCallbacks makeCallbacks()
         transform->dirty = true;
         return Result<void>::success();
     };
-    callbacks.onShutdown = [state](Engine& engine)
+    callbacks.onShutdown = [state](Engine&)
     {
-        if (state->modelEntity.isValid())
-        {
-            engine.scene().destroyEntity(state->modelEntity);
-            state->modelEntity = Entity::invalid();
-        }
+        state->modelEntity = Entity::invalid();
     };
     return callbacks;
 }

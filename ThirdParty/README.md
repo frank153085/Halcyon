@@ -17,7 +17,7 @@ examples, tools, and installation rules by default.
 | --- | --- | --- |
 | M1 | Vulkan Memory Allocator, stb, robin-map | Vulkan allocation, image loading, compact hash tables |
 | M2 | Dear ImGui, GoogleTest, SPIR-V Tools, SPIR-V Headers | Debug UI, tests, shader validation and inspection |
-| M3 | cgltf, MikkTSpace, Basis Universal | glTF loading, tangent generation, compressed textures |
+| M3 | fastgltf, MikkTSpace, Basis Universal | glTF loading, tangent generation, compressed textures |
 | M4 | meshoptimizer, Draco | LOD and meshlet preparation, compressed geometry |
 | M5 | Google Benchmark, zstd | Performance regression tests and cooked-cache compression |
 
@@ -54,7 +54,7 @@ redistributed.
 | `googletest` | `d94a7326e97c9d564950e36c48ac402ba4933985` | `LICENSE` |
 | `spirv-headers` | `496543121ce6419f23d6fa5d7194ba66c36212d2` | `LICENSE` |
 | `spirv-tools` | `3a2f6ea08f17f149908a17ff9ba6cba4791d7f96` | `LICENSE` |
-| `cgltf` | `85cd62382dfea638278962690cf515023f33ed00` | `LICENSE` |
+| `fastgltf` | `d4734a7e55d8d25155e755d895e018e423845cd0` | `LICENSE.md` |
 | `mikktspace` | `3e895b49d05ea07e4c2133156cfa94369e19e409` | Repository license files |
 | `basisu` | `99f52d63aa6799cbdaecfe977111dc5ec3b31d47` | `LICENSE` |
 | `meshoptimizer` | `661f8626c0bf7e49dd139254e09ab93abf4f4a59` | `LICENSE` |

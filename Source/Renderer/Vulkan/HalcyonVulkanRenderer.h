@@ -8,7 +8,7 @@
 #include "../../Core/Result.h"
 #include "../Scene/Camera.h"
 #include "../Scene/FramePacket.h"
-#include "GpuResourceManager.h"
+#include "../Scene/SceneDatabase.h"
 #include "Halcyon/RenderTypes.h"
 
 #include <array>
@@ -37,12 +37,6 @@ struct RendererConfig
     FeatureMode rayQuery = FeatureMode::Auto;
     const char* applicationName = "Halcyon";
     std::uint32_t applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    // Optional startup resources.  The renderer treats these as external
-    // inputs; applications may leave them null and provide resources through
-    // a different loading path.
-    const char* startupTexturePath = nullptr;
-    const char* startupMeshPath = nullptr;
-    const char* startupScenePath = nullptr;
     float exposure = 0.0f;
     bool enableTaa = true;
     bool enableClusteredLighting = true;
@@ -97,13 +91,17 @@ public:
     [[nodiscard]] const std::string& lastError() const noexcept;
     [[nodiscard]] bool initialized() const noexcept;
 
-    // Resource helpers keep VMA and staging details inside the Vulkan backend.
-    [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(const char* path);
-    [[nodiscard]] Halcyon::Result<MeshResource> loadObj(const char* path);
-    [[nodiscard]] Halcyon::Result<void> loadStaticScene(const char* path);
+    // SceneManager is the only producer of backend resources. These methods
+    // consume and release stable SceneDatabase records without parsing files.
+    [[nodiscard]] Halcyon::Result<void> uploadSceneAsset(
+        const Halcyon::Renderer::Scene::SceneDatabase& database,
+        const Halcyon::Renderer::Scene::SceneImportResult& imported);
+    [[nodiscard]] Halcyon::Result<void> releaseSceneAsset(
+        const Halcyon::Renderer::Scene::SceneImportResult& imported);
+    // Scene topology or material changes invalidate temporal history before
+    // the next frame is submitted.
+    void invalidateTaaHistory() noexcept;
     [[nodiscard]] Halcyon::Result<void> captureScreenshot(const std::filesystem::path& path);
-    void destroy(TextureResource& texture) noexcept;
-    void destroy(MeshResource& mesh) noexcept;
 
     // Read-only escape hatches for tools that need to attach a profiler or
     // RenderDoc marker.  They may return VK_NULL_HANDLE before initialization.

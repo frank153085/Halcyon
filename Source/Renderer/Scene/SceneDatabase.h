@@ -6,8 +6,10 @@
 #include "StaticSceneLoader.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -46,12 +48,15 @@ struct SceneTexture
     std::string path;
     bool srgb = false;
     bool generatedDefault = false;
+    std::array<std::uint8_t, 4> solidColor{255, 255, 255, 255};
 };
 
 struct SceneImportResult
 {
     std::vector<Resources::MeshHandle> meshes;
     std::vector<Resources::MaterialHandle> materials;
+    // Unique texture records retained by this asset import. Texture records
+    // are shared across assets and must be released as a batch.
     std::vector<Resources::TextureHandle> textures;
 };
 
@@ -81,24 +86,115 @@ public:
         return textures_.tryEmplace(std::move(texture));
     }
 
+    // Drop one asset's texture references, destroying records only after the
+    // final asset releases them. This is intentionally separate from destroy,
+    // which remains an explicit low-level operation for callers that own a
+    // record directly.
+    void releaseImportedTextures(std::span<const TextureHandle> handles) noexcept
+    {
+        for (const TextureHandle handle : handles)
+        {
+            const auto ref = textureReferences_.find(handle);
+            if (ref == textureReferences_.end())
+            {
+                continue;
+            }
+            if (ref->second > 1u)
+            {
+                --ref->second;
+                continue;
+            }
+            textureReferences_.erase(ref);
+            (void)destroy(handle);
+        }
+    }
+
     [[nodiscard]] Halcyon::Result<SceneImportResult> importStaticScene(const StaticScene& scene)
     {
-        SceneImportResult imported;
-        textureMap_.clear();
-        const auto importTexture = [&](const std::string& path, bool srgb, const char* fallback)
-            -> Halcyon::Result<TextureHandle>
+        // Validate procedural input with the same invariants enforced by the
+        // glTF loader. Keeping this at the common import boundary guarantees
+        // that in-memory and file-backed assets cannot create malformed GPU
+        // records or partially attached ECS instances.
+        const std::size_t materialCount = std::max<std::size_t>(1u, scene.materials.size());
+        for (const auto& primitive : scene.primitives)
         {
-            const std::string key = path.empty() ? std::string(fallback) : path;
+            if (primitive.vertices.empty() || primitive.indices.empty() ||
+                primitive.indices.size() % 3u != 0u)
+            {
+                return Halcyon::Result<SceneImportResult>::failure(Halcyon::Error{
+                    Halcyon::ErrorCode::InvalidArgument,
+                    "scene primitive has empty or incomplete geometry"});
+            }
+            if (primitive.materialIndex >= materialCount)
+            {
+                return Halcyon::Result<SceneImportResult>::failure(Halcyon::Error{
+                    Halcyon::ErrorCode::InvalidArgument,
+                    "scene primitive material index is out of range"});
+            }
+            for (const std::uint32_t index : primitive.indices)
+            {
+                if (index >= primitive.vertices.size())
+                {
+                    return Halcyon::Result<SceneImportResult>::failure(Halcyon::Error{
+                        Halcyon::ErrorCode::InvalidArgument,
+                        "scene primitive index is out of range"});
+                }
+            }
+        }
+        for (const auto& node : scene.nodes)
+        {
+            if (node.parent < -1 ||
+                (node.parent >= 0 && static_cast<std::size_t>(node.parent) >= scene.nodes.size()))
+            {
+                return Halcyon::Result<SceneImportResult>::failure(Halcyon::Error{
+                    Halcyon::ErrorCode::InvalidArgument,
+                    "scene node parent index is out of range"});
+            }
+            for (const std::uint32_t primitive : node.primitiveIndices)
+            {
+                if (primitive >= scene.primitives.size())
+                {
+                    return Halcyon::Result<SceneImportResult>::failure(Halcyon::Error{
+                        Halcyon::ErrorCode::InvalidArgument,
+                        "scene node primitive index is out of range"});
+                }
+            }
+        }
+        SceneImportResult imported;
+        const auto importTexture =
+            [&](const std::string& path,
+                bool srgb,
+                const char* fallback,
+                std::array<std::uint8_t, 4> solidColor) -> Halcyon::Result<TextureHandle>
+        {
+            std::string key = path.empty() ? std::string(fallback) : path;
+            if (path.empty())
+            {
+                for (const std::uint8_t channel : solidColor)
+                {
+                    constexpr char digits[] = "0123456789ABCDEF";
+                    key.push_back(digits[channel >> 4u]);
+                    key.push_back(digits[channel & 0x0Fu]);
+                }
+            }
             const std::string mapKey = (srgb ? "s:" : "l:") + key;
             const auto found = textureMap_.find(mapKey);
             if (found != textureMap_.end())
             {
+                // Retain one reference per asset, not one per material slot.
+                if (std::find(imported.textures.begin(), imported.textures.end(), found->second) ==
+                    imported.textures.end())
+                {
+                    ++textureReferences_[found->second];
+                    imported.textures.push_back(found->second);
+                }
                 return Halcyon::Result<TextureHandle>::success(found->second);
             }
-            auto created = createTexture(SceneTexture{key, srgb, path.empty()});
+            auto created = createTexture(SceneTexture{key, srgb, path.empty(), solidColor});
             if (created)
             {
                 textureMap_.emplace(mapKey, created.value());
+                textureReferences_[created.value()] = 1u;
                 imported.textures.push_back(created.value());
             }
             return created;
@@ -114,22 +210,33 @@ public:
             material.doubleSided = source.doubleSided;
             material.alphaMasked = source.alphaMasked;
             material.alphaCutoff = source.alphaCutoff;
-            const auto baseColor = importTexture(
-                source.baseColorTexture, true, "__halcyon_default_white_srgb__");
+            const auto toByte = [](float value)
+            {
+                return static_cast<std::uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+            };
+            const std::array<std::uint8_t, 4> baseColorValue = {toByte(source.pbr.baseColor.r),
+                toByte(source.pbr.baseColor.g),
+                toByte(source.pbr.baseColor.b),
+                toByte(source.pbr.baseColor.a)};
+            const auto baseColor = importTexture(source.baseColorTexture,
+                true,
+                "__halcyon_default_base_color_srgb__",
+                baseColorValue);
             const auto normal = importTexture(
-                source.normalTexture, false, "__halcyon_default_normal__");
-            const auto metallicRoughness = importTexture(
-                source.metallicRoughnessTexture, false, "__halcyon_default_black__");
+                source.normalTexture, false, "__halcyon_default_normal__", {128, 128, 255, 255});
+            const auto metallicRoughness = importTexture(source.metallicRoughnessTexture,
+                false,
+                "__halcyon_default_black__",
+                {0, 0, 0, 255});
             const auto occlusion = importTexture(
-                source.occlusionTexture, false, "__halcyon_default_white__");
+                source.occlusionTexture, false, "__halcyon_default_white__", {255, 255, 255, 255});
             const auto emissive = importTexture(
-                source.emissiveTexture, true, "__halcyon_default_black_srgb__");
+                source.emissiveTexture, true, "__halcyon_default_black_srgb__", {0, 0, 0, 255});
             if (!baseColor || !normal || !metallicRoughness || !occlusion || !emissive)
             {
                 rollback(imported);
-                return Halcyon::Result<SceneImportResult>::failure(
-                    Halcyon::Error{Halcyon::ErrorCode::OutOfMemory,
-                        "failed to allocate scene material textures"});
+                return Halcyon::Result<SceneImportResult>::failure(Halcyon::Error{
+                    Halcyon::ErrorCode::OutOfMemory, "failed to allocate scene material textures"});
             }
             material.baseColorTexture = baseColor.value();
             material.normalTexture = normal.value();
@@ -148,15 +255,15 @@ public:
         {
             SceneMaterial defaultMaterial{};
             const auto baseColor = importTexture(
-                {}, true, "__halcyon_default_white_srgb__");
-            const auto normal = importTexture(
-                {}, false, "__halcyon_default_normal__");
-            const auto metallicRoughness = importTexture(
-                {}, false, "__halcyon_default_black__");
-            const auto occlusion = importTexture(
-                {}, false, "__halcyon_default_white__");
-            const auto emissive = importTexture(
-                {}, true, "__halcyon_default_black_srgb__");
+                {}, true, "__halcyon_default_base_color_srgb__", {255, 255, 255, 255});
+            const auto normal =
+                importTexture({}, false, "__halcyon_default_normal__", {128, 128, 255, 255});
+            const auto metallicRoughness =
+                importTexture({}, false, "__halcyon_default_black__", {0, 0, 0, 255});
+            const auto occlusion =
+                importTexture({}, false, "__halcyon_default_white__", {255, 255, 255, 255});
+            const auto emissive =
+                importTexture({}, true, "__halcyon_default_black_srgb__", {0, 0, 0, 255});
             if (!baseColor || !normal || !metallicRoughness || !occlusion || !emissive)
             {
                 rollback(imported);
@@ -172,6 +279,7 @@ public:
             const auto handle = createMaterial(std::move(defaultMaterial));
             if (!handle)
             {
+                rollback(imported);
                 return Halcyon::Result<SceneImportResult>::failure(handle.error());
             }
             imported.materials.push_back(handle.value());
@@ -240,7 +348,16 @@ public:
     }
     [[nodiscard]] bool destroy(TextureHandle handle) noexcept
     {
-        return textures_.erase(handle);
+        const bool removed = textures_.erase(handle);
+        textureReferences_.erase(handle);
+        if (removed)
+        {
+            for (auto it = textureMap_.begin(); it != textureMap_.end();)
+            {
+                it = it->second == handle ? textureMap_.erase(it) : std::next(it);
+            }
+        }
+        return removed;
     }
     void clear() noexcept
     {
@@ -248,6 +365,7 @@ public:
         materials_.clear();
         textures_.clear();
         textureMap_.clear();
+        textureReferences_.clear();
     }
     [[nodiscard]] std::size_t meshCount() const noexcept
     {
@@ -275,7 +393,34 @@ private:
         }
         for (const auto handle : imported.textures)
         {
-            (void)textures_.erase(handle);
+            const auto ref = textureReferences_.find(handle);
+            if (ref == textureReferences_.end())
+            {
+                continue;
+            }
+            if (ref->second > 1u)
+            {
+                --ref->second;
+            }
+            else
+            {
+                textureReferences_.erase(handle);
+                (void)textures_.erase(handle);
+            }
+        }
+        // Texture handles are shared across assets. Remove only cache entries
+        // that pointed at records created by this transaction; references from
+        // previously committed assets remain valid and continue to deduplicate
+        // deterministic default textures.
+        for (auto it = textureMap_.begin(); it != textureMap_.end();)
+        {
+            const bool createdByTransaction = std::find(imported.textures.begin(),
+                imported.textures.end(), it->second) != imported.textures.end();
+            // A shared texture can be present in imported.textures while a
+            // previous asset still owns it. Keep its cache entry in that case.
+            it = createdByTransaction && textures_.get(it->second) == nullptr
+                     ? textureMap_.erase(it)
+                     : std::next(it);
         }
     }
 
@@ -283,6 +428,7 @@ private:
     Core::HandlePool<SceneMaterial, Resources::MaterialHandle> materials_;
     Core::HandlePool<SceneTexture, Resources::TextureHandle> textures_;
     std::unordered_map<std::string, TextureHandle> textureMap_;
+    std::unordered_map<TextureHandle, std::uint32_t> textureReferences_;
 };
 
 } // namespace Halcyon::Renderer::Scene

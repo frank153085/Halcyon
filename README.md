@@ -27,6 +27,9 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - A deliberately thin first-version scene ECS: generation-checked entities,
   dense transform/renderable/light component stores, and extraction into an
   immutable `FramePacket`. The renderer remains independent of ECS policy.
+- A backend-neutral `SceneManager` that owns SceneDatabase assets and scene
+  instances. File-backed glTF/GLB scenes and in-memory procedural scenes use
+  the same transactional registration, instancing, and GPU upload path.
 - A Vulkan bindless descriptor-set companion that maps typed CPU slots to
   sampled/storage image, sampler, uniform-buffer, and storage-buffer arrays.
 - Renderer-owned bindless slot collection is synchronized with the frame
@@ -34,9 +37,9 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Shader module validation with an optional SPIR-V Tools pass, lightweight
   descriptor reflection, and a reload-safe replacement API for development
   builds.
-- Static glTF/GLB scene loading with generated normals/tangents, rigid node
-  transforms, metallic-roughness material metadata, and a persistent scene
-  database.
+- Static glTF/GLB scene loading through the pinned fastgltf reader, with
+  generated normals/tangents, rigid node transforms, metallic-roughness
+  material metadata, and a persistent scene database.
 - Backend-neutral PBR/IBL evaluation, logarithmic clustered-light assignment,
   cascaded shadow splits, compact octahedral G-buffer packing, forward
   transparency helpers, HDR/ACES tonemapping, motion vectors, and temporal AA
@@ -83,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File scripts/configure_m3_msvc.ps1 `
   -BuildDir out/build/m3-msvc-debug -Build -FetchAssets
 ```
 
-Assets are intentionally ignored by Git. The equivalent explicit download is
+The large M3 sample assets are intentionally ignored by Git. The equivalent explicit download is
 `cmake --build out/build/m3-msvc-debug --target HalcyonFetchM3Assets`.
 
 Use the RelWithDebInfo preset for performance measurements:
@@ -107,6 +110,9 @@ out\build\windows-msvc-debug\Halcyon.exe --frames 300
 Available options are `--width N`, `--height N`, `--frames N`,
 `--no-validation`, and `--help`. The render loop pauses image acquisition while
 the window is minimized and recreates the swapchain after restoration.
+The Sandbox and standalone textured example both load the checked-in Monkey
+glTF through `SceneManager`; the Vulkan backend no longer contains an OBJ or
+startup-texture loader.
 
 ## Run the M3 demo
 
@@ -134,7 +140,7 @@ out\build\m3-msvc-debug\HalcyonGoldenCompare.exe `
 ```
 
 The compatibility Vulkan bridge submits the uploaded static scene as stable
-indexed material ranges in one dynamic-rendering scope; the canonical
+indexed SceneManager instances in one dynamic-rendering scope; the canonical
 CSM/G-buffer/cluster/deferred/TAA pass contracts and shaders are present for
 incremental backend integration. Damaged Helmet uses its embedded base-color
 maps, and Sponza resolves each primitive's external base-color URI to its own
@@ -163,7 +169,7 @@ Source/Renderer/Scene       Camera and FramePacket data contracts
 Source/Renderer/Graph       M2 FrameGraph and barrier planning
 Source/Renderer/Resources   Upload/deletion and bindless slot infrastructure
 Source/Renderer/Vulkan      Vulkan 1.3 backend
-Source/Engine                Backend-neutral Engine and View orchestration
+Source/Engine                Engine, View, and SceneManager orchestration
 Source/Application           Window, input, lifecycle, and diagnostics layer
 Source/Sandbox              Runnable demonstration application
 Examples                    Independent executable examples

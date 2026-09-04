@@ -49,6 +49,10 @@ The implementation order is fixed: complete Compute Culling plus Indexed Indirec
 ### Scene and Resource Organization
 
 - Static meshes, materials, textures, and initial instances enter a persistent `SceneDatabase` and upload only when created or changed.
+- `SceneManager` owns the SceneDatabase, scene ECS, asset/instance handles, and
+  backend synchronization. All runnable programs use its file-backed or
+  procedural scene configuration; render backends never parse application
+  asset files directly.
 - `FramePacket` remains immutable and contains no Vulkan handles. It carries only camera data, lights, and dirty rigid-instance updates.
 - The first version uses a thin scene ECS façade (generation-checked entities,
   dense component stores, and a render extractor). A scheduler, reflection

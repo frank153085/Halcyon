@@ -10,8 +10,8 @@ target_include_directories(HalcyonExampleSupport PUBLIC
 target_link_libraries(HalcyonExampleSupport PUBLIC HalcyonApplication)
 target_compile_definitions(HalcyonExampleSupport PRIVATE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
-    HALCYON_EXAMPLE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
+halcyon_configure_asset_root(HalcyonExampleSupport)
 set_target_properties(HalcyonExampleSupport PROPERTIES FOLDER "Examples")
 halcyon_enable_warnings(HalcyonExampleSupport)
 

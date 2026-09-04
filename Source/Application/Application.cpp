@@ -14,6 +14,8 @@
 #include <limits>
 #include <cmath>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 #include <stb_image.h>
 
 #ifndef HALCYON_ENABLE_VALIDATION
@@ -226,12 +228,6 @@ void printUsage() noexcept
         if (argument == "--no-taa") { config.engine.enableTaa = false; continue; }
         if (argument == "--no-clustered-lighting") { config.engine.enableClusteredLighting = false; continue; }
         if (argument == "--no-transparency") { config.engine.enableTransparency = false; continue; }
-        // Kept as a harmless compatibility switch for the early examples.
-        if (argument == "--resource-test")
-        {
-            continue;
-        }
-
         HALCYON_LOG_ERROR("Unknown or malformed command-line option: ", argument);
         return false;
     }
@@ -240,6 +236,56 @@ void printUsage() noexcept
         config.window.initialExtent = {640, 360};
     }
     return true;
+}
+
+[[nodiscard]] double percentile(std::vector<double> values, double fraction) noexcept
+{
+    if (values.empty())
+    {
+        return -1.0;
+    }
+    std::sort(values.begin(), values.end());
+    const double position = fraction * static_cast<double>(values.size() - 1u);
+    const std::size_t lower = static_cast<std::size_t>(position);
+    const std::size_t upper = std::min(values.size() - 1u, lower + 1u);
+    const double weight = position - static_cast<double>(lower);
+    return values[lower] + (values[upper] - values[lower]) * weight;
+}
+
+void appendPerformanceSummary(const ApplicationConfig& config,
+    const std::vector<double>& cpuSamples,
+    const std::vector<double>& gpuSamples,
+    const std::unordered_map<std::string, std::vector<double>>& passSamples)
+{
+    if (config.performanceCsvPath.empty())
+    {
+        return;
+    }
+    std::ofstream csv(config.performanceCsvPath, std::ios::app);
+    if (!csv)
+    {
+        return;
+    }
+    csv << "# percentile,metric,p50_ms,p95_ms,p99_ms\n";
+    const auto writeMetric = [&csv](const std::string& name, const std::vector<double>& values)
+    {
+        csv << "# percentile," << name << ',' << percentile(values, 0.50) << ','
+            << percentile(values, 0.95) << ',' << percentile(values, 0.99) << '\n';
+    };
+    writeMetric("cpu", cpuSamples);
+    writeMetric("gpu", gpuSamples);
+    std::vector<std::string> passNames;
+    passNames.reserve(passSamples.size());
+    for (const auto& [name, values] : passSamples)
+    {
+        (void)values;
+        passNames.push_back(name);
+    }
+    std::sort(passNames.begin(), passNames.end());
+    for (const std::string& name : passNames)
+    {
+        writeMetric("pass_" + name, passSamples.at(name));
+    }
 }
 
 } // namespace
@@ -336,6 +382,9 @@ int Application::run(
     double elapsedSeconds = 0.0;
     auto previousTime = std::chrono::steady_clock::now();
     FrameStats previousStats{};
+    std::vector<double> performanceCpuSamples;
+    std::vector<double> performanceGpuSamples;
+    std::unordered_map<std::string, std::vector<double>> performancePassSamples;
 
     while (exitCode == EXIT_SUCCESS && !window->shouldClose() &&
            (config.frameLimit == 0 || frameIndex < config.frameLimit))
@@ -424,6 +473,22 @@ int Application::run(
                 break;
             }
             previousStats = renderResult.value();
+            if (!config.performanceCsvPath.empty())
+            {
+                performanceCpuSamples.push_back(previousStats.cpuFrameMs);
+                if (previousStats.gpuFrameMs >= 0.0)
+                {
+                    performanceGpuSamples.push_back(previousStats.gpuFrameMs);
+                }
+                for (const auto& pass : previousStats.gpuPasses)
+                {
+                    performancePassSamples.try_emplace(pass.name);
+                    if (pass.gpuFrameMs >= 0.0)
+                    {
+                        performancePassSamples[pass.name].push_back(pass.gpuFrameMs);
+                    }
+                }
+            }
             const bool finalFrame = config.frameLimit != 0 && frameIndex + 1u >= config.frameLimit;
             if (finalFrame && (!config.screenshotPath.empty() || !config.goldenPath.empty()))
             {
@@ -575,6 +640,19 @@ int Application::run(
             HALCYON_LOG_ERROR("Application shutdown callback threw an unknown exception");
             exitCode = EXIT_FAILURE;
         }
+    }
+    try
+    {
+        appendPerformanceSummary(
+            config, performanceCpuSamples, performanceGpuSamples, performancePassSamples);
+    }
+    catch (const std::exception& exception)
+    {
+        HALCYON_LOG_WARN("Performance summary unavailable: ", exception.what());
+    }
+    catch (...)
+    {
+        HALCYON_LOG_WARN("Performance summary unavailable due to an unknown error");
     }
     diagnostics.shutdown();
     engine->shutdown();

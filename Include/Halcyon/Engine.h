@@ -3,6 +3,7 @@
 #include "Core/Result.h"
 #include "RenderTypes.h"
 #include "Scene.h"
+#include "SceneManager.h"
 #include "View.h"
 
 #include <cstdint>
@@ -33,9 +34,7 @@ struct EngineConfig
     std::uint32_t framesInFlight = 3;
     bool enableValidation = HALCYON_ENABLE_VALIDATION != 0;
     FeatureMode rayQuery = FeatureMode::Disabled;
-    std::filesystem::path startupScenePath{};
-    std::string startupTexturePath{};
-    std::string startupMeshPath{};
+    SceneManagerConfig scene{};
     float fixedDeltaSeconds = 1.0f / 60.0f;
     float exposure = 0.0f;
     bool enableTaa = true;
@@ -59,14 +58,13 @@ public:
 
     [[nodiscard]] Scene& scene() noexcept;
     [[nodiscard]] const Scene& scene() const noexcept;
+    [[nodiscard]] SceneManager& sceneManager() noexcept;
+    [[nodiscard]] const SceneManager& sceneManager() const noexcept;
     [[nodiscard]] View& defaultView() noexcept;
     [[nodiscard]] const View& defaultView() const noexcept;
 
     [[nodiscard]] Result<FrameStats> render(std::uint64_t frameIndex);
     [[nodiscard]] Result<void> resize(Extent2D extent);
-    // Load a rigid glTF/GLB scene, populate the scene ECS with one entity per
-    // primitive, and make the renderer resolve the corresponding GPU data.
-    [[nodiscard]] Result<void> loadStaticScene(const std::filesystem::path& path);
     [[nodiscard]] Result<void> captureScreenshot(const std::filesystem::path& path);
     [[nodiscard]] const Capabilities& capabilities() const noexcept;
 

@@ -80,6 +80,11 @@ function(halcyon_enable_warnings target)
     endif()
 endfunction()
 
+function(halcyon_configure_asset_root target)
+    target_compile_definitions(${target} PRIVATE
+        HALCYON_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+endfunction()
+
 add_library(HalcyonCore INTERFACE)
 target_include_directories(HalcyonCore INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source"
@@ -115,6 +120,7 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.cpp
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
     Source/Renderer/Vulkan/EmbeddedTriangleShaders.cpp
+    Source/Renderer/Vulkan/EmbeddedSceneShaders.cpp
     Source/Renderer/Vulkan/EmbeddedTriangleShaders.h
     Source/Renderer/Vulkan/VulkanCommon.cpp
     Source/Renderer/Vulkan/VulkanCommon.h
@@ -134,8 +140,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/VulkanBindlessTable.h
     Source/Renderer/Vulkan/VulkanFrameContext.cpp
     Source/Renderer/Vulkan/VulkanFrameContext.h
-    Source/Renderer/Vulkan/VulkanDemoResources.cpp
-    Source/Renderer/Vulkan/VulkanDemoResources.h
+    Source/Renderer/Vulkan/VulkanSceneResources.cpp
+    Source/Renderer/Vulkan/VulkanSceneResources.h
     Source/Renderer/Vulkan/GpuAllocator.cpp
     Source/Renderer/Vulkan/GpuAllocator.h
     Source/Renderer/Vulkan/GpuUploader.cpp
@@ -163,7 +169,7 @@ target_include_directories(HalcyonRenderer PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(HalcyonRenderer
     PUBLIC HalcyonCore glm::glm Vulkan::Vulkan
-    PRIVATE Halcyon::Vma Halcyon::Stb Halcyon::Cgltf
+    PRIVATE Halcyon::Vma Halcyon::Stb
     PUBLIC Halcyon::RobinMap
     PRIVATE glfw
 )
@@ -355,11 +361,13 @@ add_library(HalcyonEngine STATIC
     Include/Halcyon/Engine.h
     Include/Halcyon/RenderTypes.h
     Include/Halcyon/Scene.h
+    Include/Halcyon/SceneManager.h
     Include/Halcyon/Quality.h
     Include/Halcyon/TraditionalQuality.h
     Include/Halcyon/StaticScene.h
     Include/Halcyon/View.h
     Source/Engine/Engine.cpp
+    Source/Engine/SceneManager.cpp
     Source/Engine/EngineInternal.h
     Source/Engine/View.cpp
 )
@@ -405,6 +413,7 @@ target_link_libraries(HalcyonSandbox PRIVATE HalcyonApplication)
 target_compile_definitions(HalcyonSandbox PRIVATE
     HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>
 )
+halcyon_configure_asset_root(HalcyonSandbox)
 halcyon_enable_warnings(HalcyonSandbox)
 
 # M3 showcase executable.  It intentionally has its own entry point so the
@@ -415,8 +424,8 @@ add_executable(HalcyonM3Demo
     Source/M3Demo/M3Demo.h)
 target_link_libraries(HalcyonM3Demo PRIVATE HalcyonApplication)
 target_compile_definitions(HalcyonM3Demo PRIVATE
-    HALCYON_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
+halcyon_configure_asset_root(HalcyonM3Demo)
 halcyon_enable_warnings(HalcyonM3Demo)
 
 # Standalone image gate used by CI and local capture workflows.  It is kept
@@ -424,6 +433,7 @@ halcyon_enable_warnings(HalcyonM3Demo)
 # Vulkan device.
 add_executable(HalcyonGoldenCompare Source/M3Demo/GoldenCompare.cpp)
 target_link_libraries(HalcyonGoldenCompare PRIVATE HalcyonCore Halcyon::Stb)
+halcyon_configure_asset_root(HalcyonGoldenCompare)
 halcyon_enable_warnings(HalcyonGoldenCompare)
 
 add_custom_target(HalcyonFetchM3Assets
@@ -443,6 +453,7 @@ endif()
 # without a GPU and gives the runtime a deterministic manifest contract.
 add_executable(HalcyonCooker Source/Cooker/Main.cpp)
 target_link_libraries(HalcyonCooker PRIVATE HalcyonCore)
+halcyon_configure_asset_root(HalcyonCooker)
 halcyon_enable_warnings(HalcyonCooker)
 
 if(HALCYON_BUILD_TESTS)
@@ -520,6 +531,13 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonEcsTests)
     add_test(NAME Halcyon.Ecs COMMAND HalcyonEcsTests)
 
+    add_executable(HalcyonSceneManagerTests Tests/SceneManagerTests.cpp)
+    target_link_libraries(HalcyonSceneManagerTests PRIVATE HalcyonEngine)
+    target_compile_definitions(HalcyonSceneManagerTests PRIVATE
+        HALCYON_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    halcyon_enable_warnings(HalcyonSceneManagerTests)
+    add_test(NAME Halcyon.SceneManager COMMAND HalcyonSceneManagerTests)
+
     add_executable(HalcyonInfrastructureTests Tests/RendererInfrastructureTests.cpp)
     target_link_libraries(HalcyonInfrastructureTests PRIVATE HalcyonCore)
     target_include_directories(HalcyonInfrastructureTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
@@ -549,6 +567,7 @@ if(HALCYON_BUILD_TESTS)
         HalcyonM3QualityTests
         HalcyonStaticSceneLoaderTests
         HalcyonEcsTests
+        HalcyonSceneManagerTests
         HalcyonInfrastructureTests
         HalcyonDeferredDeletionTests)
     if(HALCYON_BUILD_EXPERIMENTAL_M2)

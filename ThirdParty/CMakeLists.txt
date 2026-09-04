@@ -13,7 +13,6 @@ endfunction()
 halcyon_add_header_only(Vma vkmemalloc/include)
 halcyon_add_header_only(Stb stb)
 halcyon_add_header_only(RobinMap robin-map/include)
-halcyon_add_header_only(Cgltf cgltf)
 
 add_library(HalcyonMikkTSpace STATIC mikktspace/mikktspace.c)
 target_include_directories(HalcyonMikkTSpace PUBLIC

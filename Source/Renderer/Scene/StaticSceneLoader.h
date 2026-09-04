@@ -86,8 +86,7 @@ struct StaticSceneLoadOptions
 [[nodiscard]] Halcyon::Result<StaticScene> loadStaticScene(
     const std::filesystem::path& path, const StaticSceneLoadOptions& options = {});
 
-// Naming aliases keep call sites readable when the asset pipeline is switched
-// between cgltf and fastgltf implementations in later milestones.
+// Naming aliases keep call sites independent from the concrete parser.
 [[nodiscard]] inline Halcyon::Result<StaticScene> loadGltfScene(
     const std::filesystem::path& path, const StaticSceneLoadOptions& options = {})
 {

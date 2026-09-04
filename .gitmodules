@@ -25,6 +25,9 @@
 [submodule "ThirdParty/spirv-tools"]
 	path = ThirdParty/spirv-tools
 	url = https://github.com/KhronosGroup/SPIRV-Tools.git
+[submodule "ThirdParty/fastgltf"]
+	path = ThirdParty/fastgltf
+	url = https://github.com/spnda/fastgltf.git
 [submodule "ThirdParty/cgltf"]
 	path = ThirdParty/cgltf
 	url = https://github.com/jkuhlmann/cgltf.git
