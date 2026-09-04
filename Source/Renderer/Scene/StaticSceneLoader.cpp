@@ -90,7 +90,10 @@ void generateTangents(StaticScenePrimitive& primitive) noexcept
     }
     for (std::size_t i = 0; i < primitive.vertices.size(); ++i)
     {
-        const glm::vec3 normal = glm::normalize(primitive.vertices[i].normal);
+        const float normalLength = glm::length(primitive.vertices[i].normal);
+        const glm::vec3 normal = normalLength > 1.0e-7f
+            ? primitive.vertices[i].normal / normalLength
+            : glm::vec3{0.0f, 0.0f, 1.0f};
         glm::vec3 t = tangent[i] - normal * glm::dot(normal, tangent[i]);
         if (glm::dot(t, t) < 1.0e-8f)
             t = std::abs(normal.z) < 0.999f ? glm::normalize(glm::cross(normal, {0, 0, 1}))

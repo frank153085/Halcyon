@@ -123,6 +123,15 @@ bool VulkanFrameGraphProvider::createImage(
     if (Halcyon::Renderer::Graph::any(usage & U::Sampled) &&
         (features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0)
         return false;
+    if (Halcyon::Renderer::Graph::any(usage & U::TransferSource) &&
+        (features & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) == 0)
+        return false;
+    const bool needsTransferDestination =
+        Halcyon::Renderer::Graph::any(usage & U::TransferDestination) ||
+        (!d.transient && d.name.rfind("IBL_", 0) == 0);
+    if (needsTransferDestination &&
+        (features & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) == 0)
+        return false;
     const bool needsStorage = Halcyon::Renderer::Graph::any(usage & U::Storage) ||
         (!d.transient && d.name.find("TAAHistory") != std::string::npos);
     if (needsStorage &&

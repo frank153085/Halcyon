@@ -596,8 +596,12 @@ VoidResult VulkanDevice::pickPhysicalDevice()
             }
             if (candidate.properties.limits.maxDescriptorSetSampledImages < 8 ||
                 candidate.properties.limits.maxPerStageDescriptorSampledImages < 8 ||
+                candidate.properties.limits.maxDescriptorSetStorageImages < 1 ||
+                candidate.properties.limits.maxPerStageDescriptorStorageImages < 1 ||
                 candidate.properties.limits.maxDescriptorSetStorageBuffers < 4 ||
                 candidate.properties.limits.maxPerStageDescriptorStorageBuffers < 4 ||
+                candidate.properties.limits.maxDescriptorSetSamplers < 1 ||
+                candidate.properties.limits.maxPerStageDescriptorSamplers < 1 ||
                 candidate.properties.limits.maxDescriptorSetUniformBuffers < 1 ||
                 candidate.properties.limits.maxPerStageDescriptorUniformBuffers < 1 ||
                 candidate.properties.limits.maxImageArrayLayers < 4 ||

@@ -2241,7 +2241,13 @@ VoidResult Renderer::Impl::recordM3Frame(
             builder.read(clusterIndices, Graph::ResourceUsage::Storage);
             builder.read(lightBuffer, Graph::ResourceUsage::Storage);
             builder.read(shadowConstantsBuffer, Graph::ResourceUsage::Uniform);
-            hdr = builder.write(hdr, Graph::ResourceUsage::ColorAttachment);
+            // HDR is both a render target and a legal storage image.  The
+            // latter is part of the M3 resource contract even though the
+            // current deferred implementation writes it through dynamic
+            // rendering; keeping the capability in the graph prevents a
+            // later compute pass from silently requiring a reallocation.
+            hdr = builder.write(hdr, Graph::ResourceUsage::ColorAttachment |
+                                     Graph::ResourceUsage::Storage);
             Graph::FrameGraphRenderPass::Descriptor descriptor{};
             descriptor.attachments.color[0] = hdr;
             descriptor.viewport.width = width;
