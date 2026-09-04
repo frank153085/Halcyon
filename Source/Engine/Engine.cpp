@@ -18,9 +18,11 @@ struct Engine::Impl
     Platform::Window* window = nullptr;
     Vulkan::Renderer renderer{};
     Scene scene{};
+    SceneDatabase sceneDatabase{};
     View view{};
     Capabilities capabilities{};
     bool initialized = false;
+    std::filesystem::path loadedScenePath{};
 };
 
 namespace
@@ -60,10 +62,18 @@ namespace
     result.cpuFrameMs = source.cpuFrameMs;
     result.gpuFrameMs = source.gpuFrameMs;
     result.deviceMemoryBytes = source.deviceMemoryBytes;
+    result.primitiveCount = source.primitiveCount;
+    result.clusterOverflowCount = source.clusterOverflowCount;
+    result.taaHistoryValid = source.taaHistoryValid;
+    result.screenshotWritten = source.screenshotWritten;
     result.quality.internalResolutionScale = source.quality.internalResolutionScale;
     result.quality.shadowResolutionScale = source.quality.shadowResolutionScale;
     result.quality.lodBias = source.quality.lodBias;
+    result.quality.exposure = source.quality.exposure;
     result.quality.rayQueryEnabled = source.quality.rayQueryEnabled;
+    result.quality.taaEnabled = source.quality.taaEnabled;
+    result.quality.clusteredLightingEnabled = source.quality.clusteredLightingEnabled;
+    result.quality.transparencyEnabled = source.quality.transparencyEnabled;
     result.swapchainImageIndex = source.swapchainImageIndex;
     result.rendered = source.rendered;
     result.recreatedSwapchain = source.recreatedSwapchain;
@@ -122,8 +132,22 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.framesInFlight = config.framesInFlight;
     backendConfig.enableValidation = config.enableValidation;
     backendConfig.rayQuery = static_cast<Vulkan::FeatureMode>(config.rayQuery);
-    backendConfig.startupTexturePath = config.startupTexturePath;
-    backendConfig.startupMeshPath = config.startupMeshPath;
+    backendConfig.startupTexturePath = config.startupTexturePath.empty()
+                                           ? nullptr
+                                           : config.startupTexturePath.c_str();
+    backendConfig.startupMeshPath = config.startupMeshPath.empty()
+                                        ? nullptr
+                                        : config.startupMeshPath.c_str();
+    // Engine owns the scene database/ECS population and performs the upload
+    // through loadStaticScene below.  Do not ask the renderer to upload the
+    // same asset during initialization and then immediately tear it down for
+    // a second upload; some Vulkan drivers report heap corruption when image
+    // views and descriptor pools are recreated in that back-to-back pattern.
+    backendConfig.startupScenePath = nullptr;
+    backendConfig.exposure = config.exposure;
+    backendConfig.enableTaa = config.enableTaa;
+    backendConfig.enableClusteredLighting = config.enableClusteredLighting;
+    backendConfig.enableTransparency = config.enableTransparency;
 
     impl->window = &window;
     const auto initializeResult = impl->renderer.initialize(
@@ -161,7 +185,18 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
         return Result<std::unique_ptr<Engine>>::failure(
             MakeError(ErrorCode::OutOfMemory, "engine allocation failed", "Engine::create"));
     }
-    return Result<std::unique_ptr<Engine>>::success(std::unique_ptr<Engine>(engine));
+    auto resultEngine = std::unique_ptr<Engine>(engine);
+    if (!config.startupScenePath.empty())
+    {
+        const auto sceneResult = resultEngine->loadStaticScene(config.startupScenePath);
+        if (!sceneResult)
+        {
+            resultEngine->shutdown();
+            return Result<std::unique_ptr<Engine>>::failure(
+                sceneResult.error().withContext("Engine::create"));
+        }
+    }
+    return Result<std::unique_ptr<Engine>>::success(std::move(resultEngine));
 }
 
 void Engine::shutdown() noexcept
@@ -268,6 +303,91 @@ Result<void> Engine::resize(Extent2D extent)
         }
     }
     return Result<void>::success();
+}
+
+Result<void> Engine::loadStaticScene(const std::filesystem::path& path)
+{
+    if (impl_ == nullptr || !impl_->initialized)
+    {
+        return Result<void>::failure(
+            MakeError(ErrorCode::InvalidState, "engine is not initialized", "Engine::loadStaticScene"));
+    }
+    if (path.empty())
+    {
+        return Result<void>::failure(
+            MakeError(ErrorCode::InvalidArgument, "scene path is empty", "Engine::loadStaticScene"));
+    }
+    const std::filesystem::path normalized = path.lexically_normal();
+    if (impl_->loadedScenePath == normalized && !impl_->scene.members().empty())
+    {
+        return Result<void>::success();
+    }
+    const auto loaded = Renderer::Scene::loadStaticScene(normalized);
+    if (!loaded)
+    {
+        return Result<void>::failure(loaded.error().withContext("Engine::loadStaticScene"));
+    }
+    impl_->sceneDatabase.clear();
+    const auto imported = impl_->sceneDatabase.importStaticScene(loaded.value());
+    if (!imported)
+    {
+        return Result<void>::failure(imported.error().withContext("Engine::loadStaticScene"));
+    }
+    const auto rendererResult = impl_->renderer.loadStaticScene(normalized.string().c_str());
+    if (!rendererResult)
+    {
+        return rendererResult.error().withContext("Engine::loadStaticScene");
+    }
+    impl_->scene.clear();
+    for (std::size_t i = 0; i < loaded.value().primitives.size(); ++i)
+    {
+        const auto entity = impl_->scene.createEntity();
+        (void)impl_->scene.transforms().add(entity);
+        auto* transform = impl_->scene.transforms().get(entity);
+        if (transform != nullptr)
+        {
+            transform->localTransform = loaded.value().primitives[i].worldTransform;
+            transform->dirty = true;
+        }
+        RenderableComponent renderable{};
+        if (i < imported.value().meshes.size()) renderable.mesh = imported.value().meshes[i];
+        const auto materialIndex = loaded.value().primitives[i].materialIndex;
+        if (materialIndex < imported.value().materials.size())
+        {
+            renderable.material = imported.value().materials[materialIndex];
+        }
+        renderable.flags = static_cast<std::uint32_t>(RenderableFlags::CastShadow) |
+                           static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow);
+        if (materialIndex < loaded.value().materials.size())
+        {
+            const auto& material = loaded.value().materials[materialIndex];
+            if (material.transparent)
+            {
+                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::Transparent);
+            }
+            if (material.doubleSided)
+            {
+                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::DoubleSided);
+            }
+            if (material.alphaMasked)
+            {
+                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::AlphaMasked);
+            }
+        }
+        (void)impl_->scene.renderables().add(entity, renderable);
+    }
+    impl_->loadedScenePath = normalized;
+    return Result<void>::success();
+}
+
+Result<void> Engine::captureScreenshot(const std::filesystem::path& path)
+{
+    if (impl_ == nullptr || !impl_->initialized)
+    {
+        return Result<void>::failure(
+            MakeError(ErrorCode::InvalidState, "engine is not initialized", "Engine::captureScreenshot"));
+    }
+    return impl_->renderer.captureScreenshot(path);
 }
 
 const Capabilities& Engine::capabilities() const noexcept

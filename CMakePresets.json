@@ -36,6 +36,25 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "HALCYON_ENABLE_VALIDATION": "OFF"
       }
+    },
+    {
+      "name": "m3-msvc-debug",
+      "displayName": "M3 Windows MSVC Debug",
+      "inherits": "windows-msvc-base",
+      "binaryDir": "${sourceDir}/out/build/m3-msvc-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "m3-msvc-relwithdebinfo",
+      "displayName": "M3 Windows MSVC RelWithDebInfo",
+      "inherits": "windows-msvc-base",
+      "binaryDir": "${sourceDir}/out/build/m3-msvc-relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "HALCYON_ENABLE_VALIDATION": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -46,6 +65,14 @@
     {
       "name": "windows-msvc-relwithdebinfo",
       "configurePreset": "windows-msvc-relwithdebinfo"
+    },
+    {
+      "name": "m3-msvc-debug",
+      "configurePreset": "m3-msvc-debug"
+    },
+    {
+      "name": "m3-msvc-relwithdebinfo",
+      "configurePreset": "m3-msvc-relwithdebinfo"
     }
   ],
   "testPresets": [
@@ -59,6 +86,20 @@
     {
       "name": "windows-msvc-relwithdebinfo",
       "configurePreset": "windows-msvc-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "m3-msvc-debug",
+      "configurePreset": "m3-msvc-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "m3-msvc-relwithdebinfo",
+      "configurePreset": "m3-msvc-relwithdebinfo",
       "output": {
         "outputOnFailure": true
       }

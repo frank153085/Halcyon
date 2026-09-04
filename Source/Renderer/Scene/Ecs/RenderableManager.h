@@ -13,6 +13,26 @@ struct RenderableComponent
     std::uint32_t flags = 0;
 };
 
+enum class RenderableFlags : std::uint32_t
+{
+    None = 0,
+    Transparent = 1u << 0u,
+    DoubleSided = 1u << 1u,
+    CastShadow = 1u << 2u,
+    ReceiveShadow = 1u << 3u,
+    AlphaMasked = 1u << 4u,
+};
+
+[[nodiscard]] constexpr std::uint32_t operator|(RenderableFlags lhs, RenderableFlags rhs) noexcept
+{
+    return static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs);
+}
+
+[[nodiscard]] constexpr bool hasFlag(std::uint32_t value, RenderableFlags flag) noexcept
+{
+    return (value & static_cast<std::uint32_t>(flag)) != 0u;
+}
+
 class RenderableManager final
 {
 public:

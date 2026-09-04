@@ -3,11 +3,12 @@
 [Project Roadmap](./ROADMAP.md)
 
 Halcyon is a real-time renderer built for individual study. The repository
-now provides the first, intentionally small M2 infrastructure increment. The
+now provides the first, intentionally small M2 infrastructure increment and a
+runnable M3 traditional-quality scene demonstration. The
 M0/M1 Vulkan vertical slice remains the correctness baseline while render
 graph, bindless, shader, and profiling foundations stay independently usable.
 
-## Current Milestone: M2 first version (complete)
+## Current Milestone: M3 traditional quality baseline
 
 - Reproducible Debug and RelWithDebInfo presets for MSVC v143 and Ninja.
 - Separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonEngine`,
@@ -33,12 +34,19 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Shader module validation with an optional SPIR-V Tools pass, lightweight
   descriptor reflection, and a reload-safe replacement API for development
   builds.
+- Static glTF/GLB scene loading with generated normals/tangents, rigid node
+  transforms, metallic-roughness material metadata, and a persistent scene
+  database.
+- Backend-neutral PBR/IBL evaluation, logarithmic clustered-light assignment,
+  cascaded shadow splits, compact octahedral G-buffer packing, forward
+  transparency helpers, HDR/ACES tonemapping, motion vectors, and temporal AA
+  resolve logic. Matching HLSL passes are provided for DXC builds.
 - Optional Dear ImGui diagnostics overlay; enable it with
   `-DHALCYON_ENABLE_IMGUI=ON`.
 - Optional GoogleTest coverage; enable it with
   `-DHALCYON_ENABLE_GOOGLETEST=ON`.
 
-This first version deliberately keeps the backend bridge small: the graph owns
+This M3 increment deliberately keeps the backend bridge small: the graph owns
 semantic ordering and lifetime decisions, while Vulkan retains explicit image
 barriers and command recording. Optional Tracy CPU instrumentation, binding of
 the bindless set into the demo pipeline, and generic per-pass GPU timestamp
@@ -66,6 +74,18 @@ cmake --build --preset windows-msvc-debug
 ctest --preset windows-msvc-debug
 ```
 
+When CMake is launched outside a Visual Studio developer shell, use the
+reproducible helper. It imports `VsDevCmd`, detects a stale MinGW `ld.exe`
+entry in `CMakeCache.txt`, and configures an isolated build directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/configure_m3_msvc.ps1 `
+  -BuildDir out/build/m3-msvc-debug -Build -FetchAssets
+```
+
+Assets are intentionally ignored by Git. The equivalent explicit download is
+`cmake --build out/build/m3-msvc-debug --target HalcyonFetchM3Assets`.
+
 Use the RelWithDebInfo preset for performance measurements:
 
 ```powershell
@@ -87,6 +107,46 @@ out\build\windows-msvc-debug\Halcyon.exe --frames 300
 Available options are `--width N`, `--height N`, `--frames N`,
 `--no-validation`, and `--help`. The render loop pauses image acquisition while
 the window is minimized and recreates the swapchain after restoration.
+
+## Run the M3 demo
+
+`HalcyonM3Demo` uses fixed cameras and a fixed 60 Hz timestep by default. The
+downloaded Damaged Helmet and Sponza assets are selected with `--scene`:
+
+```powershell
+out\build\m3-msvc-debug\HalcyonM3Demo.exe `
+  --scene damaged-helmet --frames 300 --width 1280 --height 720 `
+  --screenshot out\captures\helmet.png `
+  --perf-csv out\captures\helmet.csv --no-validation
+
+out\build\m3-msvc-debug\HalcyonM3Demo.exe `
+  --scene sponza --frames 300 --screenshot out\captures\sponza.png `
+  --perf-csv out\captures\sponza.csv --no-validation
+```
+
+Quality switches are `--fixed-dt`, `--exposure`, `--no-taa`,
+`--no-clustered-lighting`, and `--no-transparency`. A standalone image gate is
+available for CI and RenderDoc captures:
+
+```powershell
+out\build\m3-msvc-debug\HalcyonGoldenCompare.exe `
+  --actual out\captures\helmet.png --golden path\to\helmet-golden.png
+```
+
+The compatibility Vulkan bridge submits the uploaded static scene as stable
+indexed material ranges in one dynamic-rendering scope; the canonical
+CSM/G-buffer/cluster/deferred/TAA pass contracts and shaders are present for
+incremental backend integration. Damaged Helmet uses its embedded base-color
+maps, and Sponza resolves each primitive's external base-color URI to its own
+descriptor (with deterministic white/normal/black fallbacks when an asset is
+missing). Dedicated MRT/compute attachments are tracked as a follow-up backend
+step and are not required to run the demo.
+
+For a RenderDoc capture, launch the demo with `--frames 300 --no-validation`,
+press **Capture Frame** after the window appears, and inspect the `G-buffer`,
+`Clustered deferred lighting`, `TAA resolve`, and `ACES tonemap` markers in
+the event browser. The CPU reference tests and `HalcyonGoldenCompare` remain
+usable on machines without a Vulkan device.
 
 ## Standalone Examples
 

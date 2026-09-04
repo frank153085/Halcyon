@@ -123,8 +123,8 @@ int run(const ExampleDefinition& definition, int argc, char** argv)
     config.window.title = definition.title != nullptr ? definition.title : "Halcyon Example";
     const std::string startupTexture = resolveStartupPath(definition.startupTexturePath);
     const std::string startupMesh = resolveStartupPath(definition.startupMeshPath);
-    config.engine.startupTexturePath = startupTexture.empty() ? nullptr : startupTexture.c_str();
-    config.engine.startupMeshPath = startupMesh.empty() ? nullptr : startupMesh.c_str();
+    config.engine.startupTexturePath = startupTexture;
+    config.engine.startupMeshPath = startupMesh;
 
     auto state = std::make_shared<State>();
     return Application::run(argc, argv, std::move(config), makeCallbacks(state, definition));

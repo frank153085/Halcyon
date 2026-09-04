@@ -44,6 +44,9 @@ lib/
 ### Third-party libraries downloaded through FetchContent or submodules ###
 # ThirdParty/*/build/
 
+# M3 sample scenes are fetched reproducibly by scripts/fetch_m3_assets.ps1.
+assets/m3/
+
 ### Operating-system files ###
 .DS_Store
 Thumbs.db

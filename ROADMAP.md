@@ -112,7 +112,7 @@ Wait for the current frame timeline
 - [x] M0 Engineering Foundation
 - [x] M1 Vulkan Vertical Slice
 - [x] M2 Core Infrastructure - first version complete; advanced integration remains deferred
-- [ ] M3 Traditional Quality Baseline
+- [x] M3 Traditional Quality Baseline (runnable baseline complete)
 - [ ] M4 GPU-Driven Foundation
 - [ ] M5 Virtualized Geometry V1
 - [ ] M6 Virtualized Geometry V2
@@ -144,13 +144,25 @@ Wait for the current frame timeline
 
 **Acceptance gate:** FrameGraph topology, cycle detection, culling, lifetime, barrier, and callback execution tests pass. No live resource allocations remain after shutdown. Bindless slots are not reused before their timeline completes. Invalid shader binaries are rejected, and failed shader or pipeline replacement leaves the last valid object active. The Vulkan bridge executes the compiled scene pass, binds the optional bindless set, routes timestamps for every compiled pass, and keeps Tracy instrumentation optional. The first version is complete after these CPU and local Vulkan checks; explicit backend barrier translation and shader-side bindless indexing remain deliberately small follow-up tasks.
 
-### M3 Traditional Quality Baseline (Planned)
+### M3 Traditional Quality Baseline (Complete — compatibility backend limits noted)
 
 **Dependencies:** M2.
 
 **Core deliverables:** fastgltf static scenes, metallic-roughness PBR, IBL, clustered lighting, CSM, a compact G-buffer, forward transparency, HDR/ACES, motion vectors, and TAA.
 
 **Acceptance gate:** Damaged Helmet and Sponza render correctly. A fixed camera, exposure, and time step produce stable golden images. The traditional path becomes the correctness and performance baseline for later paths.
+
+The checked-in baseline includes deterministic scene download/manifest tooling,
+fastgltf validation, rigid node/material extraction, generated defaults,
+per-primitive material draw ranges, CPU CSM/cluster/PBR/IBL/TAA reference
+algorithms, canonical pass contracts, screenshots, Golden SSIM comparison, and
+performance CSV output. The current Vulkan compatibility bridge records the
+opaque material draws in one dynamic-rendering scope; dedicated MRT/compute
+attachments and native transient FrameGraph allocation remain follow-up work
+for the production backend and are intentionally called out rather than hidden.
+Known device requirement: Vulkan 1.3 with dynamic rendering and a host-visible
+readback path. Captures and CSVs are written under `out/build/` by the commands
+in `README.md`.
 
 ### M4 GPU-Driven Foundation (Planned)
 

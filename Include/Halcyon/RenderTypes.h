@@ -33,7 +33,11 @@ struct QualityState
     float internalResolutionScale = 1.0f;
     float shadowResolutionScale = 1.0f;
     float lodBias = 0.0f;
+    float exposure = 0.0f;
     bool rayQueryEnabled = false;
+    bool taaEnabled = true;
+    bool clusteredLightingEnabled = true;
+    bool transparencyEnabled = true;
 };
 
 struct FrameStats
@@ -48,6 +52,13 @@ struct FrameStats
     double gpuFrameMs = -1.0;
     std::vector<PassTiming> gpuPasses;
     std::uint64_t deviceMemoryBytes = 0;
+    std::uint32_t primitiveCount = 0;
+    std::uint32_t clusterOverflowCount = 0;
+    bool taaHistoryValid = false;
+    bool screenshotWritten = false;
+    bool goldenImageCompared = false;
+    bool goldenImagePassed = false;
+    bool performanceCsvWritten = false;
     QualityState quality{};
     std::uint32_t swapchainImageIndex = 0;
     bool rendered = false;

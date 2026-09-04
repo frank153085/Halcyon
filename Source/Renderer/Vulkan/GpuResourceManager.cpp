@@ -1,12 +1,12 @@
 #include "GpuResourceManager.h"
 
-#define STB_IMAGE_IMPLEMENTATION
 #include <algorithm>
 #include <array>
 #include <fstream>
 #include <sstream>
 #include <stb_image.h>
 #include <string_view>
+#include <glm/gtc/matrix_inverse.hpp>
 
 namespace Halcyon::Vulkan
 {
@@ -70,7 +70,8 @@ void GpuResourceManager::initialize(VkDevice device,
     uploader_ = &uploader;
 }
 
-Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(const std::string& path)
+Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
+    const std::string& path, bool srgb)
 {
     if (device_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr)
     {
@@ -92,7 +93,7 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(const std::st
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
     imageInfo.extent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), 1};
     imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
@@ -153,6 +154,74 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(const std::st
         destroy(texture);
         return Halcyon::Result<TextureResource>::failure(
             {Halcyon::ErrorCode::Backend, "Failed to create texture sampler"});
+    }
+    return texture;
+}
+
+Halcyon::Result<TextureResource> GpuResourceManager::loadSolidColorTexture(
+    std::array<std::uint8_t, 4> rgba, bool srgb)
+{
+    if (device_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr)
+    {
+        return Halcyon::Result<TextureResource>::failure(
+            {Halcyon::ErrorCode::InvalidState, "GPU resource manager is not initialized"});
+    }
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = {1, 1, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    const auto imageResult = allocator_->createImage(imageInfo, MemoryUsage::GpuOnly);
+    if (!imageResult) return imageResult.error();
+
+    TextureResource texture{};
+    texture.allocation = imageResult.value();
+    texture.extent = imageInfo.extent;
+    texture.format = imageInfo.format;
+    const auto bytes = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(rgba.data()), rgba.size());
+    const auto uploadResult = uploader_->uploadImage(device_, commandPool_, queue_, *allocator_,
+        texture.allocation, texture.extent, texture.format, bytes);
+    if (!uploadResult)
+    {
+        destroy(texture);
+        return uploadResult.error();
+    }
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = texture.allocation.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = texture.format;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkResult result = vkCreateImageView(device_, &viewInfo, nullptr, &texture.view);
+    if (result != VK_SUCCESS)
+    {
+        destroy(texture);
+        return Halcyon::Result<TextureResource>::failure(
+            {Halcyon::ErrorCode::Backend, "Failed to create fallback texture image view"});
+    }
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.maxLod = 1.0f;
+    result = vkCreateSampler(device_, &samplerInfo, nullptr, &texture.sampler);
+    if (result != VK_SUCCESS)
+    {
+        destroy(texture);
+        return Halcyon::Result<TextureResource>::failure(
+            {Halcyon::ErrorCode::Backend, "Failed to create fallback texture sampler"});
     }
     return texture;
 }
@@ -283,6 +352,61 @@ Halcyon::Result<MeshResource> GpuResourceManager::loadObj(const std::string& pat
         return indexUpload.error();
     }
     mesh.indexCount = static_cast<std::uint32_t>(indices.size());
+    return mesh;
+}
+
+Halcyon::Result<MeshResource> GpuResourceManager::uploadPrimitive(
+    const Halcyon::Renderer::Scene::StaticScenePrimitive& primitive)
+{
+    if (device_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr ||
+        primitive.vertices.empty() || primitive.indices.empty())
+    {
+        return Halcyon::Result<MeshResource>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Static primitive is empty"});
+    }
+    std::vector<MeshVertex> vertices;
+    vertices.reserve(primitive.vertices.size());
+    const glm::mat4 world = primitive.worldTransform;
+    const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(world)));
+    for (const auto& source : primitive.vertices)
+    {
+        MeshVertex value{};
+        const glm::vec4 transformedPosition = world * glm::vec4(source.position, 1.0f);
+        const glm::vec3 transformedNormal = glm::normalize(normalMatrix * source.normal);
+        value.position[0] = transformedPosition.x;
+        value.position[1] = transformedPosition.y;
+        value.position[2] = transformedPosition.z;
+        value.normal[0] = transformedNormal.x;
+        value.normal[1] = transformedNormal.y;
+        value.normal[2] = transformedNormal.z;
+        value.uv[0] = source.uv.x;
+        value.uv[1] = source.uv.y;
+        vertices.push_back(value);
+    }
+    MeshResource mesh{};
+    VkBufferCreateInfo vertexInfo{};
+    vertexInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vertexInfo.size = vertices.size() * sizeof(MeshVertex);
+    vertexInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    vertexInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const auto vertexResult = allocator_->createBuffer(vertexInfo, MemoryUsage::GpuOnly);
+    if (!vertexResult) return vertexResult.error();
+    mesh.vertexBuffer = vertexResult.value();
+    VkBufferCreateInfo indexInfo = vertexInfo;
+    indexInfo.size = primitive.indices.size() * sizeof(std::uint32_t);
+    indexInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    const auto indexResult = allocator_->createBuffer(indexInfo, MemoryUsage::GpuOnly);
+    if (!indexResult) { destroy(mesh); return indexResult.error(); }
+    mesh.indexBuffer = indexResult.value();
+    auto upload = uploader_->uploadBuffer(device_, commandPool_, queue_, *allocator_,
+        mesh.vertexBuffer, std::as_bytes(std::span(vertices)));
+    if (upload)
+    {
+        upload = uploader_->uploadBuffer(device_, commandPool_, queue_, *allocator_,
+            mesh.indexBuffer, std::as_bytes(std::span(primitive.indices)));
+    }
+    if (!upload) { destroy(mesh); return upload.error(); }
+    mesh.indexCount = static_cast<std::uint32_t>(primitive.indices.size());
     return mesh;
 }
 

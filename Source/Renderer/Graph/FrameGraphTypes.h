@@ -39,7 +39,10 @@ enum class TextureFormat : std::uint8_t
     BGRA8Unorm,
     RGBA16Float,
     R16Float,
-    D32Float
+    D32Float,
+    RG16Float,
+    RGBA8Srgb,
+    RGBA8SRGB = RGBA8Srgb
 };
 
 enum class ResourceUsage : std::uint32_t

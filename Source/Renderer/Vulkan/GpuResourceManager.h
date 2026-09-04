@@ -2,8 +2,10 @@
 
 #include "GpuAllocator.h"
 #include "GpuUploader.h"
+#include "../Scene/StaticSceneLoader.h"
 
 #include <cstdint>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -45,8 +47,18 @@ public:
         VkQueue queue,
         GpuAllocator& allocator,
         GpuUploader& uploader) noexcept;
-    [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(const std::string& path);
+    // Color textures default to sRGB; linear data (normal/roughness/AO) can
+    // explicitly pass false when the full material uploader is enabled.
+    [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(
+        const std::string& path, bool srgb = true);
+    // Create a deterministic 1x1 fallback texture without touching the
+    // filesystem.  M3 materials use white for base color/AO, a flat normal,
+    // and black for metallic/emissive channels when an image is absent.
+    [[nodiscard]] Halcyon::Result<TextureResource> loadSolidColorTexture(
+        std::array<std::uint8_t, 4> rgba, bool srgb = false);
     [[nodiscard]] Halcyon::Result<MeshResource> loadObj(const std::string& path);
+    [[nodiscard]] Halcyon::Result<MeshResource> uploadPrimitive(
+        const Halcyon::Renderer::Scene::StaticScenePrimitive& primitive);
     void destroy(TextureResource& texture) noexcept;
     void destroy(MeshResource& mesh) noexcept;
     void shutdown() noexcept;

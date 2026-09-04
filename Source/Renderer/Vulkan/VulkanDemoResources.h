@@ -2,9 +2,12 @@
 
 #include "Core/Result.h"
 #include "GpuResourceManager.h"
+#include "../Scene/StaticSceneLoader.h"
 
 #include <cstdint>
+#include <string>
 #include <vulkan/vulkan.h>
+#include <vector>
 
 namespace Halcyon::Vulkan
 {
@@ -15,6 +18,15 @@ namespace Halcyon::Vulkan
 class VulkanDemoResources final
 {
 public:
+    struct SceneDraw
+    {
+        std::uint32_t firstIndex = 0;
+        std::uint32_t indexCount = 0;
+        std::int32_t vertexOffset = 0;
+        std::uint32_t materialIndex = 0;
+        std::uint32_t textureIndex = 0;
+    };
+
     VulkanDemoResources() noexcept = default;
     ~VulkanDemoResources() noexcept
     {
@@ -29,7 +41,8 @@ public:
         GpuAllocator& allocator,
         GpuUploader& uploader,
         const char* startupTexturePath,
-        const char* startupMeshPath);
+        const char* startupMeshPath,
+        const char* startupScenePath = nullptr);
     void cleanup() noexcept;
 
     [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(const char* path);
@@ -57,11 +70,22 @@ public:
     {
         return textured_;
     }
+    [[nodiscard]] std::uint32_t primitiveCount() const noexcept { return primitiveCount_; }
+    [[nodiscard]] const std::vector<SceneDraw>& sceneDraws() const noexcept
+    {
+        return sceneDraws_;
+    }
+    [[nodiscard]] const std::vector<VkDescriptorSet>& sceneTextureDescriptorSets() const noexcept
+    {
+        return sceneTextureDescriptorSets_;
+    }
 
 private:
     [[nodiscard]] Halcyon::Result<void> createTriangleGeometry();
     void loadStartupResources(const char* texturePath, const char* meshPath) noexcept;
+    [[nodiscard]] Halcyon::Result<void> loadStaticScene(const char* scenePath) noexcept;
     void destroyDescriptorResources() noexcept;
+    [[nodiscard]] bool createTextureDescriptors(std::vector<TextureResource>& textures) noexcept;
 
     VkDevice device_ = VK_NULL_HANDLE;
     VkCommandPool uploadCommandPool_ = VK_NULL_HANDLE;
@@ -76,6 +100,10 @@ private:
     VkDescriptorPool textureDescriptorPool_ = VK_NULL_HANDLE;
     VkDescriptorSet textureDescriptorSet_ = VK_NULL_HANDLE;
     bool textured_ = false;
+    std::uint32_t primitiveCount_ = 0;
+    std::vector<TextureResource> sceneTextures_;
+    std::vector<VkDescriptorSet> sceneTextureDescriptorSets_;
+    std::vector<SceneDraw> sceneDraws_;
 };
 
 } // namespace Halcyon::Vulkan

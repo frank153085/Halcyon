@@ -65,7 +65,31 @@ enum class PixelFormat : std::uint16_t
     RGBA16Float,
     R16Float,
     D32Float,
+    RG16Float,
+    R11G11B10Float,
+    RGBA8Srgb,
+    RGBA8SRGB = RGBA8Srgb,
 };
+
+enum class TextureUsage : std::uint32_t
+{
+    Sampled = 1u << 0u,
+    Storage = 1u << 1u,
+    ColorAttachment = 1u << 2u,
+    DepthAttachment = 1u << 3u,
+    TransferSource = 1u << 4u,
+    TransferDestination = 1u << 5u,
+};
+
+[[nodiscard]] constexpr std::uint32_t operator|(TextureUsage lhs, TextureUsage rhs) noexcept
+{
+    return static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs);
+}
+
+[[nodiscard]] constexpr bool hasFlag(std::uint32_t value, TextureUsage flag) noexcept
+{
+    return (value & static_cast<std::uint32_t>(flag)) != 0u;
+}
 
 struct BufferDesc
 {
@@ -110,7 +134,28 @@ struct MaterialDesc
     TextureHandle emissive{};
     float metallic = 0.0f;
     float roughness = 1.0f;
+    float alphaCutoff = 0.5f;
+    std::uint32_t flags = 0;
 };
+
+enum class MaterialFlags : std::uint32_t
+{
+    None = 0,
+    Transparent = 1u << 0u,
+    DoubleSided = 1u << 1u,
+    Unlit = 1u << 2u,
+    AlphaMasked = 1u << 3u,
+};
+
+[[nodiscard]] constexpr std::uint32_t operator|(MaterialFlags lhs, MaterialFlags rhs) noexcept
+{
+    return static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs);
+}
+
+[[nodiscard]] constexpr bool hasFlag(std::uint32_t value, MaterialFlags flag) noexcept
+{
+    return (value & static_cast<std::uint32_t>(flag)) != 0u;
+}
 
 // A stable, serialisable reference used by capture/replay and diagnostics.
 struct ResourceRef

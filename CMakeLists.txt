@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.28)
 
 project(Halcyon VERSION 0.1.0 LANGUAGES C CXX)
 
+# CMake 4.4 enables Ninja's C++ module dependency scanner for ordinary C++
+# translation units.  Halcyon does not use C++ modules yet; disabling the
+# scanner keeps MSVC/Ninja builds reproducible (and avoids treating the
+# standard library headers as module interfaces).
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 option(HALCYON_BUILD_TESTS "Build Halcyon CPU-side tests" ON)
 option(HALCYON_ENABLE_VALIDATION "Enable Vulkan validation by default" ON)
 option(HALCYON_BUILD_EXPERIMENTAL_M2
@@ -38,6 +44,29 @@ set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(ThirdParty/glm)
 add_subdirectory(ThirdParty)
 
+# fastgltf is the canonical M3 scene parser.  Keep the source pinned in the
+# repository so a clean checkout does not depend on a system installation.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/fastgltf/CMakeLists.txt")
+    set(FASTGLTF_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(FASTGLTF_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FASTGLTF_ENABLE_DOCS OFF CACHE BOOL "" FORCE)
+    set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
+    add_subdirectory(ThirdParty/fastgltf EXCLUDE_FROM_ALL)
+    add_library(Halcyon::FastGltf ALIAS fastgltf)
+else()
+    include(FetchContent)
+    FetchContent_Declare(fastgltf
+        GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+        GIT_TAG d4734a7e55d8d25155e755d895e018e423845cd0
+        GIT_SHALLOW TRUE)
+    set(FASTGLTF_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(FASTGLTF_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FASTGLTF_ENABLE_DOCS OFF CACHE BOOL "" FORCE)
+    set(FASTGLTF_COMPILE_AS_CPP20 ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(fastgltf)
+    add_library(Halcyon::FastGltf ALIAS fastgltf)
+endif()
+
 set(HALCYON_TRACY_ACTIVE OFF)
 if(HALCYON_ENABLE_TRACY AND TARGET Halcyon::Tracy)
     set(HALCYON_TRACY_ACTIVE ON)
@@ -67,6 +96,9 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/Camera.cpp
     Source/Renderer/Scene/Camera.h
     Source/Renderer/Scene/FramePacket.h
+    Source/Renderer/Scene/StaticSceneLoader.cpp
+    Source/Renderer/Scene/StaticSceneLoader.h
+    Source/Renderer/Scene/SceneDatabase.h
     Source/Renderer/Scene/Ecs/Entity.h
     Source/Renderer/Scene/Ecs/Ecs.h
     Source/Renderer/Scene/Ecs/EntityManager.cpp
@@ -109,21 +141,35 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/GpuUploader.cpp
     Source/Renderer/Vulkan/GpuUploader.h
     Source/Renderer/Vulkan/GpuResourceManager.cpp
+    Source/Renderer/Vulkan/StbImage.cpp
     Source/Renderer/Vulkan/GpuResourceManager.h
     Source/Renderer/Resources/ResourceTypes.h
     Source/Renderer/Resources/BindlessTable.cpp
     Source/Renderer/Resources/BindlessTable.h
     Source/Renderer/Resources/UploadRing.h
+    Source/Renderer/Quality/Pbr.h
+    Source/Renderer/Quality/Ibl.h
+    Source/Renderer/Quality/ClusteredLighting.h
+    Source/Renderer/Quality/CascadedShadowMaps.h
+    Source/Renderer/Quality/GBuffer.h
+    Source/Renderer/Quality/Hdr.h
+    Source/Renderer/Quality/TemporalAA.h
+    Source/Renderer/Quality/Transparency.h
+    Source/Renderer/Quality/TraditionalRenderPath.h
+    Source/Renderer/Quality/Quality.h
 )
 target_include_directories(HalcyonRenderer PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Source"
     "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(HalcyonRenderer
     PUBLIC HalcyonCore glm::glm Vulkan::Vulkan
-    PRIVATE Halcyon::Vma Halcyon::Stb
+    PRIVATE Halcyon::Vma Halcyon::Stb Halcyon::Cgltf
     PUBLIC Halcyon::RobinMap
     PRIVATE glfw
 )
+if(TARGET Halcyon::FastGltf)
+    target_link_libraries(HalcyonRenderer PRIVATE Halcyon::FastGltf)
+endif()
 target_compile_definitions(HalcyonRenderer PRIVATE
     GLFW_INCLUDE_NONE
     HALCYON_BUILD_EXPERIMENTAL_M2=$<BOOL:${HALCYON_BUILD_EXPERIMENTAL_M2}>
@@ -244,8 +290,59 @@ if(HALCYON_DXC_EXECUTABLE)
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
                 -Fo "${HALCYON_TEXTURED_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/textured.frag.hlsl"
         DEPENDS Shaders/textured.frag.hlsl VERBATIM COMMENT "Compiling textured fragment shader")
+    set(HALCYON_PBR_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/pbr.vert.spv")
+    set(HALCYON_PBR_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/pbr.frag.spv")
+    set(HALCYON_GBUFFER_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/gbuffer.frag.spv")
+    set(HALCYON_TRANSPARENT_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/forward_transparent.frag.spv")
+    set(HALCYON_TONEMAP_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/tonemap.frag.spv")
+    set(HALCYON_TAA_COMPUTE_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/taa.comp.spv")
+    set(HALCYON_CSM_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/csm.vert.spv")
+    set(HALCYON_CLUSTER_BUILD_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/cluster_build.comp.spv")
+    add_custom_command(OUTPUT "${HALCYON_PBR_VERTEX_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
+                -Fo "${HALCYON_PBR_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/pbr.vert.hlsl"
+        DEPENDS Shaders/pbr.vert.hlsl VERBATIM COMMENT "Compiling PBR vertex shader")
+    add_custom_command(OUTPUT "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
+                -Fo "${HALCYON_GBUFFER_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/gbuffer.frag.hlsl"
+        DEPENDS Shaders/gbuffer.frag.hlsl VERBATIM COMMENT "Compiling G-buffer fragment shader")
+    add_custom_command(OUTPUT "${HALCYON_PBR_FRAGMENT_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
+                -Fo "${HALCYON_PBR_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/pbr.frag.hlsl"
+        DEPENDS Shaders/pbr.frag.hlsl VERBATIM COMMENT "Compiling PBR fragment shader")
+    add_custom_command(OUTPUT "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
+                -Fo "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/forward_transparent.frag.hlsl"
+        DEPENDS Shaders/forward_transparent.frag.hlsl VERBATIM COMMENT "Compiling transparency shader")
+    add_custom_command(OUTPUT "${HALCYON_TONEMAP_FRAGMENT_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
+                -Fo "${HALCYON_TONEMAP_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/tonemap.frag.hlsl"
+        DEPENDS Shaders/tonemap.frag.hlsl VERBATIM COMMENT "Compiling ACES tonemap shader")
+    add_custom_command(OUTPUT "${HALCYON_TAA_COMPUTE_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_TAA_COMPUTE_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/taa.comp.hlsl"
+        DEPENDS Shaders/taa.comp.hlsl VERBATIM COMMENT "Compiling TAA compute shader")
+    add_custom_command(OUTPUT "${HALCYON_CSM_VERTEX_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
+                -Fo "${HALCYON_CSM_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/csm.vert.hlsl"
+        DEPENDS Shaders/csm.vert.hlsl VERBATIM COMMENT "Compiling CSM depth vertex shader")
+    add_custom_command(OUTPUT "${HALCYON_CLUSTER_BUILD_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_CLUSTER_BUILD_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/cluster_build.comp.hlsl"
+        DEPENDS Shaders/cluster_build.comp.hlsl VERBATIM COMMENT "Compiling clustered-lighting compute shader")
     add_custom_target(HalcyonShaders ALL
         DEPENDS "${HALCYON_VERTEX_SPIRV}" "${HALCYON_FRAGMENT_SPIRV}" "${HALCYON_TEXTURED_VERTEX_SPIRV}" "${HALCYON_TEXTURED_FRAGMENT_SPIRV}"
+            "${HALCYON_PBR_VERTEX_SPIRV}" "${HALCYON_PBR_FRAGMENT_SPIRV}" "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
+            "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}" "${HALCYON_TONEMAP_FRAGMENT_SPIRV}" "${HALCYON_TAA_COMPUTE_SPIRV}"
+            "${HALCYON_CSM_VERTEX_SPIRV}" "${HALCYON_CLUSTER_BUILD_SPIRV}"
     )
     add_dependencies(HalcyonRenderer HalcyonShaders)
 else()
@@ -258,6 +355,9 @@ add_library(HalcyonEngine STATIC
     Include/Halcyon/Engine.h
     Include/Halcyon/RenderTypes.h
     Include/Halcyon/Scene.h
+    Include/Halcyon/Quality.h
+    Include/Halcyon/TraditionalQuality.h
+    Include/Halcyon/StaticScene.h
     Include/Halcyon/View.h
     Source/Engine/Engine.cpp
     Source/Engine/EngineInternal.h
@@ -284,7 +384,8 @@ add_library(HalcyonApplication STATIC
 )
 target_include_directories(HalcyonApplication PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Source"
-    "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb")
 target_link_libraries(HalcyonApplication PUBLIC HalcyonEngine PRIVATE glfw)
 target_compile_definitions(HalcyonApplication PRIVATE
     GLFW_INCLUDE_NONE
@@ -305,6 +406,33 @@ target_compile_definitions(HalcyonSandbox PRIVATE
     HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>
 )
 halcyon_enable_warnings(HalcyonSandbox)
+
+# M3 showcase executable.  It intentionally has its own entry point so the
+# original sandbox remains a stable M1/M2 regression target.
+add_executable(HalcyonM3Demo
+    Source/M3Demo/Main.cpp
+    Source/M3Demo/M3Demo.cpp
+    Source/M3Demo/M3Demo.h)
+target_link_libraries(HalcyonM3Demo PRIVATE HalcyonApplication)
+target_compile_definitions(HalcyonM3Demo PRIVATE
+    HALCYON_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
+halcyon_enable_warnings(HalcyonM3Demo)
+
+# Standalone image gate used by CI and local capture workflows.  It is kept
+# independent from the renderer so it can decode PNGs on machines without a
+# Vulkan device.
+add_executable(HalcyonGoldenCompare Source/M3Demo/GoldenCompare.cpp)
+target_link_libraries(HalcyonGoldenCompare PRIVATE HalcyonCore Halcyon::Stb)
+halcyon_enable_warnings(HalcyonGoldenCompare)
+
+add_custom_target(HalcyonFetchM3Assets
+    COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_m3_assets.ps1"
+            -Destination "${CMAKE_CURRENT_SOURCE_DIR}/assets/m3"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_m3_assets.ps1"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL)
 
 if(HALCYON_BUILD_EXAMPLES)
     add_subdirectory(Examples)
@@ -367,6 +495,20 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonCameraTests)
     add_test(NAME Halcyon.Camera COMMAND HalcyonCameraTests)
 
+    add_executable(HalcyonM3QualityTests Tests/M3QualityTests.cpp)
+    target_link_libraries(HalcyonM3QualityTests PRIVATE HalcyonCore glm::glm)
+    target_include_directories(HalcyonM3QualityTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    halcyon_enable_warnings(HalcyonM3QualityTests)
+    add_test(NAME Halcyon.M3Quality COMMAND HalcyonM3QualityTests)
+
+    add_executable(HalcyonStaticSceneLoaderTests Tests/StaticSceneLoaderTests.cpp)
+    target_link_libraries(HalcyonStaticSceneLoaderTests PRIVATE HalcyonRenderer)
+    target_compile_definitions(HalcyonStaticSceneLoaderTests PRIVATE
+        HALCYON_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    halcyon_enable_warnings(HalcyonStaticSceneLoaderTests)
+    add_test(NAME Halcyon.StaticSceneLoader COMMAND HalcyonStaticSceneLoaderTests)
+
     add_executable(HalcyonEcsTests
         Tests/EcsTests.cpp
         Source/Renderer/Scene/Ecs/EntityManager.cpp
@@ -404,6 +546,8 @@ if(HALCYON_BUILD_TESTS)
         HalcyonCoreTests
         HalcyonMemoryAllocatorTests
         HalcyonCameraTests
+        HalcyonM3QualityTests
+        HalcyonStaticSceneLoaderTests
         HalcyonEcsTests
         HalcyonInfrastructureTests
         HalcyonDeferredDeletionTests)

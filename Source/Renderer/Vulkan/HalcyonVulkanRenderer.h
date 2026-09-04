@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <utility>
@@ -41,6 +42,11 @@ struct RendererConfig
     // a different loading path.
     const char* startupTexturePath = nullptr;
     const char* startupMeshPath = nullptr;
+    const char* startupScenePath = nullptr;
+    float exposure = 0.0f;
+    bool enableTaa = true;
+    bool enableClusteredLighting = true;
+    bool enableTransparency = true;
 };
 
 // The Vulkan backend consumes the canonical packet types from the
@@ -94,6 +100,8 @@ public:
     // Resource helpers keep VMA and staging details inside the Vulkan backend.
     [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(const char* path);
     [[nodiscard]] Halcyon::Result<MeshResource> loadObj(const char* path);
+    [[nodiscard]] Halcyon::Result<void> loadStaticScene(const char* path);
+    [[nodiscard]] Halcyon::Result<void> captureScreenshot(const std::filesystem::path& path);
     void destroy(TextureResource& texture) noexcept;
     void destroy(MeshResource& mesh) noexcept;
 

@@ -5,7 +5,9 @@
 #include "Window.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <string>
 
 namespace Halcyon
 {
@@ -33,6 +35,10 @@ struct ApplicationConfig
     EngineConfig engine{};
     std::uint64_t frameLimit = 0;
     bool enableDiagnostics = false;
+    std::string sceneName = "";
+    std::filesystem::path screenshotPath{};
+    std::filesystem::path goldenPath{};
+    std::filesystem::path performanceCsvPath{};
 };
 
 class Application final

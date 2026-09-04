@@ -195,6 +195,33 @@ Halcyon::Result<void> GpuAllocator::writeBuffer(
     return Halcyon::Result<void>::success();
 }
 
+Halcyon::Result<std::vector<std::byte>> GpuAllocator::readBuffer(
+    BufferAllocation allocation, VkDeviceSize offset, VkDeviceSize size)
+{
+    if (impl_ == nullptr || allocation.buffer == VK_NULL_HANDLE || size == 0 ||
+        offset > allocation.size || size > allocation.size - offset)
+    {
+        return Halcyon::Result<std::vector<std::byte>>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Invalid buffer read parameters"});
+    }
+    auto it = impl_->records.find(allocation.allocationId);
+    if (it == impl_->records.end())
+    {
+        return Halcyon::Result<std::vector<std::byte>>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Unknown buffer allocation"});
+    }
+    void* mapped = nullptr;
+    const VkResult mapResult = vmaMapMemory(impl_->allocator, it->second.allocation, &mapped);
+    if (mapResult != VK_SUCCESS)
+    {
+        return Halcyon::Result<std::vector<std::byte>>::failure(vmaError("vmaMapMemory", mapResult));
+    }
+    std::vector<std::byte> result(static_cast<std::size_t>(size));
+    std::memcpy(result.data(), static_cast<const std::byte*>(mapped) + offset, result.size());
+    vmaUnmapMemory(impl_->allocator, it->second.allocation);
+    return Halcyon::Result<std::vector<std::byte>>::success(std::move(result));
+}
+
 void GpuAllocator::destroy(BufferAllocation allocation) noexcept
 {
     if (!impl_ || allocation.allocationId == 0 || allocation.buffer == VK_NULL_HANDLE)

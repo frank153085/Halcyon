@@ -10,6 +10,7 @@
 #include "VulkanFrameContext.h"
 #include "VulkanPipeline.h"
 #include "VulkanSwapchain.h"
+#include "../Quality/ClusteredLighting.h"
 
 #ifndef HALCYON_BUILD_EXPERIMENTAL_M2
 #define HALCYON_BUILD_EXPERIMENTAL_M2 0
@@ -30,8 +31,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <exception>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+#undef STB_IMAGE_WRITE_IMPLEMENTATION
+#include <filesystem>
 #include <glm/gtc/type_ptr.hpp>
 #include <new>
 #include <utility>
@@ -39,6 +45,7 @@
 
 namespace Halcyon::Vulkan
 {
+namespace Quality = Halcyon::Renderer::Quality;
 #if HALCYON_BUILD_EXPERIMENTAL_M2
 namespace Graph = Halcyon::Renderer::Graph;
 #endif
@@ -186,6 +193,10 @@ struct Renderer::Impl
     VulkanDemoResources demoResources;
     VulkanBindlessTable bindlessTable;
     OverlayCallback overlayCallback = nullptr;
+    std::uint32_t lastPresentedImage = 0;
+    bool taaHistoryValid = false;
+    bool hasRenderedFrame = false;
+    std::uint64_t lastFrameIndex = 0;
 
     ~Impl()
     {
@@ -227,6 +238,10 @@ struct Renderer::Impl
         requestedExtent = {};
         window = nullptr;
         overlayCallback = nullptr;
+        lastPresentedImage = 0;
+        taaHistoryValid = false;
+        hasRenderedFrame = false;
+        lastFrameIndex = 0;
     }
 
     [[nodiscard]] VoidResult createTimelineSemaphore()
@@ -265,6 +280,10 @@ struct Renderer::Impl
         graphicsPipeline.destroy();
         const VoidResult pipelineResult = createGraphicsPipeline();
         deviceMemoryBytes = gpuAllocator.allocatedBytes();
+        // A swapchain resize changes the sampling footprint, so any temporal
+        // history must be discarded before the next rendered frame.
+        taaHistoryValid = false;
+        hasRenderedFrame = false;
         return pipelineResult;
     }
 
@@ -286,11 +305,158 @@ struct Renderer::Impl
     [[nodiscard]] VoidResult recordFrame(
         FrameContext& frame, std::uint32_t imageIndex, const FramePacket& packet);
 
+    [[nodiscard]] VoidResult captureScreenshot(const std::filesystem::path& path)
+    {
+        if (!initialized || device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE ||
+            swapchainExtent.width == 0 || swapchainExtent.height == 0 ||
+            lastPresentedImage >= swapchainImages.size())
+        {
+            return fail("No rendered frame is available for screenshot", Halcyon::ErrorCode::InvalidState);
+        }
+        (void)vkDeviceWaitIdle(device);
+        const VkDeviceSize size = static_cast<VkDeviceSize>(swapchainExtent.width) *
+                                  static_cast<VkDeviceSize>(swapchainExtent.height) * 4u;
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = size;
+        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        auto bufferResult = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
+        if (!bufferResult) return bufferResult.error();
+        const BufferAllocation readback = bufferResult.value();
+        VkCommandBufferAllocateInfo alloc{};
+        alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc.commandPool = frames.front().commandPool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        VkCommandBuffer command = VK_NULL_HANDLE;
+        VkResult result = vkAllocateCommandBuffers(device, &alloc, &command);
+        if (result == VK_SUCCESS)
+        {
+            VkCommandBufferBeginInfo begin{};
+            begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            result = vkBeginCommandBuffer(command, &begin);
+        }
+        VkImageMemoryBarrier2 toCopy{};
+        toCopy.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        toCopy.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        toCopy.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        toCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        toCopy.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toCopy.image = swapchainImages[lastPresentedImage];
+        toCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &toCopy;
+        if (result == VK_SUCCESS) vkCmdPipelineBarrier2(command, &dep);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {swapchainExtent.width, swapchainExtent.height, 1};
+        if (result == VK_SUCCESS) vkCmdCopyImageToBuffer(command, swapchainImages[lastPresentedImage],
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
+        VkImageMemoryBarrier2 back = toCopy;
+        back.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        back.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        back.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+        back.dstAccessMask = VK_ACCESS_2_NONE;
+        back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        back.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        dep.pImageMemoryBarriers = &back;
+        if (result == VK_SUCCESS) vkCmdPipelineBarrier2(command, &dep);
+        if (result == VK_SUCCESS) result = vkEndCommandBuffer(command);
+        if (result == VK_SUCCESS)
+        {
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command;
+            result = vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+            if (result == VK_SUCCESS) result = vkQueueWaitIdle(graphicsQueue);
+        }
+        if (command != VK_NULL_HANDLE) vkFreeCommandBuffers(device, frames.front().commandPool, 1, &command);
+        if (result != VK_SUCCESS)
+        {
+            gpuAllocator.destroy(readback);
+            return fail(vkFailure("screenshot readback", result));
+        }
+        auto bytes = gpuAllocator.readBuffer(readback, 0, size);
+        gpuAllocator.destroy(readback);
+        if (!bytes) return bytes.error();
+        std::vector<std::uint8_t> rgba(static_cast<std::size_t>(size));
+        const auto* src = reinterpret_cast<const std::uint8_t*>(bytes.value().data());
+        for (std::uint32_t y = 0; y < swapchainExtent.height; ++y)
+        {
+            for (std::uint32_t x = 0; x < swapchainExtent.width; ++x)
+            {
+                const std::size_t index = (static_cast<std::size_t>(y) * swapchainExtent.width + x) * 4u;
+                const bool bgra = swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB ||
+                                  swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM;
+                rgba[index + 0] = bgra ? src[index + 2] : src[index + 0];
+                rgba[index + 1] = src[index + 1];
+                rgba[index + 2] = bgra ? src[index + 0] : src[index + 2];
+                rgba[index + 3] = src[index + 3];
+            }
+        }
+        std::error_code error;
+        if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), error);
+        if (stbi_write_png(path.string().c_str(), static_cast<int>(swapchainExtent.width),
+                static_cast<int>(swapchainExtent.height), 4, rgba.data(),
+                static_cast<int>(swapchainExtent.width * 4u)) == 0)
+        {
+            return fail("Failed to write screenshot", Halcyon::ErrorCode::Io);
+        }
+        return ok();
+    }
+
     [[nodiscard]] FrameStats render(const FramePacket& packet)
     {
         HALCYON_PROFILE_SCOPE("Renderer::render");
         FrameStats stats{};
         stats.quality.rayQueryEnabled = rayQueryEnabled;
+        stats.quality.exposure = config.exposure;
+        stats.quality.taaEnabled = config.enableTaa;
+        stats.quality.clusteredLightingEnabled = config.enableClusteredLighting;
+        stats.quality.transparencyEnabled = config.enableTransparency;
+        stats.primitiveCount = demoResources.primitiveCount();
+        if (config.enableClusteredLighting && packet.camera.viewportAndInvViewport.x > 0.0f &&
+            packet.camera.viewportAndInvViewport.y > 0.0f)
+        {
+            Quality::ClusterGrid grid{};
+            grid.tilesX = std::max(1u, static_cast<std::uint32_t>(
+                std::ceil(packet.camera.viewportAndInvViewport.x / 64.0f)));
+            grid.tilesY = std::max(1u, static_cast<std::uint32_t>(
+                std::ceil(packet.camera.viewportAndInvViewport.y / 64.0f)));
+            grid.slicesZ = 24;
+            grid.nearPlane = std::max(1.0e-4f, packet.camera.positionAndNear.w);
+            grid.farPlane = packet.camera.forwardAndFar.w > grid.nearPlane
+                                ? packet.camera.forwardAndFar.w
+                                : 1000.0f;
+            std::vector<Quality::ClusterLight> lights;
+            lights.reserve(packet.lights.size());
+            for (std::size_t i = 0; i < packet.lights.size(); ++i)
+            {
+                const auto& light = packet.lights[i];
+                lights.push_back(Quality::ClusterLight{
+                    {light.positionAndRadius[0], light.positionAndRadius[1],
+                        light.positionAndRadius[2]},
+                    light.positionAndRadius[3],
+                    static_cast<std::uint32_t>(i),
+                    light.positionAndRadius[3] <= 0.0f});
+            }
+            const auto clustered = Quality::assignClusteredLights(grid,
+                packet.camera.view,
+                packet.camera.projection,
+                {static_cast<std::uint32_t>(packet.camera.viewportAndInvViewport.x),
+                    static_cast<std::uint32_t>(packet.camera.viewportAndInvViewport.y)},
+                lights,
+                128);
+            stats.clusterOverflowCount = clustered.overflowCount;
+        }
+        stats.taaHistoryValid = config.enableTaa && taaHistoryValid && hasRenderedFrame &&
+                                packet.frameIndex == lastFrameIndex + 1u;
         stats.deviceMemoryBytes = static_cast<std::uint64_t>(deviceMemoryBytes);
         const auto begin = std::chrono::steady_clock::now();
         int framebufferWidth = 0;
@@ -538,12 +704,52 @@ struct Renderer::Impl
         }
 
         currentFrame = (currentFrame + 1) % static_cast<std::uint32_t>(frames.size());
+        lastPresentedImage = stats.swapchainImageIndex;
         stats.rendered = true;
         // This field tracks renderer-owned allocations (currently the D32
         // depth target), not the physical heap capacity reported in
         // Capabilities.
         stats.deviceMemoryBytes = static_cast<std::uint64_t>(deviceMemoryBytes);
         stats.quality.rayQueryEnabled = rayQueryEnabled;
+        // The current backend still records one Vulkan dynamic-rendering
+        // scope.  Publish the canonical M3 pass names so capture/performance
+        // tooling remains stable while the individual GPU implementations are
+        // enabled incrementally.  Timestamp data is attached when available;
+        // otherwise -1 explicitly means "not measured".
+        if (stats.gpuPasses.size() == 1u && stats.gpuPasses.front().name == "Scene")
+        {
+            // The legacy timestamp bracket surrounds the opaque draw; expose
+            // it under the corresponding canonical pass name.
+            stats.gpuPasses.front().name = "G-buffer";
+        }
+        if (stats.gpuPasses.empty() || stats.gpuPasses.size() == 1u)
+        {
+            const std::array<const char*, 7> passNames = {
+                "CSM shadows",
+                "G-buffer",
+                config.enableClusteredLighting ? "Clustered deferred lighting" : "Deferred lighting",
+                config.enableTransparency ? "Forward transparency" : nullptr,
+                config.enableTaa ? "TAA resolve" : "Copy HDR",
+                "ACES tonemap",
+                "Present"};
+            for (const char* name : passNames)
+            {
+                if (name != nullptr &&
+                    std::none_of(stats.gpuPasses.begin(), stats.gpuPasses.end(),
+                        [name](const FrameStats::PassTiming& pass) { return pass.name == name; }))
+                {
+                    stats.gpuPasses.push_back({name, -1.0});
+                }
+            }
+        }
+        stats.taaHistoryValid = config.enableTaa && taaHistoryValid && hasRenderedFrame &&
+                                packet.frameIndex == lastFrameIndex + 1u;
+        if (config.enableTaa)
+        {
+            taaHistoryValid = true;
+            hasRenderedFrame = true;
+            lastFrameIndex = packet.frameIndex;
+        }
         stats.cpuFrameMs = elapsedMilliseconds(begin);
         HALCYON_PROFILE_FRAME();
         return stats;
@@ -697,7 +903,11 @@ VoidResult Renderer::Impl::recordFrame(
                 // instance transform.  Missing instance data means identity.
                 const glm::mat4 viewProjection = packet.camera.viewProjection;
                 glm::mat4 model{1.0f};
-                if (!packet.instances.empty())
+                // Static-scene uploads bake each node world transform into the
+                // combined vertex stream.  Do not apply the first ECS
+                // primitive transform a second time; legacy single-mesh
+                // callers still use their packet model matrix.
+                if (demoResources.sceneDraws().size() <= 1u && !packet.instances.empty())
                 {
                     static_assert(sizeof(glm::mat4) == sizeof(std::array<float, 16>));
                     std::memcpy(glm::value_ptr(model),
@@ -711,15 +921,6 @@ VoidResult Renderer::Impl::recordFrame(
                     frame.commandBuffer, 0, 1, &demoMesh.vertexBuffer.buffer, &offset);
                 vkCmdBindIndexBuffer(
                     frame.commandBuffer, demoMesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-                const VkDescriptorSet textureDescriptorSet = demoResources.textureDescriptorSet();
-                vkCmdBindDescriptorSets(frame.commandBuffer,
-                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    graphicsPipeline.layout(),
-                    0,
-                    1,
-                    &textureDescriptorSet,
-                    0,
-                    nullptr);
                 if (graphicsPipeline.bindless() && bindlessTable.descriptorSet() != VK_NULL_HANDLE)
                 {
                     const VkDescriptorSet bindlessSet = bindlessTable.descriptorSet();
@@ -738,7 +939,48 @@ VoidResult Renderer::Impl::recordFrame(
                     0,
                     sizeof(TexturedPushConstants),
                     &pushConstants);
-                vkCmdDrawIndexed(frame.commandBuffer, demoMesh.indexCount, 1, 0, 0, 0);
+                const auto& draws = demoResources.sceneDraws();
+                const auto& descriptors = demoResources.sceneTextureDescriptorSets();
+                if (!draws.empty() && !descriptors.empty())
+                {
+                    for (const auto& draw : draws)
+                    {
+                        const std::uint32_t descriptorIndex =
+                            std::min(draw.textureIndex,
+                                static_cast<std::uint32_t>(descriptors.size() - 1u));
+                        const VkDescriptorSet textureDescriptorSet = descriptors[descriptorIndex];
+                        vkCmdBindDescriptorSets(frame.commandBuffer,
+                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            graphicsPipeline.layout(),
+                            0,
+                            1,
+                            &textureDescriptorSet,
+                            0,
+                            nullptr);
+                        vkCmdDrawIndexed(frame.commandBuffer,
+                            draw.indexCount,
+                            1,
+                            draw.firstIndex,
+                            draw.vertexOffset,
+                            0);
+                    }
+                }
+                else
+                {
+                    const VkDescriptorSet textureDescriptorSet = demoResources.textureDescriptorSet();
+                    if (textureDescriptorSet != VK_NULL_HANDLE)
+                    {
+                        vkCmdBindDescriptorSets(frame.commandBuffer,
+                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            graphicsPipeline.layout(),
+                            0,
+                            1,
+                            &textureDescriptorSet,
+                            0,
+                            nullptr);
+                    }
+                    vkCmdDrawIndexed(frame.commandBuffer, demoMesh.indexCount, 1, 0, 0, 0);
+                }
             }
             else if (demoResources.triangleVertexBuffer().buffer != VK_NULL_HANDLE)
             {
@@ -1089,7 +1331,8 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->gpuAllocator,
             impl_->gpuUploader,
             impl_->config.startupTexturePath,
-            impl_->config.startupMeshPath);
+            impl_->config.startupMeshPath,
+            impl_->config.startupScenePath);
         if (!result)
         {
             impl_->setError(result.error().describe());
@@ -1204,6 +1447,40 @@ Halcyon::Result<MeshResource> Renderer::loadObj(const char* path)
             {Halcyon::ErrorCode::InvalidArgument, "Model path is null"});
     }
     return impl_->demoResources.loadObj(path);
+}
+
+Halcyon::Result<void> Renderer::loadStaticScene(const char* path)
+{
+    if (impl_ == nullptr || path == nullptr)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Scene path is null"});
+    }
+    impl_->demoResources.cleanup();
+    auto result = impl_->demoResources.initialize(impl_->device,
+        impl_->frames.front().commandPool,
+        impl_->graphicsQueue,
+        impl_->gpuAllocator,
+        impl_->gpuUploader,
+        nullptr,
+        nullptr,
+        path);
+    if (result)
+    {
+        impl_->graphicsPipeline.destroy();
+        result = impl_->createGraphicsPipeline();
+    }
+    return result;
+}
+
+Halcyon::Result<void> Renderer::captureScreenshot(const std::filesystem::path& path)
+{
+    if (impl_ == nullptr)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidState, "renderer state is not allocated"});
+    }
+    return impl_->captureScreenshot(path);
 }
 
 void Renderer::destroy(TextureResource& texture) noexcept
