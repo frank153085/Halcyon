@@ -397,13 +397,17 @@ Halcyon::Result<StaticScene> loadStaticScene(
         }
     }
     std::vector<std::uint8_t> state(scene.nodes.size(), 0u);
+    bool cycleDetected = false;
     const auto resolve = [&](auto&& self, std::size_t index) -> glm::mat4
     {
         if (state[index] == 2u) return scene.nodes[index].worldTransform;
         if (state[index] == 1u)
         {
-            state[index] = 2u;
-            scene.nodes[index].worldTransform = scene.nodes[index].localTransform;
+            // A parent cycle is invalid for a static scene.  Do not silently
+            // manufacture a transform: report it to the caller after the
+            // traversal so malformed assets cannot produce nondeterministic
+            // world matrices.
+            cycleDetected = true;
             return scene.nodes[index].worldTransform;
         }
         state[index] = 1u;
@@ -414,6 +418,9 @@ Halcyon::Result<StaticScene> loadStaticScene(
         return scene.nodes[index].worldTransform;
     };
     for (std::size_t i = 0; i < scene.nodes.size(); ++i) (void)resolve(resolve, i);
+    if (cycleDetected)
+        return Halcyon::Result<StaticScene>::failure(loadError(
+            Halcyon::ErrorCode::InvalidArgument, "scene node hierarchy contains a cycle", path));
     std::vector<std::uint8_t> primitiveUsed(scene.primitives.size(), 0u);
     for (auto& node : scene.nodes)
     {

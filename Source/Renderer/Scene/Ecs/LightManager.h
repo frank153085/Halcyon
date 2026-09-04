@@ -21,6 +21,9 @@ struct LightComponent
     float intensity = 1.0f;
     float range = 10.0f;
     glm::vec3 position{0.0f};
+    glm::vec3 direction{0.0f, -1.0f, 0.0f};
+    float innerConeCos = 0.9f;
+    float outerConeCos = 0.8f;
 };
 
 class LightManager final

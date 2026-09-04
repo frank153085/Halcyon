@@ -4,8 +4,14 @@ struct FragmentIn
     float2 uv : TEXCOORD0;
 };
 
-Texture2D hdrTexture : register(t0);
-SamplerState linearSampler : register(s0);
+[[vk::binding(0, 0)]] Texture2D hdrTexture;
+[[vk::binding(10, 0)]] SamplerState linearSampler;
+struct TonemapConstants
+{
+    float exposure;
+    float3 _padding;
+};
+[[vk::push_constant]] ConstantBuffer<TonemapConstants> constants;
 
 float3 aces(float3 color)
 {
@@ -26,5 +32,6 @@ float3 linearToSrgb(float3 color)
 
 float4 main(FragmentIn input) : SV_Target0
 {
-    return float4(linearToSrgb(aces(hdrTexture.Sample(linearSampler, input.uv).rgb)), 1.0);
+    const float3 hdr = hdrTexture.Sample(linearSampler, input.uv).rgb * exp2(constants.exposure);
+    return float4(linearToSrgb(aces(hdr)), 1.0);
 }

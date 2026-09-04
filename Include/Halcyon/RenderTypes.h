@@ -50,6 +50,10 @@ struct FrameStats
 
     double cpuFrameMs = 0.0;
     double gpuFrameMs = -1.0;
+    // Exact execution order produced by the compiled FrameGraph for this
+    // frame. Timings are reported separately because timestamp results become
+    // available only after the corresponding frame fence has completed.
+    std::vector<std::string> executedPasses;
     std::vector<PassTiming> gpuPasses;
     std::uint64_t deviceMemoryBytes = 0;
     std::uint32_t primitiveCount = 0;
@@ -76,6 +80,7 @@ struct Capabilities
     std::string deviceName;
     std::uint32_t vendorId = 0;
     std::uint32_t deviceId = 0;
+    std::uint32_t driverVersion = 0;
     std::uint64_t deviceLocalMemoryBytes = 0;
     bool validationEnabled = false;
     bool debugUtils = false;

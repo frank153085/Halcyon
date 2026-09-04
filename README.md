@@ -18,8 +18,8 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Three frame contexts, swapchain recreation, and safe minimize, resize, and
   out-of-date handling.
 - A reversed-Z camera convention with D32 depth and `GREATER_OR_EQUAL`.
-- Build-time HLSL-to-SPIR-V validation through DXC, with embedded triangle
-  shaders retained as an offline fallback.
+- Build-time HLSL-to-SPIR-V compilation through DXC. All M3 pipelines require
+  generated SPIR-V at runtime; missing shader binaries fail initialization.
 - CPU-side tests for generation handles, deferred deletion, and the upload
   ring foundation.
 - CPU render-graph compilation/execution, barrier planning, bindless slot
@@ -49,11 +49,13 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Optional GoogleTest coverage; enable it with
   `-DHALCYON_ENABLE_GOOGLETEST=ON`.
 
-This M3 increment deliberately keeps the backend bridge small: the graph owns
-semantic ordering and lifetime decisions, while Vulkan retains explicit image
-barriers and command recording. Optional Tracy CPU instrumentation, binding of
-the bindless set into the demo pipeline, and generic per-pass GPU timestamp
-routing are available without making them mandatory for the base renderer.
+The Vulkan backend executes the complete multi-pass M3 graph: four CSM depth
+passes, G-buffer MRT, GPU cluster build, deferred PBR/IBL, forward transparency,
+TAA compute, ACES tonemap, and present/readback. Each pass has its own dynamic
+rendering scope and descriptor layout, while the FrameGraph provider owns VMA
+materialization and transient/persistent lifetimes. Device, format, descriptor,
+and shader requirements are checked during initialization; unsupported devices
+fail with a diagnostic instead of selecting a reduced path.
 Advanced GPU-driven rendering, the Visibility Buffer, and ray-tracing
 extensions remain assigned to later milestones. M2 infrastructure is enabled by default; pass
 `-DHALCYON_BUILD_EXPERIMENTAL_M2=OFF` to build only the M0/M1 baseline.
@@ -97,9 +99,11 @@ cmake --build --preset windows-msvc-relwithdebinfo
 ctest --preset windows-msvc-relwithdebinfo
 ```
 
-If DXC is unavailable, configuration emits a warning, but the embedded M1
-shaders remain usable. Install the Vulkan SDK and configure again to enable the
-HLSL validation target.
+DXC is mandatory for the M3 renderer: configuration fails with a diagnostic if
+it cannot be found. When the Vulkan SDK also provides `spirv-val`, CMake adds a
+`HalcyonShaderValidation` target and validates every generated module before
+the renderer is linked. Install the Vulkan SDK and configure again after fixing
+the toolchain path.
 
 ## Run the Sandbox
 
@@ -139,14 +143,17 @@ out\build\m3-msvc-debug\HalcyonGoldenCompare.exe `
   --actual out\captures\helmet.png --golden path\to\helmet-golden.png
 ```
 
-The compatibility Vulkan bridge submits the uploaded static scene as stable
-indexed SceneManager instances in one dynamic-rendering scope; the canonical
-CSM/G-buffer/cluster/deferred/TAA pass contracts and shaders are present for
-incremental backend integration. Damaged Helmet uses its embedded base-color
-maps, and Sponza resolves each primitive's external base-color URI to its own
-descriptor (with deterministic white/normal/black fallbacks when an asset is
-missing). Dedicated MRT/compute attachments are tracked as a follow-up backend
-step and are not required to run the demo.
+When `--golden` is supplied without an explicit `--frames`, the runner uses a
+640×360 capture with 120 deterministic warm-up frames before comparing the
+final image (SSIM threshold 0.995). Explicit frame counts remain available for
+fast smoke tests and self-comparisons.
+
+The demo submits stable SceneManager instances through the complete Vulkan M3
+graph. Damaged Helmet and Sponza resolve their external or embedded textures
+through the same material upload path, with deterministic default textures for
+missing material channels. Cluster ranges/indices and overflow counters are
+written by the GPU compute pass and consumed by deferred lighting; no CPU
+clustered-lighting or forward-only compatibility path is used.
 
 For a RenderDoc capture, launch the demo with `--frames 300 --no-validation`,
 press **Capture Frame** after the window appears, and inspect the `G-buffer`,

@@ -1,10 +1,13 @@
 // Minimal CSM depth vertex stage.  The production path can bind one cascade
 // matrix per draw; keeping this shader independently compilable also makes
 // depth-only pipeline validation deterministic.
-cbuffer CsmConstants : register(b0)
+struct CsmConstants
 {
     float4x4 lightViewProjection;
+    float4x4 model;
 };
+
+[[vk::push_constant]] ConstantBuffer<CsmConstants> constants;
 
 struct VertexInput
 {
@@ -13,5 +16,5 @@ struct VertexInput
 
 float4 main(VertexInput input) : SV_Position
 {
-    return mul(lightViewProjection, float4(input.position, 1.0));
+    return mul(constants.lightViewProjection, mul(constants.model, float4(input.position, 1.0)));
 }

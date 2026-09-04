@@ -33,6 +33,7 @@ namespace
     result.deviceName = source.deviceName;
     result.vendorId = source.vendorId;
     result.deviceId = source.deviceId;
+    result.driverVersion = source.driverVersion;
     result.deviceLocalMemoryBytes = source.deviceLocalMemoryBytes;
     result.validationEnabled = source.validationEnabled;
     result.debugUtils = source.debugUtils;
@@ -78,6 +79,7 @@ namespace
     result.minimized = source.minimized;
     result.deviceLost = source.deviceLost;
     result.fatalError = source.fatalError;
+    result.executedPasses = source.executedPasses;
     result.gpuPasses.reserve(source.gpuPasses.size());
     for (const auto& pass : source.gpuPasses)
     {

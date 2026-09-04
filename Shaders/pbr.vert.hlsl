@@ -13,6 +13,8 @@ struct VertexOut
     float3 normal : TEXCOORD1;
     float2 uv : TEXCOORD2;
     float4 previousPosition : TEXCOORD3;
+    float4 tangent : TEXCOORD4;
+    float4 currentPosition : TEXCOORD5;
 };
 
 struct Constants
@@ -30,10 +32,12 @@ VertexOut main(VertexIn input)
     VertexOut output;
     const float4 world = mul(constants.model, float4(input.position, 1.0));
     output.position = mul(constants.viewProjection, world);
+    output.currentPosition = output.position;
     output.previousPosition = mul(constants.previousViewProjection,
         mul(constants.previousModel, float4(input.position, 1.0)));
     output.worldPosition = world.xyz;
     output.normal = normalize(mul((float3x3)constants.model, input.normal));
     output.uv = input.uv;
+    output.tangent = float4(normalize(mul((float3x3)constants.model, input.tangent.xyz)), input.tangent.w);
     return output;
 }

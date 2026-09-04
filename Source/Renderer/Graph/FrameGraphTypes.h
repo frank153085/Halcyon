@@ -113,6 +113,7 @@ struct TextureDescriptor
     std::uint32_t arrayLayers = 1;
     TextureFormat format = TextureFormat::Unknown;
     bool transient = true;
+    bool cube = false;
 };
 
 struct BufferSubresourceDescriptor
@@ -144,6 +145,7 @@ struct FrameGraphResourceCreateInfo
     ResourceKind kind = ResourceKind::Buffer;
     BufferDescriptor buffer{};
     TextureDescriptor texture{};
+    ResourceUsage usage = ResourceUsage::None;
     bool imported = false;
 };
 

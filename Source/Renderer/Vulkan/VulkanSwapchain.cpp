@@ -278,7 +278,12 @@ VoidResult VulkanSwapchain::create()
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if ((capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0)
+    {
+        return fail("The surface does not support transfer-source swapchain images",
+            Halcyon::ErrorCode::Unsupported);
+    }
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     const std::array<std::uint32_t, 2> queueFamilies = {graphicsQueueFamily, presentQueueFamily};
     if (graphicsQueueFamily != presentQueueFamily)
     {
@@ -401,9 +406,9 @@ VoidResult VulkanSwapchain::create()
     // from the renderer.  The commit below uses noexcept swaps.
     std::vector<bool> newImageInitialized(newImages.size(), false);
 
-    // Build the pipeline against the new format before committing the
-    // swapchain.  A failed optional triangle pipeline still leaves a valid
-    // clear-only renderer.
+    // Commit the new swapchain only after all image views and synchronization
+    // objects have been created successfully. M3 pipelines are rebuilt by the
+    // renderer immediately after this state transition.
     const VkSwapchainKHR oldSwapchain = std::exchange(swapchain, newSwapchain);
     std::vector<VkImageView> oldViews;
     oldViews.swap(swapchainImageViews);

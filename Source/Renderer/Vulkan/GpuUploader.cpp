@@ -195,4 +195,134 @@ Halcyon::Result<void> GpuUploader::uploadImage(VkDevice device,
     return submitResult;
 }
 
+Halcyon::Result<void> GpuUploader::uploadImageWithMips(VkDevice device,
+    VkPhysicalDevice physicalDevice,
+    VkCommandPool commandPool,
+    VkQueue queue,
+    GpuAllocator& allocator,
+    ImageAllocation destination,
+    VkExtent3D extent,
+    VkFormat format,
+    std::span<const std::byte> data,
+    std::uint32_t mipLevels,
+    VkImageLayout finalLayout)
+{
+    if (physicalDevice == VK_NULL_HANDLE || mipLevels == 0)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Invalid mipmapped image upload parameters"});
+    }
+    if (mipLevels == 1)
+    {
+        return uploadImage(device, commandPool, queue, allocator, destination, extent, format,
+            data, finalLayout);
+    }
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
+    if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::Unsupported,
+                "linear blit is unavailable for texture format; cannot generate mip chain"});
+    }
+    if (device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
+        data.empty() || destination.image == VK_NULL_HANDLE || extent.width == 0 ||
+        extent.height == 0 || extent.depth == 0)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidArgument, "Invalid mipmapped image upload parameters"});
+    }
+
+    VkBufferCreateInfo stagingInfo{};
+    stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    stagingInfo.size = data.size_bytes();
+    stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    stagingInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const auto stagingResult = allocator.createBuffer(stagingInfo, MemoryUsage::CpuToGpu);
+    if (!stagingResult)
+    {
+        return stagingResult.error();
+    }
+    const BufferAllocation staging = stagingResult.value();
+    const auto writeResult = allocator.writeBuffer(staging, data);
+    if (!writeResult)
+    {
+        allocator.destroy(staging);
+        return writeResult;
+    }
+    const auto commandResult = beginOneShot(device, commandPool);
+    if (!commandResult)
+    {
+        allocator.destroy(staging);
+        return commandResult.error();
+    }
+    const VkCommandBuffer commandBuffer = commandResult.value();
+    auto barrier = [&](std::uint32_t level,
+                       VkImageLayout oldLayout,
+                       VkImageLayout newLayout,
+                       VkPipelineStageFlags2 srcStage,
+                       VkAccessFlags2 srcAccess,
+                       VkPipelineStageFlags2 dstStage,
+                       VkAccessFlags2 dstAccess)
+    {
+        VkImageMemoryBarrier2 imageBarrier{};
+        imageBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        imageBarrier.srcStageMask = srcStage;
+        imageBarrier.srcAccessMask = srcAccess;
+        imageBarrier.dstStageMask = dstStage;
+        imageBarrier.dstAccessMask = dstAccess;
+        imageBarrier.oldLayout = oldLayout;
+        imageBarrier.newLayout = newLayout;
+        imageBarrier.image = destination.image;
+        imageBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level, 1, 0, 1};
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.imageMemoryBarrierCount = 1;
+        dependency.pImageMemoryBarriers = &imageBarrier;
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    };
+
+    barrier(0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COPY_BIT,
+        VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = extent;
+    vkCmdCopyBufferToImage(commandBuffer, staging.buffer, destination.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    std::int32_t srcWidth = static_cast<std::int32_t>(extent.width);
+    std::int32_t srcHeight = static_cast<std::int32_t>(extent.height);
+    for (std::uint32_t level = 1; level < mipLevels; ++level)
+    {
+        barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT,
+            VK_ACCESS_2_TRANSFER_READ_BIT);
+        barrier(level, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_BLIT_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        const std::int32_t dstWidth = std::max(1, srcWidth / 2);
+        const std::int32_t dstHeight = std::max(1, srcHeight / 2);
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+        blit.srcOffsets[1] = {srcWidth, srcHeight, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+        blit.dstOffsets[1] = {dstWidth, dstHeight, 1};
+        vkCmdBlitImage(commandBuffer, destination.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, finalLayout,
+            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        srcWidth = dstWidth;
+        srcHeight = dstHeight;
+    }
+    barrier(mipLevels - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, finalLayout,
+        VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+    const auto submitResult = submitOneShot(device, commandPool, queue, commandBuffer);
+    allocator.destroy(staging);
+    return submitResult;
+}
+
 } // namespace Halcyon::Vulkan

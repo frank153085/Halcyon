@@ -21,6 +21,8 @@ struct alignas(16) InstanceData
     // Column-major affine transform.  The final row/column are kept explicit
     // rather than using a glm type so the packet has a stable wire layout.
     std::array<float, 16> transform{};
+    // Stable SceneDatabase slots at extraction time; the Vulkan renderer
+    // remaps these to dense GPU indices before recording.
     std::uint32_t meshId = 0;
     std::uint32_t materialId = 0;
     std::uint32_t flags = 0;
@@ -29,9 +31,13 @@ struct alignas(16) InstanceData
 
 struct alignas(16) LightData
 {
-    // xyz + radius and rgb + intensity, all in linear Rec.709 space.
+    // xyz + radius and rgb + intensity, all in linear Rec.709 space. The
+    // optional direction/type and cone vectors make the GPU light ABI cover
+    // point, directional, and spot lights without backend-specific handles.
     std::array<float, 4> positionAndRadius{};
     std::array<float, 4> colorAndIntensity{};
+    std::array<float, 4> directionAndType{0.0f, -1.0f, 0.0f, 0.0f};
+    std::array<float, 4> spotParams{0.9f, 0.8f, 0.0f, 0.0f};
 };
 
 static_assert(alignof(InstanceData) == 16);

@@ -54,22 +54,6 @@ int main()
     const auto cascades = buildCascades(csm, glm::mat4{1.0f}, glm::mat4{1.0f}, {0.2f, -1.0f, 0.1f});
     EXPECT(context, cascades.size() == csm.cascadeCount);
 
-    ClusterGrid grid;
-    grid.tilesX = 4;
-    grid.tilesY = 2;
-    grid.slicesZ = 4;
-    const auto clusters = assignClusteredLights(grid,
-        glm::mat4{1.0f},
-        glm::mat4{1.0f},
-        {64u, 32u},
-        {ClusterLight{{0.0f, 0.0f, -2.0f}, 1.0f, 3u}});
-    bool foundLight = false;
-    for (const auto& list : clusters.lights)
-    {
-        foundLight = foundLight || (!list.empty() && list.front() == 3u);
-    }
-    EXPECT(context, foundLight);
-
     EXPECT(context, acesTonemap(glm::vec3{0.0f}) == glm::vec3{0.0f});
     const glm::vec3 taa =
         resolveTemporal(TemporalSample{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {}, true});

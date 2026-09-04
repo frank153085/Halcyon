@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <stb_image.h>
 
 namespace Halcyon::Vulkan
 {
 void GpuResourceManager::initialize(VkDevice device,
+    VkPhysicalDevice physicalDevice,
     VkCommandPool commandPool,
     VkQueue queue,
     GpuAllocator& allocator,
@@ -15,6 +17,7 @@ void GpuResourceManager::initialize(VkDevice device,
 {
     shutdown();
     device_ = device;
+    physicalDevice_ = physicalDevice;
     commandPool_ = commandPool;
     queue_ = queue;
     allocator_ = &allocator;
@@ -24,7 +27,7 @@ void GpuResourceManager::initialize(VkDevice device,
 Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
     const std::string& path, bool srgb)
 {
-    if (device_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr)
+    if (device_ == VK_NULL_HANDLE || physicalDevice_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr)
     {
         return Halcyon::Result<TextureResource>::failure(
             {Halcyon::ErrorCode::InvalidState, "GPU resource manager is not initialized"});
@@ -46,11 +49,15 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
     imageInfo.extent = {static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), 1};
-    imageInfo.mipLevels = 1;
+    const auto maxDimension = static_cast<std::uint32_t>(std::max(width, height));
+    const std::uint32_t mipLevels = static_cast<std::uint32_t>(std::floor(std::log2(
+        static_cast<double>(std::max(1u, maxDimension))))) + 1u;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                      VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     const auto imageResult = allocator_->createImage(imageInfo, MemoryUsage::GpuOnly);
@@ -63,14 +70,17 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
     texture.allocation = imageResult.value();
     texture.extent = imageInfo.extent;
     texture.format = imageInfo.format;
-    const auto uploadResult = uploader_->uploadImage(device_,
+    texture.mipLevels = mipLevels;
+    const auto uploadResult = uploader_->uploadImageWithMips(device_,
+        physicalDevice_,
         commandPool_,
         queue_,
         *allocator_,
         texture.allocation,
         texture.extent,
         texture.format,
-        bytes);
+        bytes,
+        mipLevels);
     stbi_image_free(pixels);
     if (!uploadResult)
     {
@@ -82,7 +92,7 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
     viewInfo.image = texture.allocation.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = texture.format;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
     VkResult result = vkCreateImageView(device_, &viewInfo, nullptr, &texture.view);
     if (result != VK_SUCCESS)
     {
@@ -98,7 +108,7 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.maxLod = 1.0f;
+    samplerInfo.maxLod = static_cast<float>(mipLevels - 1u);
     result = vkCreateSampler(device_, &samplerInfo, nullptr, &texture.sampler);
     if (result != VK_SUCCESS)
     {
@@ -112,7 +122,7 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadTexture2D(
 Halcyon::Result<TextureResource> GpuResourceManager::loadSolidColorTexture(
     std::array<std::uint8_t, 4> rgba, bool srgb)
 {
-    if (device_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr)
+    if (device_ == VK_NULL_HANDLE || physicalDevice_ == VK_NULL_HANDLE || allocator_ == nullptr || uploader_ == nullptr)
     {
         return Halcyon::Result<TextureResource>::failure(
             {Halcyon::ErrorCode::InvalidState, "GPU resource manager is not initialized"});
@@ -139,6 +149,7 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadSolidColorTexture(
     texture.allocation = imageResult.value();
     texture.extent = imageInfo.extent;
     texture.format = imageInfo.format;
+    texture.mipLevels = 1;
     const auto bytes =
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(rgba.data()), rgba.size());
     const auto uploadResult = uploader_->uploadImage(device_,
@@ -165,7 +176,7 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadSolidColorTexture(
     {
         destroy(texture);
         return Halcyon::Result<TextureResource>::failure(
-            {Halcyon::ErrorCode::Backend, "Failed to create fallback texture image view"});
+            {Halcyon::ErrorCode::Backend, "Failed to create default texture image view"});
     }
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -175,13 +186,13 @@ Halcyon::Result<TextureResource> GpuResourceManager::loadSolidColorTexture(
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.maxLod = 1.0f;
+    samplerInfo.maxLod = 0.0f;
     result = vkCreateSampler(device_, &samplerInfo, nullptr, &texture.sampler);
     if (result != VK_SUCCESS)
     {
         destroy(texture);
         return Halcyon::Result<TextureResource>::failure(
-            {Halcyon::ErrorCode::Backend, "Failed to create fallback texture sampler"});
+            {Halcyon::ErrorCode::Backend, "Failed to create default texture sampler"});
     }
     return texture;
 }
@@ -213,6 +224,10 @@ Halcyon::Result<MeshResource> GpuResourceManager::uploadMesh(
         value.normal[2] = source.normal.z;
         value.uv[0] = source.uv.x;
         value.uv[1] = source.uv.y;
+        value.tangent[0] = source.tangent.x;
+        value.tangent[1] = source.tangent.y;
+        value.tangent[2] = source.tangent.z;
+        value.tangent[3] = source.tangent.w;
         vertices.push_back(value);
     }
     MeshResource mesh{};
@@ -294,6 +309,7 @@ void GpuResourceManager::destroy(MeshResource& mesh) noexcept
 void GpuResourceManager::shutdown() noexcept
 {
     device_ = VK_NULL_HANDLE;
+    physicalDevice_ = VK_NULL_HANDLE;
     commandPool_ = VK_NULL_HANDLE;
     queue_ = VK_NULL_HANDLE;
     allocator_ = nullptr;

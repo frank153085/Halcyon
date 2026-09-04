@@ -137,8 +137,10 @@ void printUsage() noexcept
     return score >= threshold;
 }
 
-[[nodiscard]] bool parseCommandLine(int argc, char** argv, ApplicationConfig& config) noexcept
+[[nodiscard]] bool parseCommandLine(
+    int argc, char** argv, ApplicationConfig& config, bool& frameLimitSpecified) noexcept
 {
+    frameLimitSpecified = false;
     bool widthSpecified = false;
     bool heightSpecified = false;
     for (int index = 1; index < argc; ++index)
@@ -168,6 +170,7 @@ void printUsage() noexcept
         if (consumeValue("--frames", value))
         {
             config.frameLimit = value;
+            frameLimitSpecified = true;
             continue;
         }
         if (consumeValue("--width", value) && value > 0 && value <= 16384u)
@@ -255,7 +258,8 @@ void printUsage() noexcept
 void appendPerformanceSummary(const ApplicationConfig& config,
     const std::vector<double>& cpuSamples,
     const std::vector<double>& gpuSamples,
-    const std::unordered_map<std::string, std::vector<double>>& passSamples)
+    const std::unordered_map<std::string, std::vector<double>>& passSamples,
+    const std::vector<std::string>& passOrder)
 {
     if (config.performanceCsvPath.empty())
     {
@@ -274,17 +278,12 @@ void appendPerformanceSummary(const ApplicationConfig& config,
     };
     writeMetric("cpu", cpuSamples);
     writeMetric("gpu", gpuSamples);
-    std::vector<std::string> passNames;
-    passNames.reserve(passSamples.size());
-    for (const auto& [name, values] : passSamples)
+    for (const std::string& name : passOrder)
     {
-        (void)values;
-        passNames.push_back(name);
-    }
-    std::sort(passNames.begin(), passNames.end());
-    for (const std::string& name : passNames)
-    {
-        writeMetric("pass_" + name, passSamples.at(name));
+        if (const auto found = passSamples.find(name); found != passSamples.end())
+        {
+            writeMetric("pass_" + name, found->second);
+        }
     }
 }
 
@@ -302,9 +301,25 @@ int Application::run(
             return EXIT_SUCCESS;
         }
     }
-    if (!parseCommandLine(argc, argv, config))
+    bool frameLimitSpecified = false;
+    if (!parseCommandLine(argc, argv, config, frameLimitSpecified))
     {
         return EXIT_FAILURE;
+    }
+    constexpr std::uint64_t performanceWarmupFrameCount = 300;
+    constexpr std::uint64_t performanceMeasurementFrameCount = 1800;
+    constexpr std::uint64_t goldenWarmupFrameCount = 120;
+    if (!config.performanceCsvPath.empty() && !frameLimitSpecified)
+    {
+        config.frameLimit = performanceWarmupFrameCount + performanceMeasurementFrameCount;
+    }
+    else if (!config.goldenPath.empty() && !frameLimitSpecified)
+    {
+        // A golden capture needs a short deterministic warm-up so temporal
+        // history, clustered buffers, and procedural IBL are fully populated
+        // before the comparison frame. Explicit --frames remains authoritative
+        // for quick smoke/self-comparison runs.
+        config.frameLimit = goldenWarmupFrameCount + 1u;
     }
 
     if (config.window.initialExtent.empty())
@@ -385,6 +400,10 @@ int Application::run(
     std::vector<double> performanceCpuSamples;
     std::vector<double> performanceGpuSamples;
     std::unordered_map<std::string, std::vector<double>> performancePassSamples;
+    std::vector<std::string> performancePassOrder;
+    bool performanceCsvHeaderWritten = false;
+    const std::uint64_t performanceWarmup =
+        config.frameLimit > performanceWarmupFrameCount ? performanceWarmupFrameCount : 0u;
 
     while (exitCode == EXIT_SUCCESS && !window->shouldClose() &&
            (config.frameLimit == 0 || frameIndex < config.frameLimit))
@@ -473,7 +492,10 @@ int Application::run(
                 break;
             }
             previousStats = renderResult.value();
-            if (!config.performanceCsvPath.empty())
+            const bool measuringPerformance = !config.performanceCsvPath.empty() &&
+                frameIndex >= performanceWarmup &&
+                frameIndex - performanceWarmup < performanceMeasurementFrameCount;
+            if (measuringPerformance)
             {
                 performanceCpuSamples.push_back(previousStats.cpuFrameMs);
                 if (previousStats.gpuFrameMs >= 0.0)
@@ -482,10 +504,14 @@ int Application::run(
                 }
                 for (const auto& pass : previousStats.gpuPasses)
                 {
-                    performancePassSamples.try_emplace(pass.name);
+                    const auto [entry, inserted] = performancePassSamples.try_emplace(pass.name);
+                    if (inserted)
+                    {
+                        performancePassOrder.push_back(pass.name);
+                    }
                     if (pass.gpuFrameMs >= 0.0)
                     {
-                        performancePassSamples[pass.name].push_back(pass.gpuFrameMs);
+                        entry->second.push_back(pass.gpuFrameMs);
                     }
                 }
             }
@@ -527,7 +553,7 @@ int Application::run(
                     }
                 }
             }
-            if (!config.performanceCsvPath.empty())
+            if (measuringPerformance)
             {
                 std::error_code csvDirectoryError;
                 if (!config.performanceCsvPath.parent_path().empty())
@@ -536,7 +562,7 @@ int Application::run(
                         config.performanceCsvPath.parent_path(), csvDirectoryError);
                 }
                 std::ofstream csv(config.performanceCsvPath,
-                    frameIndex == 0 ? std::ios::trunc : std::ios::app);
+                    performanceCsvHeaderWritten ? std::ios::app : std::ios::trunc);
                 if (csv)
                 {
                     previousStats.performanceCsvWritten = true;
@@ -549,15 +575,16 @@ int Application::run(
                             character = '_';
                         }
                     }
-                    if (frameIndex == 0)
+                    if (!performanceCsvHeaderWritten)
                     {
                         csv << "frame,scene,width,height,device_name,vendor_id,device_id,"
+                               "driver_version,device_api_version,device_memory_bytes,"
                                "exposure,taa_enabled,clustered_lighting_enabled,"
                                "transparency_enabled,cpu_ms,gpu_ms,primitive_count,"
                                "cluster_overflow,taa_history_valid";
-                        for (const auto& pass : previousStats.gpuPasses)
+                        for (const auto& passName : previousStats.executedPasses)
                         {
-                            std::string name = pass.name;
+                            std::string name{passName};
                             for (char& character : name)
                             {
                                 if (std::isalnum(static_cast<unsigned char>(character)))
@@ -573,12 +600,16 @@ int Application::run(
                             csv << ",pass_" << name << "_ms";
                         }
                         csv << '\n';
+                        performanceCsvHeaderWritten = true;
                     }
                     csv << frameIndex << ',' << config.sceneName << ','
                         << config.window.initialExtent.width << ','
                         << config.window.initialExtent.height << ',' << deviceName << ','
                         << engine->capabilities().vendorId << ','
                         << engine->capabilities().deviceId << ','
+                        << engine->capabilities().driverVersion << ','
+                        << engine->capabilities().deviceApiVersion << ','
+                        << previousStats.deviceMemoryBytes << ','
                         << config.engine.exposure << ','
                         << (config.engine.enableTaa ? 1 : 0) << ','
                         << (config.engine.enableClusteredLighting ? 1 : 0) << ','
@@ -587,7 +618,20 @@ int Application::run(
                         << previousStats.gpuFrameMs << ',' << previousStats.primitiveCount << ','
                         << previousStats.clusterOverflowCount << ','
                         << (previousStats.taaHistoryValid ? 1 : 0);
-                    for (const auto& pass : previousStats.gpuPasses) csv << ',' << pass.gpuFrameMs;
+                    for (const auto& passName : previousStats.executedPasses)
+                    {
+                        const auto found = std::find_if(previousStats.gpuPasses.begin(),
+                            previousStats.gpuPasses.end(),
+                            [passName](const FrameStats::PassTiming& pass)
+                            {
+                                return pass.name == passName;
+                            });
+                        csv << ',';
+                        if (found != previousStats.gpuPasses.end())
+                        {
+                            csv << found->gpuFrameMs;
+                        }
+                    }
                     csv << '\n';
                 }
             }
@@ -644,7 +688,8 @@ int Application::run(
     try
     {
         appendPerformanceSummary(
-            config, performanceCpuSamples, performanceGpuSamples, performancePassSamples);
+            config, performanceCpuSamples, performanceGpuSamples, performancePassSamples,
+            performancePassOrder);
     }
     catch (const std::exception& exception)
     {

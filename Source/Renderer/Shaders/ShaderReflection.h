@@ -39,6 +39,7 @@ struct ShaderReflection
 {
     std::vector<ResourceBinding> resources;
     std::vector<PushConstantRange> pushConstants;
+    std::vector<std::uint32_t> outputLocations;
 };
 
 // Reflects the descriptor and push-constant subset needed by Halcyon's

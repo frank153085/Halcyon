@@ -917,13 +917,65 @@ void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options
     {
         for (auto& r : resources_)
         {
-            if (r.lifetime.firstUse == static_cast<std::int32_t>(i) && !r.imported && !r.detached &&
-                provider_)
+            // Persistent resources are materialized exactly once by the
+            // provider and remain alive across graph instances.  A graph is
+            // rebuilt every frame by the Vulkan backend, therefore the
+            // provider owns the persistent cache; the graph only requests a
+            // token when this version is first used.
+            if (r.lifetime.firstUse == static_cast<std::int32_t>(i) && !r.detached &&
+                provider_ && r.native.token == nullptr)
             {
+                // Versions created by Builder::write are logical aliases of
+                // the same physical resource. Reuse the root native token
+                // instead of allocating a second image/buffer (which would
+                // lose the previous pass contents and invalidate layout
+                // tracking).
+                std::uint32_t root = r.aliasOf;
+                while (root != kInvalidIndex && root < resources_.size() &&
+                       resources_[root].aliasOf != kInvalidIndex)
+                {
+                    root = resources_[root].aliasOf;
+                }
+                if (root != kInvalidIndex && root < resources_.size() &&
+                    resources_[root].native.token != nullptr)
+                {
+                    r.native = resources_[root].native;
+                    r.bufferObject.native = r.native;
+                    r.textureObject.native = r.native;
+                    r.materialized = true;
+                    continue;
+                }
                 FrameGraphResourceCreateInfo ci;
                 ci.kind = r.kind;
                 ci.buffer = r.buffer;
                 ci.texture = r.texture;
+                ci.usage = r.usage;
+                // Usage declarations are attached to individual logical
+                // versions.  Physical allocations must include the union of
+                // every version's usage (e.g. color attachment in G-buffer
+                // followed by sampled read in deferred lighting).
+                std::uint32_t allocationRoot = r.aliasOf == kInvalidIndex ?
+                                                    r.index : r.aliasOf;
+                while (allocationRoot < resources_.size() &&
+                       resources_[allocationRoot].aliasOf != kInvalidIndex)
+                {
+                    allocationRoot = resources_[allocationRoot].aliasOf;
+                }
+                for (const auto& candidate : resources_)
+                {
+                    std::uint32_t candidateRoot = candidate.aliasOf == kInvalidIndex ?
+                                                        candidate.index : candidate.aliasOf;
+                    while (candidateRoot < resources_.size() &&
+                           resources_[candidateRoot].aliasOf != kInvalidIndex)
+                    {
+                        candidateRoot = resources_[candidateRoot].aliasOf;
+                    }
+                    if (candidateRoot == allocationRoot && candidate.kind == r.kind)
+                    {
+                        ci.usage |= candidate.usage;
+                    }
+                }
+                ci.imported = r.imported;
                 if (!provider_->create(ci, r.native))
                 {
                     lastError_ = {
@@ -944,6 +996,7 @@ void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options
         commands.name_ = p.object->name_;
         commands.queue_ = p.object->queue_;
         commands.executionIndex_ = static_cast<std::uint32_t>(i);
+        commands.nativeToken_ = nullptr;
         FrameGraphResources resources(this, h);
         PassExecutionContext executionContext{h, p.object->name_,
             static_cast<std::uint32_t>(i), options.userData};
@@ -961,6 +1014,10 @@ void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options
                     lastError_ = {GraphErrorCode::ExecutionFailed,
                         "render target creation failed", {}};
                     return;
+                }
+                if (const auto* target = renderPass->getRenderPassData(0); target != nullptr)
+                {
+                    commands.nativeToken_ = target->native.token;
                 }
             }
             passNodes_[h.index()]->execute(resources, commands);
@@ -990,8 +1047,9 @@ void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options
         }
         for (auto& r : resources_)
         {
-            if (r.lifetime.lastUse == static_cast<std::int32_t>(i) && !r.imported && !r.detached &&
-                provider_)
+            const bool transient = r.kind == ResourceKind::Buffer ? r.buffer.transient : r.texture.transient;
+            if (r.lifetime.lastUse == static_cast<std::int32_t>(i) && !r.imported &&
+                !r.detached && transient && provider_)
             {
                 provider_->destroy(r.native);
                 r.materialized = false;
@@ -1009,7 +1067,9 @@ void FrameGraph::reset() noexcept
     {
         for (const auto& resource : resources_)
         {
-            if (!resource.imported && !resource.detached && resource.materialized)
+            if (!resource.imported && !resource.detached && resource.materialized &&
+                ((resource.kind == ResourceKind::Buffer && resource.buffer.transient) ||
+                    (resource.kind == ResourceKind::Texture && resource.texture.transient)))
             {
                 provider_->destroy(resource.native);
             }

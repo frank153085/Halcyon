@@ -335,6 +335,51 @@ void frameGraphRenderPassTests(TestContext& context)
     HALCYON_EXPECT(context, provider.renderTargetCreates == 1u);
 }
 
+void frameGraphResourceLifetimeTests(TestContext& context)
+{
+    namespace Graph = Halcyon::Renderer::Graph;
+
+    RecordingResourceProvider transientProvider;
+    Graph::FrameGraph transientGraph;
+    transientGraph.setResourceProvider(&transientProvider);
+    auto transient = transientGraph.createTexture(
+        {.name = "Transient", .width = 8, .height = 8, .transient = true});
+    transientGraph.addPass<Graph::FrameGraph::Empty>("Use transient",
+        [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            transient = builder.write(transient, Graph::ResourceUsage::Storage);
+            builder.sideEffect();
+        },
+        [](const Graph::FrameGraphResources&, const Graph::FrameGraph::Empty&,
+            Graph::CommandContext&) {});
+    transientGraph.compile();
+    Graph::CommandContext transientCommands;
+    transientGraph.execute(transientCommands);
+    HALCYON_EXPECT(context, transientProvider.resourceCreates == 1u);
+    HALCYON_EXPECT(context, transientProvider.resourceDestroys == 1u);
+
+    RecordingResourceProvider persistentProvider;
+    Graph::FrameGraph persistentGraph;
+    persistentGraph.setResourceProvider(&persistentProvider);
+    auto persistent = persistentGraph.createBuffer(
+        {.name = "Persistent", .size = 64, .stride = 16, .transient = false});
+    persistentGraph.addPass<Graph::FrameGraph::Empty>("Use persistent",
+        [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            persistent = builder.write(persistent, Graph::ResourceUsage::Storage);
+            builder.sideEffect();
+        },
+        [](const Graph::FrameGraphResources&, const Graph::FrameGraph::Empty&,
+            Graph::CommandContext&) {});
+    persistentGraph.compile();
+    Graph::CommandContext persistentCommands;
+    persistentGraph.execute(persistentCommands);
+    HALCYON_EXPECT(context, persistentProvider.resourceCreates == 1u);
+    HALCYON_EXPECT(context, persistentProvider.resourceDestroys == 0u);
+    persistentGraph.reset();
+    HALCYON_EXPECT(context, persistentProvider.resourceDestroys == 0u);
+}
+
 } // namespace
 
 int main()
@@ -345,6 +390,7 @@ int main()
     frameBudgetDowngradeAndUpgradeTests(context);
     frameGraphNodeStructureTests(context);
     frameGraphRenderPassTests(context);
+    frameGraphResourceLifetimeTests(context);
 
     if (context.failures() != 0)
     {

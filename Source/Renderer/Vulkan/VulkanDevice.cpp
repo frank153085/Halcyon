@@ -117,6 +117,7 @@ struct DeviceCandidate
     VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
     VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructure{};
+    VkPhysicalDeviceFeatures coreFeatures{};
     QueueSelection queues{};
     bool hasBarycentricExtension = false;
     bool hasRayQueryExtensions = false;
@@ -142,7 +143,9 @@ struct DeviceCandidate
     // first slice simple and avoids ownership transfers for the swapchain.
     for (std::uint32_t i = 0; i < count; ++i)
     {
-        if (families[i].queueCount == 0 || (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0)
+        if (families[i].queueCount == 0 ||
+            (families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) !=
+                (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
         {
             continue;
         }
@@ -159,7 +162,9 @@ struct DeviceCandidate
 
     for (std::uint32_t i = 0; i < count; ++i)
     {
-        if (families[i].queueCount > 0 && (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0)
+        if (families[i].queueCount > 0 &&
+            (families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) ==
+                (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
         {
             selection.graphics = i;
             break;
@@ -251,6 +256,7 @@ struct DeviceCandidate
     }
 
     vkGetPhysicalDeviceFeatures2(candidate.handle, &features2);
+    candidate.coreFeatures = features2.features;
     candidate.barycentricSupported =
         candidate.hasBarycentricExtension && candidate.barycentric.fragmentShaderBarycentric;
     candidate.rayQuerySupported = candidate.hasRayQueryExtensions && candidate.rayQuery.rayQuery &&
@@ -490,6 +496,7 @@ VoidResult VulkanDevice::pickPhysicalDevice()
         devices.resize(count);
 
         DeviceCandidate best{};
+        std::string lastUnsupportedReason = "no physical devices were evaluated";
         for (VkPhysicalDevice candidateHandle : devices)
         {
             DeviceCandidate candidate{};
@@ -497,6 +504,7 @@ VoidResult VulkanDevice::pickPhysicalDevice()
             vkGetPhysicalDeviceProperties(candidate.handle, &candidate.properties);
             if (candidate.properties.apiVersion < kRequiredApiVersion)
             {
+                lastUnsupportedReason = "Vulkan 1.3 is unavailable";
                 continue;
             }
 
@@ -504,25 +512,99 @@ VoidResult VulkanDevice::pickPhysicalDevice()
             if (!queryDeviceExtensions(candidate.handle, extensions) ||
                 !hasName(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
             {
+                lastUnsupportedReason = "VK_KHR_swapchain is unavailable";
                 continue;
             }
             candidate.queues = findQueues(candidate.handle, surface);
             if (!candidate.queues.valid())
             {
+                lastUnsupportedReason =
+                    "no graphics+compute queue and presentation queue combination is available";
                 continue;
             }
             if (!queryCandidateFeatures(candidate, extensions))
             {
+                lastUnsupportedReason = "Vulkan feature query failed";
                 continue;
             }
             if (config.rayQuery == FeatureMode::Required && !candidate.rayQuerySupported)
             {
+                lastUnsupportedReason = "required ray-query features are unavailable";
                 continue;
             }
+            // Cluster build uses RWStructuredBuffer atomics.  Vulkan exposes
+            // the corresponding capability through the core
+            // fragmentStoresAndAtomics feature bit; require it up front so a
+            // device can never enter a graph path whose atomic writes are
+            // silently unsupported.
             if (candidate.features13.dynamicRendering == VK_FALSE ||
                 candidate.features13.synchronization2 == VK_FALSE ||
-                candidate.features12.timelineSemaphore == VK_FALSE)
+                candidate.features13.shaderDemoteToHelperInvocation == VK_FALSE ||
+                candidate.features12.timelineSemaphore == VK_FALSE ||
+                candidate.coreFeatures.fragmentStoresAndAtomics == VK_FALSE)
             {
+                if (candidate.features13.dynamicRendering == VK_FALSE)
+                    lastUnsupportedReason = "dynamicRendering is unavailable";
+                else if (candidate.features13.synchronization2 == VK_FALSE)
+                    lastUnsupportedReason = "synchronization2 is unavailable";
+                else if (candidate.features12.timelineSemaphore == VK_FALSE)
+                    lastUnsupportedReason = "timelineSemaphore is unavailable";
+                else if (candidate.features13.shaderDemoteToHelperInvocation == VK_FALSE)
+                    lastUnsupportedReason = "shaderDemoteToHelperInvocation is unavailable";
+                else
+                    lastUnsupportedReason = "fragmentStoresAndAtomics is unavailable";
+                continue;
+            }
+            if (VK_VERSION_MINOR(candidate.properties.apiVersion) < 3)
+            {
+                lastUnsupportedReason = "device API version is below Vulkan 1.3";
+                continue;
+            }
+            const auto supportsFormat = [&](VkFormat format, VkFormatFeatureFlags required)
+            {
+                VkFormatProperties properties{};
+                vkGetPhysicalDeviceFormatProperties(candidate.handle, format, &properties);
+                return (properties.optimalTilingFeatures & required) == required;
+            };
+            const auto requireFormat = [&](VkFormat format, VkFormatFeatureFlags required,
+                                           const char* name)
+            {
+                if (supportsFormat(format, required))
+                    return true;
+                lastUnsupportedReason = std::string(name) +
+                    " lacks required optimal-tiling format features";
+                return false;
+            };
+            if (!requireFormat(VK_FORMAT_R8G8B8A8_SRGB,
+                    VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
+                    "VK_FORMAT_R8G8B8A8_SRGB") ||
+                !requireFormat(VK_FORMAT_R8G8B8A8_UNORM,
+                    VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
+                    "VK_FORMAT_R8G8B8A8_UNORM") ||
+                !requireFormat(VK_FORMAT_R16G16B16A16_SFLOAT,
+                    VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT,
+                    "VK_FORMAT_R16G16B16A16_SFLOAT") ||
+                !requireFormat(VK_FORMAT_R16G16_SFLOAT,
+                    VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
+                    "VK_FORMAT_R16G16_SFLOAT") ||
+                !requireFormat(VK_FORMAT_D32_SFLOAT,
+                    VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
+                    "VK_FORMAT_D32_SFLOAT"))
+            {
+                continue;
+            }
+            if (candidate.properties.limits.maxDescriptorSetSampledImages < 8 ||
+                candidate.properties.limits.maxPerStageDescriptorSampledImages < 8 ||
+                candidate.properties.limits.maxDescriptorSetStorageBuffers < 4 ||
+                candidate.properties.limits.maxPerStageDescriptorStorageBuffers < 4 ||
+                candidate.properties.limits.maxDescriptorSetUniformBuffers < 1 ||
+                candidate.properties.limits.maxPerStageDescriptorUniformBuffers < 1 ||
+                candidate.properties.limits.maxImageArrayLayers < 4 ||
+                candidate.properties.limits.maxPushConstantsSize < 256)
+            {
+                lastUnsupportedReason =
+                    "descriptor, image-array-layer, or 256-byte push-constant limits are insufficient";
                 continue;
             }
 
@@ -535,6 +617,7 @@ VoidResult VulkanDevice::pickPhysicalDevice()
                 // M1 intentionally has one well-defined depth format.  A
                 // later capability tier can add D24/D32S8 fallbacks without
                 // silently changing reversed-Z precision here.
+                lastUnsupportedReason = "VK_FORMAT_D32_SFLOAT depth attachments are unavailable";
                 continue;
             }
 
@@ -546,6 +629,7 @@ VoidResult VulkanDevice::pickPhysicalDevice()
                     candidate.handle, surface, &presentModeCount, nullptr) != VK_SUCCESS ||
                 surfaceFormatCount == 0 || presentModeCount == 0)
             {
+                lastUnsupportedReason = "the presentation surface has no usable format or present mode";
                 continue;
             }
 
@@ -569,7 +653,10 @@ VoidResult VulkanDevice::pickPhysicalDevice()
         if (best.handle == VK_NULL_HANDLE)
         {
             return fail("No Vulkan 1.3 device with graphics/present queues, swapchain, "
-                        "dynamic rendering, synchronization2 and timeline semaphores was found");
+                "dynamic rendering, synchronization2, timeline semaphores, storage-buffer atomics, required "
+                        "MRT/storage formats, and descriptor limits was found. Last rejection: " +
+                    lastUnsupportedReason,
+                Halcyon::ErrorCode::Unsupported);
         }
 
         physicalDevice = best.handle;
@@ -583,6 +670,7 @@ VoidResult VulkanDevice::pickPhysicalDevice()
         capabilities.deviceName = physicalProperties.deviceName;
         capabilities.vendorId = physicalProperties.vendorID;
         capabilities.deviceId = physicalProperties.deviceID;
+        capabilities.driverVersion = physicalProperties.driverVersion;
         capabilities.deviceLocalMemoryBytes = best.deviceLocalBytes;
         capabilities.dynamicRendering = best.features13.dynamicRendering != VK_FALSE;
         capabilities.synchronization2 = best.features13.synchronization2 != VK_FALSE;
@@ -686,6 +774,13 @@ VoidResult VulkanDevice::createDevice()
         enabled13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         enabled13.dynamicRendering = VK_TRUE;
         enabled13.synchronization2 = VK_TRUE;
+        // Alpha-mask materials use HLSL clip(), which DXC lowers to the
+        // SPIR-V DemoteToHelperInvocation capability.  Enable the Vulkan
+        // feature explicitly and reject devices that cannot provide it;
+        // silently creating modules without this feature produces validation
+        // errors and undefined alpha-test behaviour.
+        enabled13.shaderDemoteToHelperInvocation = VK_TRUE;
+        enabledFeatures.features.fragmentStoresAndAtomics = VK_TRUE;
         enabledFeatures.pNext = &enabled12;
         enabled12.pNext = &enabled13;
 

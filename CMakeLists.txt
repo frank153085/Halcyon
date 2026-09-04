@@ -119,9 +119,6 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/Ecs/RenderExtractor.h
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.cpp
     Source/Renderer/Vulkan/HalcyonVulkanRenderer.h
-    Source/Renderer/Vulkan/EmbeddedTriangleShaders.cpp
-    Source/Renderer/Vulkan/EmbeddedSceneShaders.cpp
-    Source/Renderer/Vulkan/EmbeddedTriangleShaders.h
     Source/Renderer/Vulkan/VulkanCommon.cpp
     Source/Renderer/Vulkan/VulkanCommon.h
     Source/Renderer/Vulkan/VulkanShaderModule.cpp
@@ -142,6 +139,10 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/VulkanFrameContext.h
     Source/Renderer/Vulkan/VulkanSceneResources.cpp
     Source/Renderer/Vulkan/VulkanSceneResources.h
+    Source/Renderer/Vulkan/VulkanFrameGraphProvider.cpp
+    Source/Renderer/Vulkan/VulkanFrameGraphProvider.h
+    Source/Renderer/Vulkan/VulkanM3FrameResources.cpp
+    Source/Renderer/Vulkan/VulkanM3FrameResources.h
     Source/Renderer/Vulkan/GpuAllocator.cpp
     Source/Renderer/Vulkan/GpuAllocator.h
     Source/Renderer/Vulkan/GpuUploader.cpp
@@ -155,7 +156,6 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Resources/UploadRing.h
     Source/Renderer/Quality/Pbr.h
     Source/Renderer/Quality/Ibl.h
-    Source/Renderer/Quality/ClusteredLighting.h
     Source/Renderer/Quality/CascadedShadowMaps.h
     Source/Renderer/Quality/GBuffer.h
     Source/Renderer/Quality/Hdr.h
@@ -258,45 +258,18 @@ find_program(HALCYON_DXC_EXECUTABLE
     DOC "DirectX Shader Compiler used to validate HLSL and produce SPIR-V"
 )
 if(HALCYON_DXC_EXECUTABLE)
+    # Validate every generated module when SPIR-V Tools is available.  This
+    # is intentionally an additive build target: DXC remains the required
+    # compiler, while spirv-val catches descriptor, capability, and layout
+    # errors before a Vulkan device is touched.
+    find_program(HALCYON_SPIRV_VAL_EXECUTABLE
+        NAMES spirv-val
+        HINTS "$ENV{VULKAN_SDK}/Bin"
+        DOC "SPIR-V validator used for generated M3 shader modules"
+    )
     set(HALCYON_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/Shaders")
-    set(HALCYON_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/triangle.vert.spv")
-    set(HALCYON_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/triangle.frag.spv")
-
-    add_custom_command(
-        OUTPUT "${HALCYON_VERTEX_SPIRV}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
-        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3
-                -Zpc -T vs_6_6 -E main
-                -Fo "${HALCYON_VERTEX_SPIRV}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/triangle.vert.hlsl"
-        DEPENDS Shaders/triangle.vert.hlsl
-        VERBATIM
-        COMMENT "Compiling triangle vertex shader"
-    )
-    add_custom_command(
-        OUTPUT "${HALCYON_FRAGMENT_SPIRV}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
-        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3
-                -Zpc -T ps_6_6 -E main
-                -Fo "${HALCYON_FRAGMENT_SPIRV}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/triangle.frag.hlsl"
-        DEPENDS Shaders/triangle.frag.hlsl
-        VERBATIM
-        COMMENT "Compiling triangle fragment shader"
-    )
-    set(HALCYON_TEXTURED_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/textured.vert.spv")
-    set(HALCYON_TEXTURED_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/textured.frag.spv")
-    add_custom_command(OUTPUT "${HALCYON_TEXTURED_VERTEX_SPIRV}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
-        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
-                -Fo "${HALCYON_TEXTURED_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/textured.vert.hlsl"
-        DEPENDS Shaders/textured.vert.hlsl VERBATIM COMMENT "Compiling textured vertex shader")
-    add_custom_command(OUTPUT "${HALCYON_TEXTURED_FRAGMENT_SPIRV}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
-        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
-                -Fo "${HALCYON_TEXTURED_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/textured.frag.hlsl"
-        DEPENDS Shaders/textured.frag.hlsl VERBATIM COMMENT "Compiling textured fragment shader")
     set(HALCYON_PBR_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/pbr.vert.spv")
+    set(HALCYON_FULLSCREEN_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/fullscreen.vert.spv")
     set(HALCYON_PBR_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/pbr.frag.spv")
     set(HALCYON_GBUFFER_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/gbuffer.frag.spv")
     set(HALCYON_TRANSPARENT_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/forward_transparent.frag.spv")
@@ -309,6 +282,11 @@ if(HALCYON_DXC_EXECUTABLE)
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
                 -Fo "${HALCYON_PBR_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/pbr.vert.hlsl"
         DEPENDS Shaders/pbr.vert.hlsl VERBATIM COMMENT "Compiling PBR vertex shader")
+    add_custom_command(OUTPUT "${HALCYON_FULLSCREEN_VERTEX_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
+                -Fo "${HALCYON_FULLSCREEN_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/fullscreen.vert.hlsl"
+        DEPENDS Shaders/fullscreen.vert.hlsl VERBATIM COMMENT "Compiling fullscreen vertex shader")
     add_custom_command(OUTPUT "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
@@ -345,14 +323,32 @@ if(HALCYON_DXC_EXECUTABLE)
                 -Fo "${HALCYON_CLUSTER_BUILD_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/cluster_build.comp.hlsl"
         DEPENDS Shaders/cluster_build.comp.hlsl VERBATIM COMMENT "Compiling clustered-lighting compute shader")
     add_custom_target(HalcyonShaders ALL
-        DEPENDS "${HALCYON_VERTEX_SPIRV}" "${HALCYON_FRAGMENT_SPIRV}" "${HALCYON_TEXTURED_VERTEX_SPIRV}" "${HALCYON_TEXTURED_FRAGMENT_SPIRV}"
+        DEPENDS "${HALCYON_FULLSCREEN_VERTEX_SPIRV}"
             "${HALCYON_PBR_VERTEX_SPIRV}" "${HALCYON_PBR_FRAGMENT_SPIRV}" "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
             "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}" "${HALCYON_TONEMAP_FRAGMENT_SPIRV}" "${HALCYON_TAA_COMPUTE_SPIRV}"
             "${HALCYON_CSM_VERTEX_SPIRV}" "${HALCYON_CLUSTER_BUILD_SPIRV}"
     )
-    add_dependencies(HalcyonRenderer HalcyonShaders)
+    if(HALCYON_SPIRV_VAL_EXECUTABLE)
+        add_custom_target(HalcyonShaderValidation ALL
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_FULLSCREEN_VERTEX_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_PBR_VERTEX_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_PBR_FRAGMENT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_TONEMAP_FRAGMENT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_TAA_COMPUTE_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_CSM_VERTEX_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_CLUSTER_BUILD_SPIRV}"
+            DEPENDS HalcyonShaders
+            COMMENT "Validating generated M3 SPIR-V modules"
+            VERBATIM
+        )
+        add_dependencies(HalcyonRenderer HalcyonShaderValidation)
+    else()
+        add_dependencies(HalcyonRenderer HalcyonShaders)
+    endif()
 else()
-    message(WARNING "DXC was not found. Embedded M1 shaders remain usable, but HLSL validation is disabled.")
+    message(FATAL_ERROR "DXC is required to build the Vulkan M3 renderer. Set VULKAN_SDK or HALCYON_DXC_EXECUTABLE.")
 endif()
 
 # Backend-neutral orchestration layer.  Engine owns scene extraction and the

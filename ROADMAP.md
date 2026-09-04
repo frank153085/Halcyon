@@ -148,7 +148,7 @@ Wait for the current frame timeline
 
 **Acceptance gate:** FrameGraph topology, cycle detection, culling, lifetime, barrier, and callback execution tests pass. No live resource allocations remain after shutdown. Bindless slots are not reused before their timeline completes. Invalid shader binaries are rejected, and failed shader or pipeline replacement leaves the last valid object active. The Vulkan bridge executes the compiled scene pass, binds the optional bindless set, routes timestamps for every compiled pass, and keeps Tracy instrumentation optional. The first version is complete after these CPU and local Vulkan checks; explicit backend barrier translation and shader-side bindless indexing remain deliberately small follow-up tasks.
 
-### M3 Traditional Quality Baseline (Complete — compatibility backend limits noted)
+### M3 Traditional Quality Baseline (Complete)
 
 **Dependencies:** M2.
 
@@ -158,15 +158,16 @@ Wait for the current frame timeline
 
 The checked-in baseline includes deterministic scene download/manifest tooling,
 fastgltf validation, rigid node/material extraction, generated defaults,
-per-primitive material draw ranges, CPU CSM/cluster/PBR/IBL/TAA reference
-algorithms, canonical pass contracts, screenshots, Golden SSIM comparison, and
-performance CSV output. The current Vulkan compatibility bridge records the
-opaque material draws in one dynamic-rendering scope; dedicated MRT/compute
-attachments and native transient FrameGraph allocation remain follow-up work
-for the production backend and are intentionally called out rather than hidden.
-Known device requirement: Vulkan 1.3 with dynamic rendering and a host-visible
-readback path. Captures and CSVs are written under `out/build/` by the commands
-in `README.md`.
+per-primitive material draw ranges, screenshots, Golden SSIM comparison, and
+performance CSV output. Vulkan executes the full production graph with four CSM
+depth scopes, G-buffer MRT, GPU cluster build and overflow readback, deferred
+PBR/IBL, forward transparency, TAA compute, ACES tonemap, and present/readback.
+FrameGraph transient and persistent resources are materialized through VMA and
+recreated on resize. CPU clustered-lighting and single-scope forward paths are
+not part of the M3 backend. Known device requirement: Vulkan 1.3 with dynamic
+rendering, synchronization2, storage-buffer atomics, required image formats, and
+a host-visible readback path. Captures and CSVs are written under `out/build/`
+by the commands in `README.md`.
 
 ### M4 GPU-Driven Foundation (Planned)
 

@@ -9,24 +9,22 @@ void ShaderLibrary::reset(VkDevice device) noexcept
 }
 
 Halcyon::Result<VkShaderModule> ShaderLibrary::create(std::string_view fileName,
-    std::span<const std::uint32_t> fallback,
     Halcyon::Renderer::Shaders::ShaderReflection* reflection)
 {
-    return moduleLoader_.create(fileName, fallback, reflection);
+    return moduleLoader_.create(fileName, reflection);
 }
 
 Halcyon::Result<Halcyon::Renderer::Shaders::ShaderReflection> ShaderLibrary::reflect(
-    std::string_view fileName, std::span<const std::uint32_t> fallback) const
+    std::string_view fileName) const
 {
-    return moduleLoader_.reflect(fileName, fallback);
+    return moduleLoader_.reflect(fileName);
 }
 
 Halcyon::Result<bool> ShaderLibrary::reload(VkShaderModule& current,
     std::string_view fileName,
-    std::span<const std::uint32_t> fallback,
     Halcyon::Renderer::Shaders::ShaderReflection* reflection)
 {
-    return moduleLoader_.reload(current, fileName, fallback, reflection);
+    return moduleLoader_.reload(current, fileName, reflection);
 }
 
 void ShaderLibrary::destroy(VkShaderModule& module) noexcept

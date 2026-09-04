@@ -216,6 +216,14 @@ Halcyon::Result<std::vector<std::byte>> GpuAllocator::readBuffer(
     {
         return Halcyon::Result<std::vector<std::byte>>::failure(vmaError("vmaMapMemory", mapResult));
     }
+    const VkResult invalidateResult =
+        vmaInvalidateAllocation(impl_->allocator, it->second.allocation, offset, size);
+    if (invalidateResult != VK_SUCCESS)
+    {
+        vmaUnmapMemory(impl_->allocator, it->second.allocation);
+        return Halcyon::Result<std::vector<std::byte>>::failure(
+            vmaError("vmaInvalidateAllocation", invalidateResult));
+    }
     std::vector<std::byte> result(static_cast<std::size_t>(size));
     std::memcpy(result.data(), static_cast<const std::byte*>(mapped) + offset, result.size());
     vmaUnmapMemory(impl_->allocator, it->second.allocation);

@@ -1,6 +1,5 @@
 #include "VulkanShaderModule.h"
 
-#include "EmbeddedTriangleShaders.h"
 #include "VulkanCommon.h"
 
 #include <cstring>
@@ -40,7 +39,6 @@ std::vector<std::uint32_t> VulkanShaderModule::load(std::string_view fileName) c
 }
 
 Halcyon::Result<VkShaderModule> VulkanShaderModule::create(std::string_view fileName,
-    std::span<const std::uint32_t> fallback,
     Halcyon::Renderer::Shaders::ShaderReflection* reflection)
 {
     if (device_ == VK_NULL_HANDLE)
@@ -48,13 +46,12 @@ Halcyon::Result<VkShaderModule> VulkanShaderModule::create(std::string_view file
         return Halcyon::Result<VkShaderModule>::failure(
             {Halcyon::ErrorCode::InvalidState, "shader module device is not initialized"});
     }
-    std::vector<std::uint32_t> fileCode = load(fileName);
-    const std::span<const std::uint32_t> code =
-        fileCode.empty() ? fallback : std::span<const std::uint32_t>{fileCode};
+    std::vector<std::uint32_t> code = load(fileName);
     if (code.empty())
     {
         return Halcyon::Result<VkShaderModule>::failure(
-            {Halcyon::ErrorCode::NotFound, "SPIR-V shader binary is unavailable"});
+            {Halcyon::ErrorCode::NotFound,
+                "SPIR-V shader binary is unavailable: " + std::string(fileName)});
     }
     if (code.size() < 5u || code.front() != 0x07230203u)
     {
@@ -69,7 +66,7 @@ Halcyon::Result<VkShaderModule> VulkanShaderModule::create(std::string_view file
             {Halcyon::ErrorCode::InvalidArgument, "SPIR-V validation failed"});
     }
 #endif
-    const auto reflectionResult = Halcyon::Renderer::Shaders::reflectSpirv(code);
+    const auto reflectionResult = Halcyon::Renderer::Shaders::reflectSpirv(std::span<const std::uint32_t>{code});
     if (!reflectionResult)
     {
         return Halcyon::Result<VkShaderModule>::failure(reflectionResult.error());
@@ -80,7 +77,7 @@ Halcyon::Result<VkShaderModule> VulkanShaderModule::create(std::string_view file
     }
     VkShaderModuleCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = code.size_bytes();
+    info.codeSize = code.size() * sizeof(std::uint32_t);
     info.pCode = code.data();
     VkShaderModule module = VK_NULL_HANDLE;
     const VkResult result = vkCreateShaderModule(device_, &info, nullptr, &module);
@@ -93,25 +90,23 @@ Halcyon::Result<VkShaderModule> VulkanShaderModule::create(std::string_view file
 }
 
 Halcyon::Result<Halcyon::Renderer::Shaders::ShaderReflection> VulkanShaderModule::reflect(
-    std::string_view fileName, std::span<const std::uint32_t> fallback) const
+    std::string_view fileName) const
 {
     const std::vector<std::uint32_t> fileCode = load(fileName);
-    const std::span<const std::uint32_t> code =
-        fileCode.empty() ? fallback : std::span<const std::uint32_t>{fileCode};
-    if (code.empty())
+    if (fileCode.empty())
     {
         return Halcyon::Result<Halcyon::Renderer::Shaders::ShaderReflection>::failure(
-            {Halcyon::ErrorCode::NotFound, "SPIR-V shader binary is unavailable"});
+            {Halcyon::ErrorCode::NotFound,
+                "SPIR-V shader binary is unavailable: " + std::string(fileName)});
     }
-    return Halcyon::Renderer::Shaders::reflectSpirv(code);
+    return Halcyon::Renderer::Shaders::reflectSpirv(std::span<const std::uint32_t>{fileCode});
 }
 
 Halcyon::Result<bool> VulkanShaderModule::reload(VkShaderModule& current,
     std::string_view fileName,
-    std::span<const std::uint32_t> fallback,
     Halcyon::Renderer::Shaders::ShaderReflection* reflection)
 {
-    const auto replacement = create(fileName, fallback, reflection);
+    const auto replacement = create(fileName, reflection);
     if (!replacement)
     {
         return Halcyon::Result<bool>::failure(replacement.error());

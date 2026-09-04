@@ -57,9 +57,9 @@ using Capabilities = Halcyon::Capabilities;
 class Renderer final
 {
 public:
-    // An optional overlay callback is invoked while the active dynamic
-    // rendering scope is open. Applications can use it for diagnostics (for
-    // example Dear ImGui) without taking ownership of the frame command
+    // An optional overlay callback is invoked by the application while the
+    // current pass scope is active. Applications can use it for diagnostics
+    // (for example Dear ImGui) without taking ownership of the frame command
     // buffer.
     using OverlayCallback = void (*)(VkCommandBuffer commandBuffer) noexcept;
 

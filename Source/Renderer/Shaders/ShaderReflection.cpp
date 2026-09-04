@@ -30,9 +30,11 @@ constexpr std::uint16_t kOpMemberDecorate = 72;
 constexpr std::uint32_t kDecorationBinding = 33;
 constexpr std::uint32_t kDecorationDescriptorSet = 34;
 constexpr std::uint32_t kDecorationOffset = 35;
+constexpr std::uint32_t kDecorationLocation = 30;
 
 constexpr std::uint32_t kStorageUniformConstant = 0;
 constexpr std::uint32_t kStorageUniform = 2;
+constexpr std::uint32_t kStorageOutput = 3;
 constexpr std::uint32_t kStoragePushConstant = 9;
 constexpr std::uint32_t kStorageStorageBuffer = 12;
 
@@ -59,6 +61,7 @@ struct DecorationInfo
 {
     std::uint32_t set = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t binding = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t location = std::numeric_limits<std::uint32_t>::max();
 };
 
 [[nodiscard]] std::uint32_t scalarSize(const TypeInfo& type) noexcept
@@ -263,6 +266,10 @@ Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> wo
                 {
                     decoration.set = operand(3);
                 }
+                else if (operand(2) == kDecorationLocation)
+                {
+                    decoration.location = operand(3);
+                }
                 break;
             }
             case kOpMemberDecorate:
@@ -336,6 +343,20 @@ Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> wo
 
     for (const auto& [variableId, variable] : variables)
     {
+        if (variable.storageClass != kStorageOutput)
+        {
+            continue;
+        }
+        const auto decoration = decorations.find(variableId);
+        if (decoration != decorations.end() &&
+            decoration->second.location != std::numeric_limits<std::uint32_t>::max())
+        {
+            reflection.outputLocations.push_back(decoration->second.location);
+        }
+    }
+
+    for (const auto& [variableId, variable] : variables)
+    {
         if (variable.storageClass != kStoragePushConstant)
         {
             continue;
@@ -355,6 +376,10 @@ Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> wo
         {
             return lhs.set == rhs.set ? lhs.binding < rhs.binding : lhs.set < rhs.set;
         });
+    std::sort(reflection.outputLocations.begin(), reflection.outputLocations.end());
+    reflection.outputLocations.erase(
+        std::unique(reflection.outputLocations.begin(), reflection.outputLocations.end()),
+        reflection.outputLocations.end());
     return Halcyon::Result<ShaderReflection>::success(std::move(reflection));
 }
 

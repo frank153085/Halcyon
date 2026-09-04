@@ -1,7 +1,6 @@
 #pragma once
 
 #include "CascadedShadowMaps.h"
-#include "ClusteredLighting.h"
 #include "GBuffer.h"
 #include "Hdr.h"
 #include "Ibl.h"

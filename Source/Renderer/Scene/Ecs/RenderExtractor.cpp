@@ -47,8 +47,12 @@ OwnedFramePacket RenderExtractor::extract(
             {
                 position = glm::vec3{transform->worldTransform[3]};
             }
+            const float type = static_cast<float>(light->type == LightType::Directional ? 1u
+                                      : (light->type == LightType::Spot ? 2u : 0u));
             packet.lights.push_back(LightData{{position.x, position.y, position.z, light->range},
-                {light->color.r, light->color.g, light->color.b, light->intensity}});
+                {light->color.r, light->color.g, light->color.b, light->intensity},
+                {light->direction.x, light->direction.y, light->direction.z, type},
+                {light->innerConeCos, light->outerConeCos, 0.0f, 0.0f}});
         }
     }
 

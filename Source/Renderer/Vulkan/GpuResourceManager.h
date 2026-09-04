@@ -19,6 +19,7 @@ struct TextureResource
     VkSampler sampler = VK_NULL_HANDLE;
     VkExtent3D extent{};
     VkFormat format = VK_FORMAT_UNDEFINED;
+    std::uint32_t mipLevels = 1;
 };
 
 struct MeshVertex
@@ -26,6 +27,7 @@ struct MeshVertex
     float position[3]{};
     float normal[3]{};
     float uv[2]{};
+    float tangent[4]{1.0f, 0.0f, 0.0f, 1.0f};
 };
 
 struct MeshResource
@@ -43,6 +45,7 @@ public:
     GpuResourceManager& operator=(const GpuResourceManager&) = delete;
 
     void initialize(VkDevice device,
+        VkPhysicalDevice physicalDevice,
         VkCommandPool commandPool,
         VkQueue queue,
         GpuAllocator& allocator,
@@ -51,7 +54,7 @@ public:
     // explicitly pass false when the full material uploader is enabled.
     [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(
         const std::string& path, bool srgb = true);
-    // Create a deterministic 1x1 fallback texture without touching the
+    // Create a deterministic 1x1 default texture without touching the
     // filesystem.  M3 materials use white for base color/AO, a flat normal,
     // and black for metallic/emissive channels when an image is absent.
     [[nodiscard]] Halcyon::Result<TextureResource> loadSolidColorTexture(
@@ -64,6 +67,7 @@ public:
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
     GpuAllocator* allocator_ = nullptr;
