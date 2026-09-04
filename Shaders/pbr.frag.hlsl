@@ -183,13 +183,12 @@ float4 main(FragmentIn input) : SV_Target0
         max(log(constants.depthParams.y / constants.depthParams.x), 1e-4);
     const uint slice = min((uint)max(0.0, logarithmicSlice * slicesZ), slicesZ - 1u);
     const uint clusterIndex = slice * tilesX * tilesY + tileY * tilesX + tileX;
-    const bool clusteredLighting = constants.depthParams.z > 0.5;
-    const uint2 range = clusteredLighting ? clusterRanges[clusterIndex] : uint2(0u, lightCount);
+    const uint2 range = clusterRanges[clusterIndex];
 
     float3 direct = 0.0.xxx;
     for (uint i = 0; i < range.y; ++i)
     {
-        const uint lightIndex = clusteredLighting ? clusterIndices[range.x + i] : i;
+        const uint lightIndex = clusterIndices[range.x + i];
         if (lightIndex >= lightCount)
             continue;
         const float4 lightPositionRadius = lights[lightIndex * 4u + 0u];

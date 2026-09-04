@@ -77,7 +77,6 @@ Halcyon::Result<void> VulkanSwapchain::initialize(VkPhysicalDevice physicalDevic
     GLFWwindow* window,
     std::uint32_t graphicsQueueFamily,
     std::uint32_t presentQueueFamily,
-    GpuAllocator& allocator,
     VkExtent2D requested) noexcept
 {
     physicalDevice_ = physicalDevice;
@@ -86,7 +85,6 @@ Halcyon::Result<void> VulkanSwapchain::initialize(VkPhysicalDevice physicalDevic
     window_ = window;
     graphicsQueueFamily_ = graphicsQueueFamily;
     presentQueueFamily_ = presentQueueFamily;
-    allocator_ = &allocator;
     requestedExtent = requested;
     deviceLost = false;
     return ok();
@@ -108,75 +106,6 @@ VkResult VulkanSwapchain::acquire(
         &imageIndex);
 }
 
-VoidResult VulkanSwapchain::createDepthResources(VkExtent2D extent,
-    VkImage& outImage,
-    ImageAllocation& outAllocation,
-    VkImageView& outView,
-    VkDeviceSize& outMemorySize)
-{
-    outImage = VK_NULL_HANDLE;
-    outAllocation = {};
-    outView = VK_NULL_HANDLE;
-    outMemorySize = 0;
-    if (extent.width == 0 || extent.height == 0)
-    {
-        return fail(
-            "Cannot create a depth image with a zero extent", Halcyon::ErrorCode::InvalidArgument);
-    }
-
-    VkFormatProperties formatProperties{};
-    vkGetPhysicalDeviceFormatProperties(physicalDevice_, depthFormat, &formatProperties);
-    if ((formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) ==
-        0)
-    {
-        return fail("D32_SFLOAT is not supported as an optimal depth attachment",
-            Halcyon::ErrorCode::Unsupported);
-    }
-
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = depthFormat;
-    imageInfo.extent = VkExtent3D{extent.width, extent.height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    const auto allocationResult = allocator_->createImage(imageInfo, MemoryUsage::GpuOnly);
-    if (!allocationResult)
-    {
-        return allocationResult.error();
-    }
-    outAllocation = allocationResult.value();
-    outImage = outAllocation.image;
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = outImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = depthFormat;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-    const VkResult result = vkCreateImageView(device_, &viewInfo, nullptr, &outView);
-    if (result != VK_SUCCESS)
-    {
-        allocator_->destroy(outAllocation);
-        outView = VK_NULL_HANDLE;
-        outAllocation = {};
-        outImage = VK_NULL_HANDLE;
-        return fail(vkFailure("vkCreateImageView(depth)", result));
-    }
-    outMemorySize = outAllocation.size;
-    return ok();
-}
-
 VoidResult VulkanSwapchain::create()
 {
     const VkPhysicalDevice physicalDevice = physicalDevice_;
@@ -185,7 +114,6 @@ VoidResult VulkanSwapchain::create()
     GLFWwindow* window = window_;
     const std::uint32_t graphicsQueueFamily = graphicsQueueFamily_;
     const std::uint32_t presentQueueFamily = presentQueueFamily_;
-    GpuAllocator& gpuAllocator = *allocator_;
     VkSurfaceCapabilitiesKHR capabilities{};
     VkResult result =
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &capabilities);
@@ -263,6 +191,18 @@ VoidResult VulkanSwapchain::create()
     }
 
     const VkSurfaceFormatKHR surfaceFormat = chooseSurfaceFormat(formats);
+    // Readback is part of the M3 contract.  Surface usage flags alone do not
+    // guarantee that the selected format supports transfer-source copies, so
+    // reject the device/format combination before creating a swapchain that
+    // could never satisfy screenshot capture.
+    VkFormatProperties surfaceFormatProperties{};
+    vkGetPhysicalDeviceFormatProperties(physicalDevice_, surfaceFormat.format,
+        &surfaceFormatProperties);
+    if ((surfaceFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) == 0)
+    {
+        return fail("The selected swapchain format does not support transfer-source readback",
+            Halcyon::ErrorCode::Unsupported);
+    }
     const VkPresentModeKHR presentMode = choosePresentMode(presentModes);
     std::uint32_t imageCount = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
@@ -380,26 +320,6 @@ VoidResult VulkanSwapchain::create()
         newPresentSemaphores.push_back(semaphore);
     }
 
-    VkImage newDepthImage = VK_NULL_HANDLE;
-    ImageAllocation newDepthAllocation{};
-    VkImageView newDepthView = VK_NULL_HANDLE;
-    VkDeviceSize newDepthMemorySize = 0;
-    const VoidResult depthResult = createDepthResources(
-        extent, newDepthImage, newDepthAllocation, newDepthView, newDepthMemorySize);
-    if (!depthResult)
-    {
-        for (VkSemaphore created : newPresentSemaphores)
-        {
-            vkDestroySemaphore(device, created, nullptr);
-        }
-        for (VkImageView created : newViews)
-        {
-            vkDestroyImageView(device, created, nullptr);
-        }
-        vkDestroySwapchainKHR(device, newSwapchain, nullptr);
-        return depthResult;
-    }
-
     // Prepare the initialization bitmap before detaching any old
     // swapchain state.  vector<bool>::assign() may allocate; moving old
     // Vulkan handles first would make a bad_alloc leave them detached
@@ -421,11 +341,6 @@ VoidResult VulkanSwapchain::create()
     swapchainFormat = surfaceFormat.format;
     swapchainColorSpace = surfaceFormat.colorSpace;
     swapchainExtent = extent;
-    (void)std::exchange(depthImage, newDepthImage);
-    const ImageAllocation oldDepthAllocation = std::exchange(depthAllocation, newDepthAllocation);
-    const VkImageView oldDepthView = std::exchange(depthImageView, newDepthView);
-    depthMemorySize = newDepthMemorySize;
-    depthImageInitialized = false;
     if (device != VK_NULL_HANDLE)
     {
         for (VkImageView view : oldViews)
@@ -446,14 +361,6 @@ VoidResult VulkanSwapchain::create()
         {
             vkDestroySwapchainKHR(device, oldSwapchain, nullptr);
         }
-    }
-    if (device != VK_NULL_HANDLE)
-    {
-        if (oldDepthView != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(device, oldDepthView, nullptr);
-        }
-        gpuAllocator.destroy(oldDepthAllocation);
     }
     framebufferResized = false;
     return ok();
@@ -488,28 +395,10 @@ VoidResult VulkanSwapchain::recreate()
     return create();
 }
 
-void VulkanSwapchain::destroyDepthResources() noexcept
-{
-    if (device_ != VK_NULL_HANDLE)
-    {
-        if (depthImageView != VK_NULL_HANDLE)
-        {
-            vkDestroyImageView(device_, depthImageView, nullptr);
-        }
-        allocator_->destroy(depthAllocation);
-    }
-    depthImageView = VK_NULL_HANDLE;
-    depthImage = VK_NULL_HANDLE;
-    depthAllocation = {};
-    depthMemorySize = 0;
-    depthImageInitialized = false;
-}
-
 void VulkanSwapchain::cleanup() noexcept
 {
     if (device_ != VK_NULL_HANDLE)
     {
-        destroyDepthResources();
         for (VkImageView view : swapchainImageViews)
         {
             if (view != VK_NULL_HANDLE)

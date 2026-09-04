@@ -98,9 +98,16 @@ public:
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
     [[nodiscard]] Halcyon::Result<void> releaseSceneAsset(
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
+    // Resolve stable SceneDatabase slots produced by ECS extraction into the
+    // dense resource-table indices consumed by render(). SceneManager calls
+    // this exactly once while assembling each immutable frame packet.
+    [[nodiscard]] Halcyon::Result<void> remapFramePacket(
+        Halcyon::Renderer::Scene::OwnedFramePacket& packet) const;
     // Scene topology or material changes invalidate temporal history before
     // the next frame is submitted.
     void invalidateTaaHistory() noexcept;
+    // Queue a swapchain readback in the next frame's Present pass. The
+    // renderer waits that frame's fence before writing the PNG.
     [[nodiscard]] Halcyon::Result<void> captureScreenshot(const std::filesystem::path& path);
 
     // Read-only escape hatches for tools that need to attach a profiler or

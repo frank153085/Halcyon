@@ -978,8 +978,10 @@ void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options
                 ci.imported = r.imported;
                 if (!provider_->create(ci, r.native))
                 {
-                    lastError_ = {
-                        GraphErrorCode::ExecutionFailed, "transient resource creation failed", {}};
+                    lastError_ = {GraphErrorCode::ExecutionFailed,
+                        "native resource creation failed for '" + r.name + "' (" +
+                            (r.kind == ResourceKind::Texture ? "texture" : "buffer") + ")",
+                        {}};
                     return;
                 }
                 r.bufferObject.native = r.native;
@@ -1012,7 +1014,9 @@ void FrameGraph::execute(CommandContext& commands, const ExecuteOptions& options
                 if (!renderPass->renderTargetsReady())
                 {
                     lastError_ = {GraphErrorCode::ExecutionFailed,
-                        "render target creation failed", {}};
+                        "native render target creation failed for pass '" +
+                            std::string(p.object->name()) + "'",
+                        {}};
                     return;
                 }
                 if (const auto* target = renderPass->getRenderPassData(0); target != nullptr)

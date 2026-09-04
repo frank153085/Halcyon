@@ -123,7 +123,10 @@ Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
     VkDevice device, const GraphicsPipelineDesc& desc)
 {
     if (device == VK_NULL_HANDLE || desc.vertexShader.empty() ||
-        (!desc.depthOnly && desc.colorFormats.empty()))
+        (!desc.depthOnly && desc.colorFormats.empty()) ||
+        (desc.depthOnly && (desc.depthFormat == VK_FORMAT_UNDEFINED ||
+                               !desc.colorFormats.empty())) ||
+        (desc.depthFormat == VK_FORMAT_UNDEFINED && (desc.depthTest || desc.depthWrite)))
     {
         return fail("invalid graphics pipeline description", Halcyon::ErrorCode::InvalidArgument);
     }

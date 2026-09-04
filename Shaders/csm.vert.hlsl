@@ -1,6 +1,5 @@
-// Minimal CSM depth vertex stage.  The production path can bind one cascade
-// matrix per draw; keeping this shader independently compilable also makes
-// depth-only pipeline validation deterministic.
+// CSM depth vertex stage. The renderer binds the snapped light-space matrix
+// for the active cascade and the current model transform for every draw.
 struct CsmConstants
 {
     float4x4 lightViewProjection;

@@ -219,11 +219,15 @@ Halcyon::Result<void> GpuUploader::uploadImageWithMips(VkDevice device,
     }
     VkFormatProperties properties{};
     vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
-    if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == 0)
+    constexpr VkFormatFeatureFlags requiredBlitFeatures =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+    if ((properties.optimalTilingFeatures & requiredBlitFeatures) != requiredBlitFeatures)
     {
         return Halcyon::Result<void>::failure(
             {Halcyon::ErrorCode::Unsupported,
-                "linear blit is unavailable for texture format; cannot generate mip chain"});
+                "linear source/destination blit is unavailable for texture format; "
+                "cannot generate the required mip chain"});
     }
     if (device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
         data.empty() || destination.image == VK_NULL_HANDLE || extent.width == 0 ||

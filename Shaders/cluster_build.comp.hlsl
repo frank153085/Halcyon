@@ -20,8 +20,9 @@ struct ClusterConstants
     uint tilesX;
     uint tilesY;
     uint slicesZ;
-    float nearPlane;
-    float farPlane;
+    uint clusteredLighting;
+    uint reserved;
+    float4 depthRange;
 };
 [[vk::push_constant]] ConstantBuffer<ClusterConstants> constants;
 
@@ -64,9 +65,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     const uint tile = cluster - slice * tileCount;
     const uint tileX = tile % constants.tilesX;
     const uint tileY = tile / constants.tilesX;
-    const float sliceNear = constants.nearPlane * pow(constants.farPlane / constants.nearPlane,
+    const float sliceNear = constants.depthRange.x * pow(constants.depthRange.y / constants.depthRange.x,
         (float)slice / (float)constants.slicesZ);
-    const float sliceFar = constants.nearPlane * pow(constants.farPlane / constants.nearPlane,
+    const float sliceFar = constants.depthRange.x * pow(constants.depthRange.y / constants.depthRange.x,
         (float)(slice + 1) / (float)constants.slicesZ);
     const float2 ndcMinimum = float2(
         (float)tileX / (float)constants.tilesX,
@@ -110,10 +111,15 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                 InterlockedAdd(clusterOverflow[0], 1);
             continue;
         }
+        // Disabling clustered-lighting remains a GPU operation: every light
+        // is appended to every cluster, avoiding a CPU/unclustered fallback
+        // while preserving the command and descriptor topology.
+        bool intersects = constants.clusteredLighting == 0u;
         const float3 viewLightPosition = mul(camera.view, float4(light.xyz, 1.0)).xyz;
-        bool intersects = sphereIntersectsAabb(viewLightPosition, max(light.w, 0.0),
-            boundsMinimum, boundsMaximum);
-        if (intersects && lightType == 2.0)
+        if (!intersects)
+            intersects = sphereIntersectsAabb(viewLightPosition, max(light.w, 0.0),
+                boundsMinimum, boundsMaximum);
+        if (intersects && constants.clusteredLighting != 0u && lightType == 2.0)
         {
             const float3 viewDirection = normalize(mul((float3x3)camera.view,
                 lights[i * 4u + 2u].xyz));

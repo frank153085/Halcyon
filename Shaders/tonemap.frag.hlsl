@@ -9,7 +9,12 @@ struct FragmentIn
 struct TonemapConstants
 {
     float exposure;
-    float3 _padding;
+    // SRGB swapchain attachments perform the final transfer-function
+    // conversion in the Vulkan blend stage. UNORM attachments need the
+    // explicit conversion below; the flag keeps both surface formats
+    // physically correct without double-encoding SRGB output.
+    float outputIsSrgb;
+    float2 _padding;
 };
 [[vk::push_constant]] ConstantBuffer<TonemapConstants> constants;
 
@@ -33,5 +38,6 @@ float3 linearToSrgb(float3 color)
 float4 main(FragmentIn input) : SV_Target0
 {
     const float3 hdr = hdrTexture.Sample(linearSampler, input.uv).rgb * exp2(constants.exposure);
-    return float4(linearToSrgb(aces(hdr)), 1.0);
+    const float3 mapped = aces(hdr);
+    return float4(constants.outputIsSrgb > 0.5 ? mapped : linearToSrgb(mapped), 1.0);
 }

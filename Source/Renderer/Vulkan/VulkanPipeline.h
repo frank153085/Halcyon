@@ -19,12 +19,6 @@ struct DescriptorBindingDesc
     VkDescriptorSetLayoutBinding binding{};
 };
 
-struct alignas(16) TexturedPushConstants
-{
-    glm::mat4 viewProjection{1.0f};
-    glm::mat4 model{1.0f};
-};
-
 struct GraphicsPipelineDesc
 {
     std::span<const VkFormat> colorFormats{};
@@ -52,8 +46,6 @@ struct ComputePipelineDesc
     std::span<const DescriptorBindingDesc> descriptorBindings{};
     std::span<const VkPushConstantRange> pushConstants{};
 };
-static_assert(sizeof(TexturedPushConstants) == sizeof(glm::mat4) * 2);
-
 struct alignas(16) M3PushConstants
 {
     glm::mat4 viewProjection{1.0f};
@@ -62,15 +54,6 @@ struct alignas(16) M3PushConstants
     glm::mat4 previousModel{1.0f};
 };
 static_assert(sizeof(M3PushConstants) == 256);
-
-struct alignas(16) M3VertexPushConstants
-{
-    glm::mat4 viewProjection{1.0f};
-    glm::mat4 previousViewProjection{1.0f};
-    glm::mat4 model{1.0f};
-    glm::mat4 previousModel{1.0f};
-};
-static_assert(sizeof(M3VertexPushConstants) == 256);
 
 struct alignas(16) M3TransparentPushConstants
 {
@@ -83,14 +66,6 @@ struct alignas(16) M3TransparentPushConstants
     glm::mat4 unusedPreviousModel{0.0f};
 };
 static_assert(sizeof(M3TransparentPushConstants) == 256);
-
-struct alignas(16) M3MaterialPushConstants
-{
-    glm::vec4 baseColorFactor{1.0f};
-    glm::vec4 emissiveFactor{0.0f};
-    glm::vec4 factors{0.0f, 1.0f, 0.5f, 0.0f}; // metallic, roughness, alpha cutoff, flags
-};
-static_assert(sizeof(M3MaterialPushConstants) == 48);
 
 class VulkanPipeline final
 {

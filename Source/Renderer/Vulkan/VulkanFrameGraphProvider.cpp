@@ -169,6 +169,7 @@ bool VulkanFrameGraphProvider::createImage(
     out.format = format;
     out.extent = imageInfo.extent;
     out.samples = imageInfo.samples;
+    out.usage = imageInfo.usage;
     out.mipLevels = d.mipLevels;
     out.arrayLayers = imageInfo.arrayLayers;
     out.isBuffer = false;
@@ -339,25 +340,64 @@ bool VulkanFrameGraphProvider::createRenderTarget(
     Halcyon::Renderer::Graph::FrameGraphNativeResource& output) noexcept
 {
     output = {};
+    if (info.descriptor.layerCount == 0 || info.descriptor.samples == 0)
+        return false;
     auto target = std::make_unique<VulkanFrameGraphRenderTarget>();
     bool missingColor = false;
+    bool hasAttachment = false;
+    VkExtent3D expectedExtent{};
+    VkSampleCountFlagBits expectedSamples = VK_SAMPLE_COUNT_1_BIT;
     for (std::size_t i = 0; i < Halcyon::Renderer::Graph::FrameGraphRenderPass::ATTACHMENT_COUNT; ++i)
     {
-        if (info.attachments[i].token == nullptr) continue;
+        const bool declared = static_cast<bool>(info.descriptor.attachments[i]);
+        const bool supplied = info.attachments[i].token != nullptr;
+        // A target descriptor and its native attachment array are one
+        // contract. Reject sparse/mismatched MRT declarations instead of
+        // silently changing the render scope seen by the pipeline.
+        if (declared != supplied) return false;
+        if (!supplied) continue;
         target->resources[i] = info.attachments[i];
         auto* resource = static_cast<VulkanFrameGraphResource*>(info.attachments[i].token);
-        if (resource == nullptr || resource->isBuffer) return false;
-        if (info.descriptor.layerCount > resource->arrayLayers) return false;
-        if (info.descriptor.samples != 0 &&
-            static_cast<VkSampleCountFlagBits>(info.descriptor.samples) != resource->samples)
+        if (resource == nullptr || resource->isBuffer || resource->image.image == VK_NULL_HANDLE ||
+            resource->view == VK_NULL_HANDLE)
+            return false;
+        if ((resource->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0 &&
+            i < Halcyon::Renderer::Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS)
+            return false;
+        if (i == Halcyon::Renderer::Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS &&
+            (resource->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
+            return false;
+        if (info.descriptor.layerCount > resource->arrayLayers)
+            return false;
+        if (static_cast<VkSampleCountFlagBits>(info.descriptor.samples) != resource->samples)
             return false;
         if (info.descriptor.viewport.width != 0 &&
             (resource->extent.width != info.descriptor.viewport.width ||
                 resource->extent.height != info.descriptor.viewport.height))
             return false;
+        if (!hasAttachment)
+        {
+            expectedExtent = resource->extent;
+            expectedSamples = resource->samples;
+            hasAttachment = true;
+        }
+        else if (resource->extent.width != expectedExtent.width ||
+            resource->extent.height != expectedExtent.height ||
+            resource->extent.depth != expectedExtent.depth ||
+            resource->samples != expectedSamples)
+        {
+            return false;
+        }
         if (i < Halcyon::Renderer::Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS)
         {
-            if (resource->image.image == VK_NULL_HANDLE) return false;
+            // Color formats are intentionally allowed to differ for MRT, but
+            // a depth-only format must never be attached to a color slot.
+            if (resource->format == VK_FORMAT_D32_SFLOAT) return false;
+        }
+        else if (i == Halcyon::Renderer::Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS &&
+            resource->format != VK_FORMAT_D32_SFLOAT)
+        {
+            return false;
         }
         target->views[i] = resource->view;
         if (i < Halcyon::Renderer::Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS) ++target->colorCount;

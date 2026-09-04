@@ -576,10 +576,22 @@ const std::string& SceneManager::name() const noexcept
     return impl_ != nullptr ? impl_->name : empty;
 }
 
-OwnedSceneFramePacket SceneManager::extract(
+Result<OwnedSceneFramePacket> SceneManager::extract(
     const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const
 {
-    return Renderer::Scene::Ecs::RenderExtractor::extract(scene(), camera, frameIndex);
+    if (impl_ == nullptr || impl_->renderer == nullptr)
+    {
+        return Result<OwnedSceneFramePacket>::failure(sceneManagerError(
+            ErrorCode::InvalidState, "SceneManager is not connected to a renderer"));
+    }
+    auto packet = Renderer::Scene::Ecs::RenderExtractor::extract(scene(), camera, frameIndex);
+    const auto remapped = impl_->renderer->remapFramePacket(packet);
+    if (!remapped)
+    {
+        return Result<OwnedSceneFramePacket>::failure(
+            remapped.error().withContext("SceneManager::extract"));
+    }
+    return Result<OwnedSceneFramePacket>::success(std::move(packet));
 }
 
 void SceneManager::shutdown() noexcept

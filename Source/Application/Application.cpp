@@ -484,6 +484,23 @@ int Application::run(
 
         if (!minimized)
         {
+            const bool finalFrame =
+                config.frameLimit != 0 && frameIndex + 1u >= config.frameLimit;
+            const bool captureFinalFrame =
+                finalFrame && (!config.screenshotPath.empty() || !config.goldenPath.empty());
+            const std::filesystem::path actualPath = !config.screenshotPath.empty()
+                ? config.screenshotPath
+                : std::filesystem::path{config.goldenPath.string() + ".actual.png"};
+            if (captureFinalFrame)
+            {
+                const auto capture = engine->captureScreenshot(actualPath);
+                if (!capture)
+                {
+                    HALCYON_LOG_ERROR("Screenshot request failed: ", capture.error().describe());
+                    exitCode = EXIT_FAILURE;
+                    break;
+                }
+            }
             const auto renderResult = engine->render(frameIndex);
             if (!renderResult)
             {
@@ -515,21 +532,15 @@ int Application::run(
                     }
                 }
             }
-            const bool finalFrame = config.frameLimit != 0 && frameIndex + 1u >= config.frameLimit;
-            if (finalFrame && (!config.screenshotPath.empty() || !config.goldenPath.empty()))
+            if (captureFinalFrame)
             {
-                const std::filesystem::path actualPath = !config.screenshotPath.empty()
-                                                              ? config.screenshotPath
-                                                              : config.goldenPath.string() + ".actual.png";
-                const auto capture = engine->captureScreenshot(actualPath);
-                if (!capture)
+                if (!previousStats.screenshotWritten)
                 {
-                    HALCYON_LOG_ERROR("Screenshot failed: ", capture.error().describe());
+                    HALCYON_LOG_ERROR("Screenshot was not completed by the final frame");
                     exitCode = EXIT_FAILURE;
                 }
                 else
                 {
-                    previousStats.screenshotWritten = true;
                     HALCYON_LOG_INFO("Screenshot written: ", actualPath.string());
                     if (!config.goldenPath.empty())
                     {

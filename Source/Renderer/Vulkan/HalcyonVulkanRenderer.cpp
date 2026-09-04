@@ -444,12 +444,7 @@ struct Renderer::Impl
     VkFormat& swapchainFormat = swapchainState.swapchainFormat;
     VkColorSpaceKHR& swapchainColorSpace = swapchainState.swapchainColorSpace;
     VkExtent2D& swapchainExtent = swapchainState.swapchainExtent;
-    VkImage& depthImage = swapchainState.depthImage;
-    ImageAllocation& depthAllocation = swapchainState.depthAllocation;
-    VkImageView& depthImageView = swapchainState.depthImageView;
-    VkDeviceSize& depthMemorySize = swapchainState.depthMemorySize;
     VkFormat& depthFormat = swapchainState.depthFormat;
-    bool& depthImageInitialized = swapchainState.depthImageInitialized;
     std::vector<VkImage>& swapchainImages = swapchainState.swapchainImages;
     std::vector<VkImageView>& swapchainImageViews = swapchainState.swapchainImageViews;
     std::vector<VkSemaphore>& presentReadySemaphores = swapchainState.presentReadySemaphores;
@@ -494,7 +489,6 @@ struct Renderer::Impl
     VulkanSceneResources sceneResources;
     VulkanBindlessTable bindlessTable;
     OverlayCallback overlayCallback = nullptr;
-    std::uint32_t lastPresentedImage = 0;
     bool taaHistoryValid = false;
     bool taaHistoryFlip = false;
     bool taaHistoryInitializedA = false;
@@ -506,6 +500,7 @@ struct Renderer::Impl
     std::vector<InstanceData> previousInstances;
     glm::mat4 previousViewProjection{1.0f};
     bool previousPacketValid = false;
+    std::filesystem::path pendingScreenshotPath;
 
     ~Impl()
     {
@@ -595,7 +590,6 @@ struct Renderer::Impl
         requestedExtent = {};
         window = nullptr;
         overlayCallback = nullptr;
-        lastPresentedImage = 0;
         taaHistoryValid = false;
         taaHistoryFlip = false;
         taaHistoryInitializedA = false;
@@ -607,6 +601,7 @@ struct Renderer::Impl
         previousInstances.clear();
         previousViewProjection = glm::mat4{1.0f};
         previousPacketValid = false;
+        pendingScreenshotPath.clear();
     }
 
     [[nodiscard]] VoidResult createTimelineSemaphore()
@@ -780,7 +775,10 @@ struct Renderer::Impl
         transparentDesc.depthTest = true;
         transparentDesc.depthWrite = false;
         transparentDesc.blendEnable = true;
-        transparentDesc.vertexShader = "pbr.vert.spv";
+        // Transparency has a distinct push-constant ABI (camera/light data
+        // precedes the model matrix), so it must use its matching vertex
+        // stage instead of reinterpreting the opaque pbr.vert constants.
+        transparentDesc.vertexShader = "forward_transparent.vert.spv";
         transparentDesc.fragmentShader = "forward_transparent.frag.spv";
         transparentDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&m3MaterialLayout, 1};
         transparentDesc.descriptorBindings = materialAbi;
@@ -842,7 +840,7 @@ struct Renderer::Impl
         clusterDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&m3ClusterLayout, 1};
         clusterDesc.descriptorBindings = clusterAbi;
         const std::array<VkPushConstantRange, 1> clusterPushRange = {
-            VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32}};
+            VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, 48}};
         clusterDesc.pushConstants = clusterPushRange;
         const auto clusterResult = clusterBuildPipeline.createCompute(device, clusterDesc);
         if (!clusterResult) return clusterResult;
@@ -940,7 +938,8 @@ struct Renderer::Impl
     }
 
     [[nodiscard]] VoidResult recordM3Frame(
-        FrameContext& frame, std::uint32_t imageIndex, const FramePacket& packet);
+        FrameContext& frame, std::uint32_t imageIndex, const FramePacket& packet,
+        VkBuffer screenshotReadback);
 
     [[nodiscard]] VoidResult recordImageUpload(VkCommandBuffer commandBuffer,
         VkImage image,
@@ -990,109 +989,26 @@ struct Renderer::Impl
 
     [[nodiscard]] VoidResult captureScreenshot(const std::filesystem::path& path)
     {
-        if (!initialized || device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE ||
-            swapchainExtent.width == 0 || swapchainExtent.height == 0 ||
-            lastPresentedImage >= swapchainImages.size())
+        if (!initialized || device == VK_NULL_HANDLE || path.empty())
         {
-            return fail(
-                "No rendered frame is available for screenshot", Halcyon::ErrorCode::InvalidState);
+            return fail("A screenshot requires an initialized renderer and a non-empty path",
+                Halcyon::ErrorCode::InvalidState);
         }
-        (void)vkDeviceWaitIdle(device);
+        if (!pendingScreenshotPath.empty())
+        {
+            return fail("A screenshot is already queued for the next rendered frame",
+                Halcyon::ErrorCode::InvalidState);
+        }
+        pendingScreenshotPath = path;
+        return ok();
+    }
+
+    [[nodiscard]] VoidResult writeScreenshot(
+        const BufferAllocation& readback, const std::filesystem::path& path)
+    {
         const VkDeviceSize size = static_cast<VkDeviceSize>(swapchainExtent.width) *
                                   static_cast<VkDeviceSize>(swapchainExtent.height) * 4u;
-        VkBufferCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        info.size = size;
-        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        auto bufferResult = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
-        if (!bufferResult)
-        {
-            return bufferResult.error();
-        }
-        const BufferAllocation readback = bufferResult.value();
-        VkCommandBufferAllocateInfo alloc{};
-        alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        alloc.commandPool = frames.front().commandPool;
-        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        alloc.commandBufferCount = 1;
-        VkCommandBuffer command = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(device, &alloc, &command);
-        if (result == VK_SUCCESS)
-        {
-            VkCommandBufferBeginInfo begin{};
-            begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            result = vkBeginCommandBuffer(command, &begin);
-        }
-        VkImageMemoryBarrier2 toCopy{};
-        toCopy.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        toCopy.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-        toCopy.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        toCopy.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-        toCopy.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        toCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        toCopy.image = swapchainImages[lastPresentedImage];
-        toCopy.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkDependencyInfo dep{};
-        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dep.imageMemoryBarrierCount = 1;
-        dep.pImageMemoryBarriers = &toCopy;
-        if (result == VK_SUCCESS)
-        {
-            vkCmdPipelineBarrier2(command, &dep);
-        }
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {swapchainExtent.width, swapchainExtent.height, 1};
-        if (result == VK_SUCCESS)
-        {
-            vkCmdCopyImageToBuffer(command,
-                swapchainImages[lastPresentedImage],
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                readback.buffer,
-                1,
-                &region);
-        }
-        VkImageMemoryBarrier2 back = toCopy;
-        back.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        back.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-        back.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-        back.dstAccessMask = VK_ACCESS_2_NONE;
-        back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        back.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        dep.pImageMemoryBarriers = &back;
-        if (result == VK_SUCCESS)
-        {
-            vkCmdPipelineBarrier2(command, &dep);
-        }
-        if (result == VK_SUCCESS)
-        {
-            result = vkEndCommandBuffer(command);
-        }
-        if (result == VK_SUCCESS)
-        {
-            VkSubmitInfo submit{};
-            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit.commandBufferCount = 1;
-            submit.pCommandBuffers = &command;
-            result = vkQueueSubmit(graphicsQueue, 1, &submit, VK_NULL_HANDLE);
-            if (result == VK_SUCCESS)
-            {
-                result = vkQueueWaitIdle(graphicsQueue);
-            }
-        }
-        if (command != VK_NULL_HANDLE)
-        {
-            vkFreeCommandBuffers(device, frames.front().commandPool, 1, &command);
-        }
-        if (result != VK_SUCCESS)
-        {
-            gpuAllocator.destroy(readback);
-            return fail(vkFailure("screenshot readback", result));
-        }
         auto bytes = gpuAllocator.readBuffer(readback, 0, size);
-        gpuAllocator.destroy(readback);
         if (!bytes)
         {
             return bytes.error();
@@ -1139,30 +1055,15 @@ struct Renderer::Impl
         stats.quality.taaEnabled = config.enableTaa;
         stats.quality.clusteredLightingEnabled = config.enableClusteredLighting;
         stats.quality.transparencyEnabled = config.enableTransparency;
-        // Convert stable SceneDatabase slots to dense GPU indices once at the
-        // renderer boundary. Draw recording only consumes these contiguous
-        // indices; no Vulkan lookup ever depends on Handle::index().
-        std::vector<InstanceData> remappedInstances;
-        remappedInstances.reserve(packet.instances.size());
-        for (const auto& source : packet.instances)
+        // SceneManager resolves stable handles before submission. Rendering
+        // only consumes contiguous resource-table indices.
+        for (const auto& drawInstance : packet.instances)
         {
-            const auto meshIndex = sceneResources.meshDenseIndex(source.meshId);
-            const auto materialIndex = sceneResources.materialDenseIndex(source.materialId);
-            if (meshIndex == std::numeric_limits<std::uint32_t>::max() ||
-                materialIndex == std::numeric_limits<std::uint32_t>::max())
-                continue;
-            InstanceData item = source;
-            item.meshId = meshIndex;
-            item.materialId = materialIndex;
-            if (const MeshResource* mesh = sceneResources.mesh(item.meshId);
-                mesh != nullptr)
+            if (const MeshResource* mesh = sceneResources.mesh(drawInstance.meshId); mesh != nullptr)
             {
                 stats.primitiveCount += mesh->indexCount / 3u;
             }
-            remappedInstances.push_back(item);
         }
-        const FramePacket effectivePacket{packet.frameIndex, packet.camera,
-            std::span<const InstanceData>{remappedInstances}, packet.lights};
         stats.taaHistoryValid = config.enableTaa && taaHistoryValid && hasRenderedFrame &&
                                 packet.frameIndex == lastFrameIndex + 1u;
         if (!stats.taaHistoryValid)
@@ -1292,7 +1193,7 @@ struct Renderer::Impl
                 }
             }
         }
-        if (config.enableClusteredLighting && frame.submitted &&
+        if (frame.submitted &&
             currentFrame < clusterOverflowReadbacks.size())
         {
             const auto overflowBytes = gpuAllocator.readBuffer(
@@ -1383,9 +1284,36 @@ struct Renderer::Impl
             return stats;
         }
 
-        const VoidResult recordResult = recordM3Frame(frame, stats.swapchainImageIndex, effectivePacket);
+        const std::filesystem::path screenshotPath =
+            std::exchange(pendingScreenshotPath, std::filesystem::path{});
+        BufferAllocation screenshotReadback{};
+        if (!screenshotPath.empty())
+        {
+            VkBufferCreateInfo readbackInfo{};
+            readbackInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            readbackInfo.size = static_cast<VkDeviceSize>(swapchainExtent.width) *
+                                static_cast<VkDeviceSize>(swapchainExtent.height) * 4u;
+            readbackInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            readbackInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            const auto allocation =
+                gpuAllocator.createBuffer(readbackInfo, MemoryUsage::GpuToCpu);
+            if (!allocation)
+            {
+                setError(allocation.error().describe());
+                initialized = false;
+                fatalError = true;
+                stats.fatalError = true;
+                stats.cpuFrameMs = elapsedMilliseconds(begin);
+                return stats;
+            }
+            screenshotReadback = allocation.value();
+        }
+
+        const VoidResult recordResult = recordM3Frame(frame, stats.swapchainImageIndex, packet,
+            screenshotReadback.buffer);
         if (!recordResult)
         {
+            gpuAllocator.destroy(screenshotReadback);
             setError(recordResult.error().describe());
             stats.deviceLost = deviceLost;
             initialized = false;
@@ -1399,6 +1327,7 @@ struct Renderer::Impl
         result = frameContext.resetFence(device, frame);
         if (result != VK_SUCCESS)
         {
+            gpuAllocator.destroy(screenshotReadback);
             setError(vkFailure("vkResetFences", result));
             stats.deviceLost = result == VK_ERROR_DEVICE_LOST;
             deviceLost = deviceLost || stats.deviceLost;
@@ -1413,6 +1342,7 @@ struct Renderer::Impl
             graphicsQueue, frame, presentReadySemaphores[stats.swapchainImageIndex]);
         if (result != VK_SUCCESS)
         {
+            gpuAllocator.destroy(screenshotReadback);
             setError(vkFailure("vkQueueSubmit2", result));
             deviceLost = deviceLost || result == VK_ERROR_DEVICE_LOST;
             initialized = false;
@@ -1424,8 +1354,6 @@ struct Renderer::Impl
         }
         ++renderSerial;
         swapchainImageInitialized[stats.swapchainImageIndex] = true;
-        depthImageInitialized = true;
-
         result = frameContext.present(presentQueue,
             swapchain,
             presentReadySemaphores[stats.swapchainImageIndex],
@@ -1437,6 +1365,11 @@ struct Renderer::Impl
         }
         else if (result != VK_SUCCESS)
         {
+            if (screenshotReadback.buffer != VK_NULL_HANDLE)
+            {
+                (void)frameContext.wait(device, frame);
+                gpuAllocator.destroy(screenshotReadback);
+            }
             setError(vkFailure("vkQueuePresentKHR", result));
             deviceLost = deviceLost || result == VK_ERROR_DEVICE_LOST;
             initialized = false;
@@ -1448,12 +1381,40 @@ struct Renderer::Impl
             return stats;
         }
 
+        if (screenshotReadback.buffer != VK_NULL_HANDLE)
+        {
+            result = frameContext.wait(device, frame);
+            if (result != VK_SUCCESS)
+            {
+                gpuAllocator.destroy(screenshotReadback);
+                setError(vkFailure("screenshot frame fence", result));
+                deviceLost = deviceLost || result == VK_ERROR_DEVICE_LOST;
+                initialized = false;
+                fatalError = true;
+                stats.deviceLost = deviceLost;
+                stats.fatalError = true;
+                stats.cpuFrameMs = elapsedMilliseconds(begin);
+                return stats;
+            }
+            const VoidResult screenshotResult =
+                writeScreenshot(screenshotReadback, screenshotPath);
+            gpuAllocator.destroy(screenshotReadback);
+            if (!screenshotResult)
+            {
+                setError(screenshotResult.error().describe());
+                initialized = false;
+                fatalError = true;
+                stats.fatalError = true;
+                stats.cpuFrameMs = elapsedMilliseconds(begin);
+                return stats;
+            }
+            stats.screenshotWritten = true;
+        }
+
         currentFrame = (currentFrame + 1) % static_cast<std::uint32_t>(frames.size());
-        lastPresentedImage = stats.swapchainImageIndex;
         stats.rendered = true;
-        // This field tracks renderer-owned allocations (currently the D32
-        // depth target), not the physical heap capacity reported in
-        // Capabilities.
+        // This field tracks renderer-owned VMA allocations, not the physical
+        // heap capacity reported in Capabilities.
         deviceMemoryBytes = gpuAllocator.allocatedBytes();
         stats.deviceMemoryBytes = static_cast<std::uint64_t>(deviceMemoryBytes);
         stats.quality.rayQueryEnabled = rayQueryEnabled;
@@ -1465,7 +1426,7 @@ struct Renderer::Impl
             hasRenderedFrame = true;
             lastFrameIndex = packet.frameIndex;
         }
-        previousInstances = remappedInstances;
+        previousInstances.assign(packet.instances.begin(), packet.instances.end());
         previousViewProjection = packet.camera.viewProjection;
         previousPacketValid = true;
         stats.cpuFrameMs = elapsedMilliseconds(begin);
@@ -1481,7 +1442,8 @@ struct Renderer::Impl
 };
 
 VoidResult Renderer::Impl::recordM3Frame(
-    FrameContext& frame, std::uint32_t imageIndex, const FramePacket& packet)
+    FrameContext& frame, std::uint32_t imageIndex, const FramePacket& packet,
+    VkBuffer screenshotReadback)
 {
     HALCYON_PROFILE_SCOPE("Renderer::recordM3Frame");
     if (imageIndex >= swapchainImages.size() || imageIndex >= swapchainImageViews.size())
@@ -2060,7 +2022,6 @@ VoidResult Renderer::Impl::recordM3Frame(
              vkCmdEndRendering(frame.commandBuffer);
         });
 
-    if (config.enableClusteredLighting)
     {
         const auto clusterRangesInput = clusterRanges;
         const auto clusterIndicesInput = clusterIndices;
@@ -2073,7 +2034,7 @@ VoidResult Renderer::Impl::recordM3Frame(
             clusterRanges = builder.write(clusterRanges, Graph::ResourceUsage::Storage);
             clusterIndices = builder.write(clusterIndices, Graph::ResourceUsage::Storage);
             clusterOverflow = builder.write(clusterOverflow, Graph::ResourceUsage::Storage);
-            lightBuffer = builder.write(lightBuffer, Graph::ResourceUsage::Storage);
+            builder.read(lightBuffer, Graph::ResourceUsage::Storage);
             builder.read(clusterCamera, Graph::ResourceUsage::Uniform);
             builder.sideEffect();
         },
@@ -2126,15 +2087,20 @@ VoidResult Renderer::Impl::recordM3Frame(
             }
             struct ClusterConstants
             {
-                std::uint32_t clusterCount, lightCount, maxLightsPerCluster, tilesX, tilesY, slicesZ;
-                float nearPlane, farPlane;
+                std::uint32_t clusterCount, lightCount, maxLightsPerCluster, tilesX;
+                std::uint32_t tilesY, slicesZ, clusteredLighting, reserved;
+                glm::vec4 depthRange;
             } constants{tileCount, static_cast<std::uint32_t>(packet.lights.size()),
                 VulkanM3FrameResources::MaxLightsPerCluster,
                 m3FrameResources.tilesX(), m3FrameResources.tilesY(),
                 VulkanM3FrameResources::ClusterSlices,
-                std::max(1.0e-4f, packet.camera.positionAndNear.w),
-                packet.camera.forwardAndFar.w > packet.camera.positionAndNear.w
-                    ? packet.camera.forwardAndFar.w : 1000.0f};
+                config.enableClusteredLighting ? 1u : 0u, 0u,
+                glm::vec4{
+                    std::max(1.0e-4f, packet.camera.positionAndNear.w),
+                    packet.camera.forwardAndFar.w > packet.camera.positionAndNear.w
+                    ? packet.camera.forwardAndFar.w : 1000.0f,
+                    0.0f, 0.0f}};
+            static_assert(sizeof(ClusterConstants) == 48);
             const VkBuffer overflowBuffer = frameGraphProvider.buffer(
                 resources.get<Graph::FrameGraphBuffer>(clusterOverflowInput).native);
             vkCmdFillBuffer(frame.commandBuffer, overflowBuffer, 0, VK_WHOLE_SIZE, 0u);
@@ -2428,7 +2394,7 @@ VoidResult Renderer::Impl::recordM3Frame(
                 std::max(1.0e-4f, packet.camera.positionAndNear.w),
                 packet.camera.forwardAndFar.w > packet.camera.positionAndNear.w
                     ? packet.camera.forwardAndFar.w : 1000.0f,
-                config.enableClusteredLighting ? 1.0f : 0.0f, 0.0f};
+                1.0f, 0.0f};
             vkCmdPushConstants(frame.commandBuffer, deferredLightingPipeline.layout(),
                 VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(constants), &constants);
             vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
@@ -2606,14 +2572,59 @@ VoidResult Renderer::Impl::recordM3Frame(
             VkRect2D scissor{{0, 0}, swapchainExtent};
             vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
             vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-            struct TonemapConstants { float exposure; float padding[3]; } tonemapConstants{
-                config.exposure, {0.0f, 0.0f, 0.0f}};
+            struct TonemapConstants
+            {
+                float exposure;
+                float outputIsSrgb;
+                float padding[2];
+            } tonemapConstants{config.exposure,
+                (swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB ||
+                    swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB) ? 1.0f : 0.0f,
+                {0.0f, 0.0f}};
             vkCmdPushConstants(frame.commandBuffer, tonemapPipeline.layout(),
                 VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemapConstants), &tonemapConstants);
             vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
             vkCmdEndRendering(frame.commandBuffer);
         });
-    graph.present(output);
+    const auto presentOutput = output;
+    graph.addPass<Graph::FrameGraph::Empty>("Present",
+        [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            builder.read(presentOutput, screenshotReadback != VK_NULL_HANDLE
+                    ? Graph::ResourceUsage::TransferSource
+                    : Graph::ResourceUsage::Present);
+            builder.sideEffect();
+        },
+        [&](const Graph::FrameGraphResources&, const Graph::FrameGraph::Empty&,
+            Graph::CommandContext&)
+        {
+            if (screenshotReadback != VK_NULL_HANDLE)
+            {
+                transitionImage(swapchainImages[imageIndex],
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                VkBufferImageCopy copy{};
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copy.imageExtent = {width, height, 1};
+                vkCmdCopyImageToBuffer(frame.commandBuffer, swapchainImages[imageIndex],
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, screenshotReadback, 1, &copy);
+                transitionImage(swapchainImages[imageIndex],
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
+            }
+            else
+            {
+                transitionImage(swapchainImages[imageIndex],
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE);
+            }
+        });
 
     graph.compile(Graph::CompileOptions{false});
     if (!graph.compileResult())
@@ -2649,25 +2660,6 @@ VoidResult Renderer::Impl::recordM3Frame(
         return fail(lastError.empty() ? "Vulkan M3 pass recording failed" : lastError,
             Halcyon::ErrorCode::Backend);
     }
-    VkImageMemoryBarrier2 presentBarrier{};
-    presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    presentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    presentBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    presentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-    presentBarrier.dstAccessMask = VK_ACCESS_2_NONE;
-    presentBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    presentBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    presentBarrier.image = swapchainImages[imageIndex];
-    presentBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    presentBarrier.subresourceRange.levelCount = 1;
-    presentBarrier.subresourceRange.layerCount = 1;
-    VkDependencyInfo dependency{};
-    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependency.imageMemoryBarrierCount = 1;
-    dependency.pImageMemoryBarriers = &presentBarrier;
-    vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
     if (timestampsEnabled)
     {
         vkCmdWriteTimestamp2(frame.commandBuffer, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
@@ -2790,7 +2782,6 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             window,
             impl_->graphicsQueueFamily,
             impl_->presentQueueFamily,
-            impl_->gpuAllocator,
             VkExtent2D{impl_->requestedExtent.width, impl_->requestedExtent.height});
         if (!result)
         {
@@ -2951,6 +2942,34 @@ Halcyon::Result<void> Renderer::releaseSceneAsset(
     auto result = impl_->sceneResources.releaseAsset(imported);
     impl_->deviceMemoryBytes = impl_->gpuAllocator.allocatedBytes();
     return result;
+}
+
+Halcyon::Result<void> Renderer::remapFramePacket(
+    Halcyon::Renderer::Scene::OwnedFramePacket& packet) const
+{
+    if (impl_ == nullptr || !impl_->initialized)
+    {
+        return Halcyon::Result<void>::failure(
+            {Halcyon::ErrorCode::InvalidState, "renderer is not initialized"});
+    }
+    for (auto& instance : packet.instances)
+    {
+        const std::uint32_t stableMesh = instance.meshId;
+        const std::uint32_t stableMaterial = instance.materialId;
+        const auto mesh = impl_->sceneResources.meshDenseIndex(stableMesh);
+        const auto material = impl_->sceneResources.materialDenseIndex(stableMaterial);
+        if (mesh == std::numeric_limits<std::uint32_t>::max() ||
+            material == std::numeric_limits<std::uint32_t>::max())
+        {
+            return Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidState,
+                "frame packet references an unmapped scene resource (mesh slot " +
+                    std::to_string(stableMesh) + ", material slot " +
+                    std::to_string(stableMaterial) + ")"});
+        }
+        instance.meshId = mesh;
+        instance.materialId = material;
+    }
+    return Halcyon::Result<void>::success();
 }
 
 void Renderer::invalidateTaaHistory() noexcept

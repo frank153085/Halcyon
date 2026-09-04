@@ -64,6 +64,9 @@ namespace
     result.clusterOverflowCount = source.clusterOverflowCount;
     result.taaHistoryValid = source.taaHistoryValid;
     result.screenshotWritten = source.screenshotWritten;
+    result.goldenImageCompared = source.goldenImageCompared;
+    result.goldenImagePassed = source.goldenImagePassed;
+    result.performanceCsvWritten = source.performanceCsvWritten;
     result.quality.internalResolutionScale = source.quality.internalResolutionScale;
     result.quality.shadowResolutionScale = source.quality.shadowResolutionScale;
     result.quality.lodBias = source.quality.lodBias;
@@ -251,7 +254,11 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
     {
         impl_->sceneManager.scene().updateTransforms();
         auto packet = impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
-        const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.view());
+        if (!packet)
+        {
+            return Result<FrameStats>::failure(packet.error().withContext("Engine::render"));
+        }
+        const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.value().view());
         const FrameStats stats = translateStats(backendStats);
         if (stats.deviceLost)
         {

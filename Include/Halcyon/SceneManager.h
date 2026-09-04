@@ -93,7 +93,7 @@ private:
 
     [[nodiscard]] Result<void> initialize(
         const SceneManagerConfig& config, Vulkan::Renderer& renderer);
-    [[nodiscard]] OwnedSceneFramePacket extract(
+    [[nodiscard]] Result<OwnedSceneFramePacket> extract(
         const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const;
 
     std::unique_ptr<Impl> impl_;

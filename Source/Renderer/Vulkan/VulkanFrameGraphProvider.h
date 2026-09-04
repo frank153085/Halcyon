@@ -27,6 +27,7 @@ struct VulkanFrameGraphResource
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkExtent3D extent{};
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    VkImageUsageFlags usage = 0;
     std::uint32_t mipLevels = 1;
     std::uint32_t arrayLayers = 1;
     std::vector<VkImageView> layerViews;

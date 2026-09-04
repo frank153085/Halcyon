@@ -15,8 +15,8 @@ namespace Halcyon::Vulkan
 {
 
 // GPU companion for the backend-neutral SceneDatabase. Stable CPU handles are
-// remapped to dense indices at the renderer boundary; file parsing and
-// scene/entity policy stay in SceneManager.
+// remapped to dense indices while SceneManager builds a frame packet; file
+// parsing and scene/entity policy stay in SceneManager.
 class VulkanSceneResources final
 {
 public:
@@ -43,9 +43,9 @@ public:
 
     [[nodiscard]] const MeshResource* mesh(std::uint32_t index) const noexcept;
     [[nodiscard]] VkDescriptorSet materialDescriptor(std::uint32_t index) const noexcept;
-    // Resolve a stable SceneDatabase slot to a dense GPU index.  Frame
-    // packets submitted to Vulkan are remapped once per frame and never
-    // dereference a backend allocation through Handle::index().
+    // Resolve a stable SceneDatabase slot to a dense GPU index. Frame packets
+    // submitted to render() are already remapped and never dereference a
+    // backend allocation through Handle::index().
     [[nodiscard]] std::uint32_t meshDenseIndex(std::uint32_t stableIndex) const noexcept;
     [[nodiscard]] std::uint32_t materialDenseIndex(std::uint32_t stableIndex) const noexcept;
     [[nodiscard]] std::uint32_t textureDenseIndex(std::uint32_t stableIndex) const noexcept;

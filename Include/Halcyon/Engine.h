@@ -65,6 +65,8 @@ public:
 
     [[nodiscard]] Result<FrameStats> render(std::uint64_t frameIndex);
     [[nodiscard]] Result<void> resize(Extent2D extent);
+    // Queue a PNG readback for the next rendered frame. The copy is recorded
+    // before presentation and completion is reported by FrameStats.
     [[nodiscard]] Result<void> captureScreenshot(const std::filesystem::path& path);
     [[nodiscard]] const Capabilities& capabilities() const noexcept;
 

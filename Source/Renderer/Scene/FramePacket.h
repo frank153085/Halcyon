@@ -21,8 +21,9 @@ struct alignas(16) InstanceData
     // Column-major affine transform.  The final row/column are kept explicit
     // rather than using a glm type so the packet has a stable wire layout.
     std::array<float, 16> transform{};
-    // Stable SceneDatabase slots at extraction time; the Vulkan renderer
-    // remaps these to dense GPU indices before recording.
+    // Dense renderer resource-table indices. Raw ECS extraction temporarily
+    // writes stable SceneDatabase slots; SceneManager resolves them before the
+    // packet crosses the renderer boundary.
     std::uint32_t meshId = 0;
     std::uint32_t materialId = 0;
     std::uint32_t flags = 0;
