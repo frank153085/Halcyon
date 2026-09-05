@@ -1924,7 +1924,17 @@ struct Renderer::Impl
         stats.materialDescriptorBindCount = materialDescriptorBindCount;
         stats.gpuDrivenActive = gpuDrivenActive;
         stats.gpuFallbackInstanceCount = gpuFallbackInstanceCount;
-        if (config.enableGpuDrivenScene && !gpuDrivenActive)
+        if (!config.enableGpuDrivenScene)
+        {
+            // The legacy path submits the extracted scene directly on the
+            // CPU and has no GPU visibility result. Expose its submitted
+            // instance count so stress CSVs remain useful for A/B analysis.
+            stats.visibleInstanceCount = static_cast<std::uint32_t>(packet.instances.size());
+            stats.frustumVisibleInstanceCount = stats.visibleInstanceCount;
+            stats.indirectDrawCount = 0;
+            stats.occludedInstanceCount = 0;
+        }
+        else if (!gpuDrivenActive)
         {
             stats.visibleInstanceCount = static_cast<std::uint32_t>(packet.instances.size());
             stats.indirectDrawCount = 0;

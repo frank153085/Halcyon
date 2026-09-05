@@ -81,6 +81,7 @@ void printUsage() noexcept
                 "  --no-clustered-lighting  disable clustered lighting\n"
                 "  --no-transparency         disable forward transparency\n"
                 "  --gpu-driven              enable GPU scene/culling/indirect draws\n"
+                "  --no-gpu-driven           disable GPU-driven rendering (CPU baseline)\n"
                 "  --two-phase-occlusion    enable previous/current Hi-Z re-test\n"
                 "  --no-validation  disable Vulkan validation layers\n"
                 "  --validation     enable Vulkan validation layers\n"
@@ -243,6 +244,7 @@ void printUsage() noexcept
         if (argument == "--no-clustered-lighting") { config.engine.enableClusteredLighting = false; continue; }
         if (argument == "--no-transparency") { config.engine.enableTransparency = false; continue; }
         if (argument == "--gpu-driven") { config.engine.enableGpuDrivenScene = true; continue; }
+        if (argument == "--no-gpu-driven") { config.engine.enableGpuDrivenScene = false; continue; }
         if (argument == "--two-phase-occlusion")
         {
             config.engine.enableGpuDrivenScene = true;

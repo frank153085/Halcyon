@@ -142,6 +142,11 @@ out\build\m3-msvc-debug\HalcyonM3Demo.exe `
   --scene stress --instance-count 100000 --frames 1 --no-validation
 ```
 
+For a GPU-driven versus traditional CPU-path stress comparison, run
+`scripts\\run_m4_stress.bat`. It writes `out\\captures\\m4-stress.csv` for
+the GPU-driven two-phase run and `out\\captures\\m4-stress-legacy.csv` for
+the CPU baseline. The `--no-gpu-driven` switch selects the traditional path.
+
 On a machine with the M3 assets and a Vulkan device, the two-scene regression
 wrapper is `powershell -ExecutionPolicy Bypass -File scripts/run_regression.ps1`.
 It writes screenshots and performance CSV files under `out/captures/regression`
