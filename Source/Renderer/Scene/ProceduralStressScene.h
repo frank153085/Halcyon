@@ -11,7 +11,10 @@ namespace Halcyon::Renderer::Scene
 struct ProceduralStressSceneConfig
 {
     std::size_t instanceCount = 100'000;
-    float gridSpacing = 3.0f;
+    // Keep a small gap between cubes so InstanceId comparisons are not
+    // dominated by equal-depth rasterization ties.  The dedicated centre
+    // blocker still creates substantial, deterministic Hi-Z rejection.
+    float gridSpacing = 1.1f;
     std::string baseMeshName = "unit-cube";
 };
 

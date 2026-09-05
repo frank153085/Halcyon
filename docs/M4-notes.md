@@ -60,13 +60,29 @@ frame. GPU stage timestamps (frustum, indirect, Hi-Z, and two-phase) are
 reported through the regular performance CSV fields when timestamp queries are
 available.
 
+Descriptor allocation is frame-slot scoped. The renderer waits for the slot
+fence before selecting `m3DescriptorPools[currentFrame]` and calling
+`vkResetDescriptorPool`; all descriptor sets recorded for that slot have
+finished before they are recycled, so per-frame allocations remain bounded.
+
+Scene-buffer growth is deliberately simple during development: when a scene
+outgrows the current capacity, `VulkanGpuSceneBuffers::ensureCapacity()` waits
+for the device, creates larger SoA/scratch buffers, and rebinds the next
+frame's descriptors; the caller then performs a full scene re-upload. The
+`vkDeviceWaitIdle` call is a visible whole-device stall and should be replaced
+with a retired-buffer/upload-ring handoff before performance sign-off. Uploads
+currently use a queue-idle bridge for the same reason.
+
 ## Known performance scope
 
-The initial indirect builder emits one command per instance. It is functionally
-correct and supports mixed meshes through consolidated geometry, but does not
-yet merge adjacent commands into instanced mesh batches. Command compaction
-remains a follow-up optimization; two-phase occlusion is implemented but
-intentionally opt-in while GPU validation and capture coverage are expanded.
+The initial indirect builder emits one command per instance. For N visible
+instances sharing one mesh this means N indirect commands instead of one
+instanced draw; it is functionally correct, but adds GPU command-processing
+and indirect-buffer traffic whose impact has not yet been quantified. It also
+supports mixed meshes through consolidated geometry, but does not yet merge
+adjacent commands into instanced mesh batches. Command compaction remains a
+follow-up optimization. Two-phase occlusion is implemented but intentionally
+opt-in while GPU validation and capture coverage are expanded.
 For B13/B17 the development path copies the frustum/phase-2 slot-index lists
 into a per-frame readback buffer and compares their union against a CPU
 reference set built from the same world-space bounds and clip planes. The
@@ -81,3 +97,13 @@ requires both visibility checks to pass. For the strict reference-vs-occlusion
 set comparison, `scripts/run_m4_instance_id.ps1` runs a frustum-only reference
 and a two-phase pass with fixed timestep, then compares the per-frame ID report
 files and emits a compact summary CSV.
+
+Two-phase occlusion is opt-in (`--two-phase-occlusion`). Its structural
+readback audit intentionally does not require every frustum candidate to
+survive: candidates rejected by a valid Hi-Z test are expected. The InstanceId
+comparison tool is the pixel-level check for visible-object coverage. A mixed
+frame is supported: bindless-compatible opaque slots use GPU indirect
+submission, while transparent, double-sided, or otherwise incompatible slots
+are filtered out of the compute list and drawn by the CPU fallback. Indirect
+submission is currently one command per instance; instances sharing one mesh
+are not yet compacted into an instanced command.

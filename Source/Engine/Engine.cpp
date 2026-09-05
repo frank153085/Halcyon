@@ -67,6 +67,10 @@ namespace
     result.gpuTwoPhaseMs = source.gpuTwoPhaseMs;
     result.visibleInstanceCount = source.visibleInstanceCount;
     result.indirectDrawCount = source.indirectDrawCount;
+    result.frustumVisibleInstanceCount = source.frustumVisibleInstanceCount;
+    result.occludedInstanceCount = source.occludedInstanceCount;
+    result.gpuDrivenActive = source.gpuDrivenActive;
+    result.gpuFallbackInstanceCount = source.gpuFallbackInstanceCount;
     result.gpuVisibilityMissingCount = source.gpuVisibilityMissingCount;
     result.gpuVisibilityValidationPassed = source.gpuVisibilityValidationPassed;
     result.gpuInstanceIdInvalidPixelCount = source.gpuInstanceIdInvalidPixelCount;

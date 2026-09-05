@@ -87,8 +87,11 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
             // a slow orbit crosses occluder boundaries without introducing
             // input-dependent results in scripted runs.
             const float angle = static_cast<float>(frame.elapsedSeconds) * glm::radians(9.0f);
-            const glm::vec3 position{std::sin(angle) * 34.0f, 22.0f,
-                std::cos(angle) * 34.0f};
+            // Keep the orbit close to the grid plane so nearer rows actually
+            // occlude farther rows; this makes the two-phase audit exercise
+            // rejection instead of merely validating a no-op pass.
+            const glm::vec3 position{std::sin(angle) * 20.0f, 1.5f,
+                std::cos(angle) * 20.0f};
             const auto cameraResult = engine.defaultView().lookAt(position, {0.0f, 0.0f, 0.0f});
             if (!cameraResult) return cameraResult;
             return Result<void>::success();

@@ -55,6 +55,12 @@ struct MeshMaterialRow
     std::uint32_t lodState = 0;
 };
 
+// The high bit is owned by the renderer and never comes from an ECS
+// RenderableFlags value. It marks a slot that must remain on the CPU fallback
+// path (for example, a mesh with no consolidated index data) while the rest
+// of the frame can still use GPU-driven submission.
+inline constexpr std::uint32_t kGpuSceneCpuFallbackFlag = 1u << 31u;
+
 // Draw metadata indexes a renderer-owned consolidated vertex/index stream.
 // Keeping it separate from instances lets one indirect command list contain
 // arbitrary meshes without rebinding vertex or index buffers per object.

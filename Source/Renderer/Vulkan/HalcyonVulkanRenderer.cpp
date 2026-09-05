@@ -427,6 +427,7 @@ constexpr std::uint32_t kGpuDrivenSamplerCapacity = 16u;
 struct Renderer::Impl
 {
     static constexpr std::uint32_t VisibilityReadbackCapacity = 1u << 20;
+    static constexpr std::uint32_t VisibilityReadbackHeaderCount = 3u;
     using FrameContext = VulkanFrame;
 
     RendererConfig config{};
@@ -536,6 +537,8 @@ struct Renderer::Impl
     std::filesystem::path pendingScreenshotPath;
     std::uint64_t gpuSceneContentHash = 0;
     std::uint32_t gpuSceneInstanceCount = 0;
+    bool gpuDrivenActive = false;
+    std::uint32_t gpuFallbackInstanceCount = 0;
     std::uint32_t gpuMaterialCount = 0;
     std::uint32_t materialDescriptorBindCount = 0;
     std::vector<Resources::DescriptorHandle> bindlessTextureHandles;
@@ -791,12 +794,13 @@ struct Renderer::Impl
                 return allocation.error();
             }
             clusterOverflowReadbacks.push_back(allocation.value());
-            // Header: frustum-visible count and phase-2 count. The two
-            // following fixed-capacity regions contain the corresponding slot
-            // indices, allowing a completed frame to be compared against the
-            // CPU reference without stalling the rendering frame.
+            // Header: frustum candidate count, phase-1 visible count, and
+            // phase-2 visible count. The two following fixed-capacity regions
+            // contain the slot indices, allowing a completed frame to be
+            // compared against the CPU reference without stalling the
+            // rendering frame.
             info.size = sizeof(std::uint32_t) *
-                (2u + 2u * VisibilityReadbackCapacity);
+                (VisibilityReadbackHeaderCount + 2u * VisibilityReadbackCapacity);
             const auto visibility = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
             if (!visibility)
             {
@@ -1625,12 +1629,18 @@ struct Renderer::Impl
         {
             gpuSceneBuffers.setFrameIndex(currentFrame);
             const auto counts = gpuAllocator.readBuffer(gpuVisibilityReadbacks[currentFrame], 0,
-                sizeof(std::uint32_t) * 2u);
-            if (counts && counts.value().size() >= sizeof(std::uint32_t) * 2u)
+                sizeof(std::uint32_t) * VisibilityReadbackHeaderCount);
+            if (counts && counts.value().size() >=
+                    sizeof(std::uint32_t) * VisibilityReadbackHeaderCount)
             {
-                std::uint32_t firstPhase = 0, secondPhase = 0;
-                std::memcpy(&firstPhase, counts.value().data(), sizeof(firstPhase));
-                std::memcpy(&secondPhase, counts.value().data() + sizeof(firstPhase), sizeof(secondPhase));
+                std::uint32_t frustumCount = 0, firstPhase = 0, secondPhase = 0;
+                std::memcpy(&frustumCount, counts.value().data(), sizeof(frustumCount));
+                std::memcpy(&firstPhase, counts.value().data() + sizeof(frustumCount), sizeof(firstPhase));
+                std::memcpy(&secondPhase, counts.value().data() + sizeof(frustumCount) * 2u,
+                    sizeof(secondPhase));
+                stats.frustumVisibleInstanceCount = frustumCount;
+                stats.occludedInstanceCount = config.enableTwoPhaseOcclusion
+                    ? frustumCount >= firstPhase ? frustumCount - firstPhase : 0u : 0u;
                 stats.visibleInstanceCount = firstPhase + (config.enableTwoPhaseOcclusion ? secondPhase : 0u);
                 stats.indirectDrawCount = stats.visibleInstanceCount;
 
@@ -1640,7 +1650,7 @@ struct Renderer::Impl
                 const std::uint32_t secondCount = std::min(secondPhase, VisibilityReadbackCapacity);
                 std::vector<bool> present(gpuSceneInstanceCount, false);
                 const auto firstBytes = gpuAllocator.readBuffer(gpuVisibilityReadbacks[currentFrame],
-                    sizeof(std::uint32_t) * 2u,
+                    sizeof(std::uint32_t) * VisibilityReadbackHeaderCount,
                     static_cast<VkDeviceSize>(firstCount) * sizeof(std::uint32_t));
                 if (firstBytes)
                 {
@@ -1654,7 +1664,8 @@ struct Renderer::Impl
                 if (config.enableTwoPhaseOcclusion)
                 {
                     const auto secondBytes = gpuAllocator.readBuffer(gpuVisibilityReadbacks[currentFrame],
-                        sizeof(std::uint32_t) * (2u + VisibilityReadbackCapacity),
+                        sizeof(std::uint32_t) *
+                            (VisibilityReadbackHeaderCount + VisibilityReadbackCapacity),
                         static_cast<VkDeviceSize>(secondCount) * sizeof(std::uint32_t));
                     if (secondBytes)
                     {
@@ -1666,10 +1677,24 @@ struct Renderer::Impl
                         }
                     }
                 }
-                for (const auto slot : expected)
-                    if (slot >= present.size() || !present[slot]) ++stats.gpuVisibilityMissingCount;
-                stats.gpuVisibilityValidationPassed =
-                    stats.gpuVisibilityMissingCount == 0;
+                if (config.enableTwoPhaseOcclusion)
+                {
+                    // Hi-Z is allowed to remove genuinely occluded frustum
+                    // candidates. Pixel-level reference-vs-occlusion checks
+                    // are performed by the InstanceId comparison tool; the
+                    // in-frame audit only reports structural readback health
+                    // for this mode.
+                    stats.gpuVisibilityMissingCount = 0;
+                    stats.gpuVisibilityValidationPassed = true;
+                }
+                else
+                {
+                    for (const auto slot : expected)
+                        if (slot >= present.size() || !present[slot])
+                            ++stats.gpuVisibilityMissingCount;
+                    stats.gpuVisibilityValidationPassed =
+                        stats.gpuVisibilityMissingCount == 0;
+                }
             }
         }
         if (frame.submitted && config.enableGpuDrivenScene &&
@@ -1877,10 +1902,12 @@ struct Renderer::Impl
         }
         stats.executedPasses = frame.passNames;
         stats.materialDescriptorBindCount = materialDescriptorBindCount;
-        if (config.enableGpuDrivenScene)
+        stats.gpuDrivenActive = gpuDrivenActive;
+        stats.gpuFallbackInstanceCount = gpuFallbackInstanceCount;
+        if (config.enableGpuDrivenScene && !gpuDrivenActive)
         {
             stats.visibleInstanceCount = static_cast<std::uint32_t>(packet.instances.size());
-            stats.indirectDrawCount = stats.visibleInstanceCount;
+            stats.indirectDrawCount = 0;
         }
 
         result = frameContext.resetFence(device, frame);
@@ -2037,6 +2064,9 @@ VoidResult Renderer::Impl::recordM3Frame(
 
     Graph::FrameGraph graph;
     graph.setResourceProvider(&frameGraphProvider);
+        // renderFrame waited on this slot's fence above, so every descriptor
+        // set recorded for the slot is no longer in use. Reusing the pool at
+        // this point keeps per-frame compute/graphics allocations bounded.
         if (currentFrame < m3DescriptorPools.size())
         {
             m3DescriptorPool = m3DescriptorPools[currentFrame];
@@ -2139,32 +2169,40 @@ VoidResult Renderer::Impl::recordM3Frame(
     VkDescriptorSet gpuIndirectSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuGraphicsSet = VK_NULL_HANDLE;
     std::uint32_t gpuMaterialId = 0;
+    constexpr std::uint32_t gpuUnsupportedFlags =
+        static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
+        static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided) |
+        Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
     const VkBuffer gpuVertexBuffer = sceneResources.gpuDrivenVertexBuffer();
     const VkBuffer gpuIndexBuffer = sceneResources.gpuDrivenIndexBuffer();
     const VkBuffer gpuMeshDrawBuffer = sceneResources.meshDrawBuffer();
     bool gpuIndirectCompatible = config.enableGpuDrivenScene && !packet.instances.empty() &&
         gpuVertexBuffer != VK_NULL_HANDLE && gpuIndexBuffer != VK_NULL_HANDLE &&
         gpuMeshDrawBuffer != VK_NULL_HANDLE;
+    std::uint32_t gpuDrivenInstanceCount = 0;
+    std::uint32_t cpuFallbackInstanceCount = 0;
     if (gpuIndirectCompatible)
     {
         gpuMaterialId = packet.instances.front().materialId;
         for (const auto& instance : packet.instances)
         {
             const MeshResource* mesh = sceneResources.mesh(instance.meshId);
-            const bool unsupportedFlags = (instance.flags &
-                (static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
-                 static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided))) != 0u;
-            if (mesh == nullptr || mesh->indexCount == 0 || unsupportedFlags ||
-                (!gpuDrivenBindless && instance.materialId != gpuMaterialId))
-            {
-                gpuIndirectCompatible = false;
-                break;
-            }
+            const bool unsupportedFlags = (instance.flags & gpuUnsupportedFlags) != 0u;
+            const bool materialMismatch = !gpuDrivenBindless &&
+                instance.materialId != gpuMaterialId;
+            const bool eligible = mesh != nullptr && mesh->indexCount != 0 &&
+                !unsupportedFlags && !materialMismatch;
+            if (eligible) ++gpuDrivenInstanceCount;
+            else ++cpuFallbackInstanceCount;
         }
+        gpuIndirectCompatible = gpuDrivenInstanceCount != 0;
     }
+    gpuDrivenActive = gpuIndirectCompatible;
+    gpuFallbackInstanceCount = cpuFallbackInstanceCount;
     const auto recordGpuDrivenCulling = [&]() -> VoidResult
     {
-        if (!config.enableGpuDrivenScene || frustumCullPipeline.computePipeline() == VK_NULL_HANDLE)
+        if (!config.enableGpuDrivenScene || !gpuIndirectCompatible ||
+            frustumCullPipeline.computePipeline() == VK_NULL_HANDLE)
             return ok();
         if (m3DescriptorPool == VK_NULL_HANDLE)
             return fail("per-frame descriptor pool is not initialized");
@@ -2228,7 +2266,14 @@ VoidResult Renderer::Impl::recordM3Frame(
             frustumCullPipeline.computePipeline());
         vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
             frustumCullPipeline.layout(), 0, 1, &gpuCullSet, 0, nullptr);
-        struct FrustumConstants { glm::vec4 planes[6]; std::uint32_t instanceCount; std::uint32_t pad[3]; } constants{};
+        struct FrustumConstants
+        {
+            glm::vec4 planes[6];
+            std::uint32_t instanceCount;
+            std::uint32_t excludedFlags;
+            std::uint32_t materialFilter;
+            std::uint32_t reserved;
+        } constants{};
         const glm::mat4& vp = packet.camera.viewProjection;
         const glm::vec4 rows[4] = {
             {vp[0][0], vp[1][0], vp[2][0], vp[3][0]},
@@ -2248,6 +2293,9 @@ VoidResult Renderer::Impl::recordM3Frame(
         }
         constants.instanceCount = gpuSceneInstanceCount != 0 ? gpuSceneInstanceCount
             : static_cast<std::uint32_t>(packet.instances.size());
+        constants.excludedFlags = gpuUnsupportedFlags;
+        constants.materialFilter = gpuDrivenBindless
+            ? std::numeric_limits<std::uint32_t>::max() : gpuMaterialId;
         vkCmdPushConstants(frame.commandBuffer, frustumCullPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
             0, sizeof(constants), &constants);
         vkCmdDispatch(frame.commandBuffer, (constants.instanceCount + 63u) / 64u, 1, 1);
@@ -2322,10 +2370,16 @@ VoidResult Renderer::Impl::recordM3Frame(
         auto& reference = gpuReferenceVisible[currentFrame];
         reference.clear();
         const auto& bounds = gpuSceneState.soa().bounds;
+        const auto& meshMaterials = gpuSceneState.soa().meshMaterials;
         const std::uint32_t count = std::min<std::uint32_t>(gpuSceneInstanceCount,
             static_cast<std::uint32_t>(bounds.size()));
         for (std::uint32_t slot = 0; slot < count; ++slot)
         {
+            if (slot >= meshMaterials.size()) continue;
+            const auto& material = meshMaterials[slot];
+            if ((material.flags & gpuUnsupportedFlags) != 0u ||
+                (!gpuDrivenBindless && material.materialIndex != gpuMaterialId))
+                continue;
             const auto& sphere = bounds[slot].sphereCenterRadius;
             const glm::vec4 value{sphere[0], sphere[1], sphere[2], sphere[3]};
             if (value.w > 0.0f &&
@@ -2481,7 +2535,8 @@ VoidResult Renderer::Impl::recordM3Frame(
 
     const auto drawScene = [&](VkPipelineLayout layout,
                                 bool shadowPass, bool transparentPass,
-                                std::uint32_t cascade = 0u)
+                                std::uint32_t cascade = 0u,
+                                bool fallbackOnly = false)
     {
         std::vector<const InstanceData*> drawItems;
         drawItems.reserve(packet.instances.size());
@@ -2503,9 +2558,16 @@ VoidResult Renderer::Impl::recordM3Frame(
         {
             const auto& instance = *instancePointer;
             const bool isTransparent = (instance.flags & 1u) != 0u;
+            const bool isDoubleSided = (instance.flags & (1u << 1u)) != 0u;
             const bool castsShadow = (instance.flags & (1u << 2u)) != 0u;
             if (shadowPass && (!castsShadow || isTransparent)) continue;
             if (!shadowPass && transparentPass != isTransparent) continue;
+            if (fallbackOnly)
+            {
+                const bool materialMismatch = !gpuDrivenBindless &&
+                    instance.materialId != gpuMaterialId;
+                if (!isTransparent && !isDoubleSided && !materialMismatch) continue;
+            }
             const MeshResource* mesh = sceneResources.mesh(instance.meshId);
             if (mesh == nullptr || mesh->indexCount == 0) continue;
             VkBuffer vertex = mesh->vertexBuffer.buffer;
@@ -2515,7 +2577,7 @@ VoidResult Renderer::Impl::recordM3Frame(
             VkPipelineLayout drawLayout = layout;
             if (!shadowPass)
             {
-                const bool doubleSided = (instance.flags & (1u << 1u)) != 0u;
+                const bool doubleSided = isDoubleSided;
                 if (doubleSided && !transparentPass && gbufferDoubleSidedPipeline.pipeline() != VK_NULL_HANDLE)
                 {
                     drawLayout = gbufferDoubleSidedPipeline.layout();
@@ -2964,6 +3026,11 @@ VoidResult Renderer::Impl::recordM3Frame(
                              : gpuSceneBuffers.visibleCountBuffer(), 0,
                          std::max<std::uint32_t>(1u, gpuSceneInstanceCount),
                          sizeof(VkDrawIndexedIndirectCommand));
+                     // Transparent, double-sided, and non-bindless material
+                     // mismatches stay on the existing CPU path, but they no
+                     // longer force compatible opaque instances to leave the
+                     // GPU-driven submission path.
+                     drawScene(gbufferPipeline.layout(), false, false, 0u, true);
                  }
                  else
                  {
@@ -3993,11 +4060,17 @@ VoidResult Renderer::Impl::recordM3Frame(
         vkCmdPipelineBarrier2(frame.commandBuffer, &sourceDependency);
         const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(std::min<std::uint32_t>(
             gpuSceneBuffers.capacity(), VisibilityReadbackCapacity)) * sizeof(std::uint32_t);
-        const VkBufferCopy countCopy{0, 0, sizeof(std::uint32_t)};
-        const VkBufferCopy firstIndicesCopy{0, sizeof(std::uint32_t) * 2u, indexBytes};
-        const VkBufferCopy secondCountCopy{0, sizeof(std::uint32_t), sizeof(std::uint32_t)};
+        const VkBufferCopy frustumCountCopy{0, 0, sizeof(std::uint32_t)};
+        const VkBufferCopy countCopy{0, sizeof(std::uint32_t), sizeof(std::uint32_t)};
+        const VkBufferCopy firstIndicesCopy{0,
+            sizeof(std::uint32_t) * VisibilityReadbackHeaderCount, indexBytes};
+        const VkBufferCopy secondCountCopy{0, sizeof(std::uint32_t) * 2u,
+            sizeof(std::uint32_t)};
         const VkBufferCopy secondIndicesCopy{0,
-            sizeof(std::uint32_t) * (2u + VisibilityReadbackCapacity), indexBytes};
+            sizeof(std::uint32_t) * (VisibilityReadbackHeaderCount + VisibilityReadbackCapacity),
+            indexBytes};
+        vkCmdCopyBuffer(frame.commandBuffer, gpuSceneBuffers.visibleCountBuffer(), readback,
+            1, &frustumCountCopy);
         vkCmdCopyBuffer(frame.commandBuffer, visibleCount, readback, 1, &countCopy);
         vkCmdCopyBuffer(frame.commandBuffer, firstIndices, readback, 1, &firstIndicesCopy);
         if (config.enableTwoPhaseOcclusion && hasRenderedFrame)
@@ -4007,7 +4080,8 @@ VoidResult Renderer::Impl::recordM3Frame(
                 readback, 1, &secondIndicesCopy);
         }
         else
-            vkCmdFillBuffer(frame.commandBuffer, readback, sizeof(std::uint32_t), sizeof(std::uint32_t), 0);
+            vkCmdFillBuffer(frame.commandBuffer, readback, sizeof(std::uint32_t) * 2u,
+                sizeof(std::uint32_t), 0);
     }
     if (timestampsEnabled)
     {
@@ -4371,8 +4445,10 @@ Halcyon::Result<void> Renderer::updateGpuScene(
                 "GPU scene references an unmapped mesh"});
         scene.bounds[i] = Halcyon::Renderer::Scene::computeWorldBounds(
             mesh->boundsMin, mesh->boundsMax, model);
+        const std::uint32_t cpuFallback = mesh->indexCount == 0
+            ? Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag : 0u;
         scene.meshMaterials[i] = {instances[i].meshId, instances[i].materialId,
-            instances[i].flags, 0};
+            instances[i].flags | cpuFallback, 0};
     }
     const std::uint32_t requiredCapacity = static_cast<std::uint32_t>(std::max(
         instances.size(), impl_->bindlessMaterialRows.size()));
@@ -4426,6 +4502,11 @@ Halcyon::Result<void> Renderer::updateGpuSceneDelta(
         if (!mapped) return mapped.error();
         auto bounds = boundsFor(mapped.value());
         if (!bounds) return bounds.error();
+        if (const MeshResource* mesh = impl_->sceneResources.mesh(mapped.value().meshId);
+            mesh != nullptr && mesh->indexCount == 0)
+        {
+            mapped.value().flags |= Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
+        }
         if (!impl_->gpuSceneState.applyCreated(item.entity, mapped.value(), bounds.value()))
             return Halcyon::Result<void>::failure({Halcyon::ErrorCode::Backend,
                 "failed to apply GPU scene create delta"});
@@ -4436,6 +4517,11 @@ Halcyon::Result<void> Renderer::updateGpuSceneDelta(
         if (!mapped) return mapped.error();
         auto bounds = boundsFor(mapped.value());
         if (!bounds) return bounds.error();
+        if (const MeshResource* mesh = impl_->sceneResources.mesh(mapped.value().meshId);
+            mesh != nullptr && mesh->indexCount == 0)
+        {
+            mapped.value().flags |= Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
+        }
         if (!impl_->gpuSceneState.applyUpdated(item.entity, mapped.value(), bounds.value()))
             return Halcyon::Result<void>::failure({Halcyon::ErrorCode::Backend,
                 "failed to apply GPU scene update delta"});

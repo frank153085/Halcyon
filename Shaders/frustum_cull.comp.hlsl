@@ -9,7 +9,14 @@ struct MeshMaterialRow { uint meshIndex; uint materialIndex; uint flags; uint lo
 // Reserved output ABI for M5 LOD selection. The current builder still uses
 // the slot index list, but preserves the corresponding state in parallel.
 [[vk::binding(4, 0)]] RWStructuredBuffer<uint> visibleLodStates;
-struct FrustumConstants { float4 planes[6]; uint instanceCount; uint reserved0; uint reserved1; uint reserved2; };
+struct FrustumConstants
+{
+    float4 planes[6];
+    uint instanceCount;
+    uint excludedFlags;
+    uint materialFilter;
+    uint reserved0;
+};
 [[vk::push_constant]] ConstantBuffer<FrustumConstants> constants;
 
 [numthreads(64, 1, 1)]
@@ -17,6 +24,10 @@ void main(uint3 id : SV_DispatchThreadID)
 {
     const uint index = id.x;
     if (index >= constants.instanceCount) return;
+    const MeshMaterialRow material = meshMaterials[index];
+    if ((material.flags & constants.excludedFlags) != 0u) return;
+    if (constants.materialFilter != 0xffffffffu &&
+        material.materialIndex != constants.materialFilter) return;
     const float4 sphere = bounds[index].sphereCenterRadius;
     if (sphere.w <= 0.0) return;
     [unroll] for (uint plane = 0; plane < 6; ++plane)

@@ -57,6 +57,14 @@ struct FrameStats
     double gpuTwoPhaseMs = -1.0;
     std::uint32_t visibleInstanceCount = 0;
     std::uint32_t indirectDrawCount = 0;
+    // Counts exposed by the GPU-driven audit. The frustum count is the
+    // candidate list before Hi-Z; visible/indirect counts describe the final
+    // submitted set. This makes an occlusion run distinguishable from a
+    // no-op pass that simply forwards every candidate.
+    std::uint32_t frustumVisibleInstanceCount = 0;
+    std::uint32_t occludedInstanceCount = 0;
+    bool gpuDrivenActive = false;
+    std::uint32_t gpuFallbackInstanceCount = 0;
     // Debug validation for GPU-driven visibility. The count is the number of
     // CPU-reference frustum-visible slots absent from the GPU result; a
     // non-zero value identifies a potentially missing object.

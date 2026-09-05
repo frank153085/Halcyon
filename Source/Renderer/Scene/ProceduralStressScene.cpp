@@ -45,11 +45,24 @@ StaticScene makeProceduralStressScene(const ProceduralStressSceneConfig& config)
         static_cast<double>(count))));
     for (std::size_t i = 0; i < count; ++i)
     {
-        const float x = static_cast<float>(i % columns) * config.gridSpacing;
-        const float z = static_cast<float>(i / columns) * config.gridSpacing;
+        const float x = (static_cast<float>(i % columns) -
+                            static_cast<float>(columns - 1u) * 0.5f) * config.gridSpacing;
+        const float z = (static_cast<float>(i / columns) -
+                            static_cast<float>(columns - 1u) * 0.5f) * config.gridSpacing;
         StaticSceneNode node;
         node.name = config.baseMeshName + "-" + std::to_string(i);
         node.localTransform = glm::translate(glm::mat4(1.0f), {x, 0.0f, z});
+        const std::size_t centerColumn = columns / 2u;
+        const std::size_t centerIndex = centerColumn * columns + centerColumn;
+        if (i == centerIndex)
+        {
+            // A single deterministic blocker gives the Hi-Z audit a known
+            // occluder while all remaining nodes stay independent stress
+            // instances. Its thin depth avoids turning the scene into a
+            // degenerate solid volume.
+            node.localTransform = node.localTransform *
+                glm::scale(glm::mat4(1.0f), {16.0f, 16.0f, 0.5f});
+        }
         node.worldTransform = node.localTransform;
         node.primitiveIndices.push_back(0u);
         scene.nodes.push_back(std::move(node));

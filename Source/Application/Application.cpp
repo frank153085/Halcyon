@@ -613,6 +613,8 @@ int Application::run(
                                "transparency_enabled,cpu_ms,cpu_visibility_ms,gpu_ms,"
                                "gpu_frustum_cull_ms,gpu_indirect_build_ms,gpu_hiz_build_ms,"
                                "gpu_two_phase_ms,visible_instance_count,indirect_draw_count,"
+                               "frustum_visible_instance_count,occluded_instance_count,gpu_driven_active,"
+                               "gpu_fallback_instance_count,"
                                "gpu_visibility_missing_count,gpu_visibility_validation_passed,"
                                "gpu_instance_id_invalid_pixels,material_descriptor_bind_count,primitive_count,"
                                "cluster_overflow,taa_history_valid";
@@ -657,6 +659,10 @@ int Application::run(
                         << previousStats.gpuTwoPhaseMs << ','
                         << previousStats.visibleInstanceCount << ','
                         << previousStats.indirectDrawCount << ','
+                        << previousStats.frustumVisibleInstanceCount << ','
+                        << previousStats.occludedInstanceCount << ','
+                        << (previousStats.gpuDrivenActive ? 1 : 0) << ','
+                        << previousStats.gpuFallbackInstanceCount << ','
                         << previousStats.gpuVisibilityMissingCount << ','
                         << (previousStats.gpuVisibilityValidationPassed ? 1 : 0) << ','
                         << previousStats.gpuInstanceIdInvalidPixelCount << ','
