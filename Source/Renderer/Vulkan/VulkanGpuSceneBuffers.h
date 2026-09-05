@@ -6,6 +6,8 @@
 
 #include <vulkan/vulkan.h>
 #include <algorithm>
+#include <cstddef>
+#include <span>
 #include <vector>
 
 namespace Halcyon::Vulkan
@@ -37,6 +39,15 @@ public:
         GpuUploader& uploader,
         std::span<const Halcyon::Renderer::Scene::MaterialGpuData> materials);
 
+    // Queue scene writes on the current render command buffer.  The old
+    // one-shot uploader submitted and waited for every copy independently;
+    // recording all pending copies into the frame keeps the graphics queue
+    // ordered without a CPU-side queue-idle stall.
+    [[nodiscard]] Halcyon::Result<void> recordPendingUploads(
+        VkCommandBuffer commandBuffer,
+        GpuAllocator& allocator,
+        std::vector<BufferAllocation>& stagingKeepAlive);
+
     [[nodiscard]] VkBuffer transformBuffer() const noexcept { return transforms_.buffer; }
     [[nodiscard]] VkBuffer boundsBuffer() const noexcept { return bounds_.buffer; }
     [[nodiscard]] VkBuffer meshMaterialBuffer() const noexcept { return meshMaterials_.buffer; }
@@ -50,10 +61,32 @@ public:
     [[nodiscard]] VkBuffer phase2VisibleIndicesBuffer() const noexcept { return active(phase2Visible_).buffer; }
     [[nodiscard]] VkBuffer phase2VisibleCountBuffer() const noexcept { return active(phase2VisibleCount_).buffer; }
     [[nodiscard]] VkBuffer phase2IndirectCommandsBuffer() const noexcept { return active(phase2Indirect_).buffer; }
+    [[nodiscard]] VkBuffer meshHeadsBuffer() const noexcept { return active(meshHeads_).buffer; }
+    [[nodiscard]] VkBuffer meshNextBuffer() const noexcept { return active(meshNext_).buffer; }
+    [[nodiscard]] VkBuffer groupedVisibleIndicesBuffer() const noexcept { return active(groupedVisible_).buffer; }
+    [[nodiscard]] VkBuffer groupedVisibleCountBuffer() const noexcept { return active(groupedCount_).buffer; }
+    // Phase 1 and phase 2 are consumed by different draws and may be
+    // produced in the same command buffer. Keep their compacted slot streams
+    // independent so phase 2 cannot overwrite phase 1's firstInstance data.
+    [[nodiscard]] VkBuffer phase2GroupedVisibleIndicesBuffer() const noexcept
+    {
+        return active(phase2GroupedVisible_).buffer;
+    }
+    [[nodiscard]] VkBuffer phase2GroupedVisibleCountBuffer() const noexcept
+    {
+        return active(phase2GroupedCount_).buffer;
+    }
+    [[nodiscard]] VkBuffer indirectDrawCountBuffer() const noexcept { return active(indirectCount_).buffer; }
+    [[nodiscard]] VkBuffer phase1IndirectDrawCountBuffer() const noexcept { return active(indirectCount_).buffer; }
+    [[nodiscard]] VkBuffer phase2IndirectDrawCountBuffer() const noexcept { return active(phase2IndirectCount_).buffer; }
     [[nodiscard]] VkBuffer materialBuffer() const noexcept { return materials_.buffer; }
     [[nodiscard]] std::uint32_t capacity() const noexcept { return capacity_; }
 
 private:
+    [[nodiscard]] Halcyon::Result<void> queueUpload(
+        BufferAllocation destination,
+        std::span<const std::byte> bytes,
+        VkDeviceSize destinationOffset = 0);
     [[nodiscard]] const BufferAllocation& active(const std::vector<BufferAllocation>& buffers) const noexcept
     {
         static const BufferAllocation empty{};
@@ -67,6 +100,16 @@ private:
     std::vector<BufferAllocation> visibleIndices_, indirectCommands_, visibleCount_;
     std::vector<BufferAllocation> phase1Visible_, phase1VisibleCount_, occluded_, occludedCount_;
     std::vector<BufferAllocation> phase2Visible_, phase2VisibleCount_, phase2Indirect_;
+    std::vector<BufferAllocation> meshHeads_, meshNext_, groupedVisible_, groupedCount_;
+    std::vector<BufferAllocation> phase2GroupedVisible_, phase2GroupedCount_;
+    std::vector<BufferAllocation> indirectCount_, phase2IndirectCount_;
+    struct PendingUpload
+    {
+        VkBuffer destination = VK_NULL_HANDLE;
+        VkDeviceSize destinationOffset = 0;
+        std::vector<std::byte> bytes;
+    };
+    std::vector<PendingUpload> pendingUploads_;
     std::uint32_t capacity_ = 0;
     std::uint32_t frameCount_ = 0;
     std::uint32_t activeFrame_ = 0;

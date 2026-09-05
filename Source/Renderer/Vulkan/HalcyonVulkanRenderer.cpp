@@ -427,7 +427,9 @@ constexpr std::uint32_t kGpuDrivenSamplerCapacity = 16u;
 struct Renderer::Impl
 {
     static constexpr std::uint32_t VisibilityReadbackCapacity = 1u << 20;
-    static constexpr std::uint32_t VisibilityReadbackHeaderCount = 3u;
+    // frustum candidates, phase-1 visible, phase-2 visible, phase-1 command
+    // count, and phase-2 command count.
+    static constexpr std::uint32_t VisibilityReadbackHeaderCount = 5u;
     using FrameContext = VulkanFrame;
 
     RendererConfig config{};
@@ -1056,12 +1058,17 @@ struct Renderer::Impl
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
-        const std::array<VkDescriptorSetLayoutBinding, 5> indirectBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 10> indirectBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         auto result = makeLayout(cullBindings, gpuSceneCullLayout);
         if (!result) return result;
         result = makeLayout(indirectBindings, gpuSceneIndirectLayout);
@@ -1123,7 +1130,9 @@ struct Renderer::Impl
                     VK_SHADER_STAGE_VERTEX_BIT, nullptr}},
                 DescriptorBindingDesc{1, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                     VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}},
-                {}};
+                DescriptorBindingDesc{1, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                    VK_SHADER_STAGE_VERTEX_BIT, nullptr}},
+                {}, {}, {}, {}};
         }
         else
         {
@@ -1157,12 +1166,17 @@ struct Renderer::Impl
         result = gpuDrivenGbufferPipeline.createGraphics(device, gpuGraphics);
         if (!result) return result;
         gpuDrivenBindless = useBindless;
-        const std::array<DescriptorBindingDesc, 5> indirectAbi = {
+        const std::array<DescriptorBindingDesc, 10> indirectAbi = {
             DescriptorBindingDesc{0, {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
             DescriptorBindingDesc{0, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
             DescriptorBindingDesc{0, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
             DescriptorBindingDesc{0, {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
-            DescriptorBindingDesc{0, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}}};
+            DescriptorBindingDesc{0, {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
+            DescriptorBindingDesc{0, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
+            DescriptorBindingDesc{0, {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
+            DescriptorBindingDesc{0, {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
+            DescriptorBindingDesc{0, {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}},
+            DescriptorBindingDesc{0, {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}}};
         ComputePipelineDesc indirectDesc{};
         indirectDesc.shader = "build_indirect_commands.comp.spv";
         indirectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&gpuSceneIndirectLayout, 1};
@@ -1634,15 +1648,21 @@ struct Renderer::Impl
                     sizeof(std::uint32_t) * VisibilityReadbackHeaderCount)
             {
                 std::uint32_t frustumCount = 0, firstPhase = 0, secondPhase = 0;
+                std::uint32_t indirectCount = 0, phase2IndirectCount = 0;
                 std::memcpy(&frustumCount, counts.value().data(), sizeof(frustumCount));
                 std::memcpy(&firstPhase, counts.value().data() + sizeof(frustumCount), sizeof(firstPhase));
                 std::memcpy(&secondPhase, counts.value().data() + sizeof(frustumCount) * 2u,
                     sizeof(secondPhase));
+                std::memcpy(&indirectCount, counts.value().data() + sizeof(frustumCount) * 3u,
+                    sizeof(indirectCount));
+                std::memcpy(&phase2IndirectCount, counts.value().data() + sizeof(frustumCount) * 4u,
+                    sizeof(phase2IndirectCount));
                 stats.frustumVisibleInstanceCount = frustumCount;
                 stats.occludedInstanceCount = config.enableTwoPhaseOcclusion
                     ? frustumCount >= firstPhase ? frustumCount - firstPhase : 0u : 0u;
                 stats.visibleInstanceCount = firstPhase + (config.enableTwoPhaseOcclusion ? secondPhase : 0u);
-                stats.indirectDrawCount = stats.visibleInstanceCount;
+                stats.indirectDrawCount = indirectCount +
+                    (config.enableTwoPhaseOcclusion ? phase2IndirectCount : 0u);
 
                 const auto& expected = currentFrame < gpuReferenceVisible.size()
                     ? gpuReferenceVisible[currentFrame] : std::vector<std::uint32_t>{};
@@ -2055,6 +2075,11 @@ VoidResult Renderer::Impl::recordM3Frame(
         vkCmdWriteTimestamp2(frame.commandBuffer, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
             frameContext.timestampPool, frame.queryBase);
     }
+    if (currentFrame >= frameUploadBuffers.size())
+        return fail("GPU scene upload frame slot is out of range");
+    const auto sceneUpload = gpuSceneBuffers.recordPendingUploads(
+        frame.commandBuffer, gpuAllocator, frameUploadBuffers[currentFrame]);
+    if (!sceneUpload) return sceneUpload;
     gpuSceneBuffers.setFrameIndex(currentFrame);
 
     struct ImportedTarget
@@ -2168,6 +2193,7 @@ VoidResult Renderer::Impl::recordM3Frame(
     VkDescriptorSet gpuCullSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuIndirectSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuGraphicsSet = VK_NULL_HANDLE;
+    VkDescriptorSet gpuPhase2GraphicsSet = VK_NULL_HANDLE;
     std::uint32_t gpuMaterialId = 0;
     constexpr std::uint32_t gpuUnsupportedFlags =
         static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
@@ -2218,6 +2244,9 @@ VoidResult Renderer::Impl::recordM3Frame(
         alloc.pSetLayouts = &gpuSceneGraphicsLayout;
         if (vkAllocateDescriptorSets(device, &alloc, &gpuGraphicsSet) != VK_SUCCESS)
             return fail("failed to allocate GPU graphics descriptor set");
+        if (config.enableTwoPhaseOcclusion &&
+            vkAllocateDescriptorSets(device, &alloc, &gpuPhase2GraphicsSet) != VK_SUCCESS)
+            return fail("failed to allocate phase-2 GPU graphics descriptor set");
         const VkDeviceSize sceneBytes = std::max<VkDeviceSize>(4,
             static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
         writeStorageBuffer(gpuCullSet, 0, gpuSceneBuffers.boundsBuffer(),
@@ -2233,22 +2262,48 @@ VoidResult Renderer::Impl::recordM3Frame(
             static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(Halcyon::Renderer::Scene::TransformRow));
         writeStorageBuffer(gpuGraphicsSet, 1, gpuSceneBuffers.meshMaterialBuffer(),
             static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(Halcyon::Renderer::Scene::MeshMaterialRow));
-        writeStorageBuffer(gpuGraphicsSet, 2, gpuSceneBuffers.visibleIndicesBuffer(), sceneBytes);
+        writeStorageBuffer(gpuGraphicsSet, 2, gpuSceneBuffers.groupedVisibleIndicesBuffer(), sceneBytes);
         if (gpuDrivenBindless && gpuMaterialCount != 0)
             writeStorageBuffer(gpuGraphicsSet, 3, gpuSceneBuffers.materialBuffer(),
                 static_cast<VkDeviceSize>(gpuMaterialCount) *
                     sizeof(Halcyon::Renderer::Scene::MaterialGpuData));
+        if (gpuPhase2GraphicsSet != VK_NULL_HANDLE)
+        {
+            writeStorageBuffer(gpuPhase2GraphicsSet, 0, gpuSceneBuffers.transformBuffer(),
+                static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
+                    sizeof(Halcyon::Renderer::Scene::TransformRow));
+            writeStorageBuffer(gpuPhase2GraphicsSet, 1, gpuSceneBuffers.meshMaterialBuffer(),
+                static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
+                    sizeof(Halcyon::Renderer::Scene::MeshMaterialRow));
+            writeStorageBuffer(gpuPhase2GraphicsSet, 2,
+                gpuSceneBuffers.phase2GroupedVisibleIndicesBuffer(), sceneBytes);
+            if (gpuDrivenBindless && gpuMaterialCount != 0)
+                writeStorageBuffer(gpuPhase2GraphicsSet, 3, gpuSceneBuffers.materialBuffer(),
+                    static_cast<VkDeviceSize>(gpuMaterialCount) *
+                        sizeof(Halcyon::Renderer::Scene::MaterialGpuData));
+        }
         writeStorageBuffer(gpuIndirectSet, 0, gpuSceneBuffers.visibleIndicesBuffer(), sceneBytes);
         writeStorageBuffer(gpuIndirectSet, 1, gpuSceneBuffers.meshMaterialBuffer(),
             std::max<VkDeviceSize>(4, static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
                 sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)));
         writeStorageBuffer(gpuIndirectSet, 2, gpuSceneBuffers.indirectCommandsBuffer(),
             std::max<VkDeviceSize>(4, static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(VkDrawIndexedIndirectCommand)));
-        writeStorageBuffer(gpuIndirectSet, 3, gpuSceneBuffers.visibleCountBuffer(), sizeof(std::uint32_t));
+        writeStorageBuffer(gpuIndirectSet, 3, gpuSceneBuffers.indirectDrawCountBuffer(), sizeof(std::uint32_t));
         writeStorageBuffer(gpuIndirectSet, 4, gpuMeshDrawBuffer,
             static_cast<VkDeviceSize>(sceneResources.meshDrawCount()) *
                 sizeof(Halcyon::Renderer::Scene::MeshDrawRow));
+        writeStorageBuffer(gpuIndirectSet, 5, gpuSceneBuffers.meshHeadsBuffer(), sceneBytes);
+        writeStorageBuffer(gpuIndirectSet, 6, gpuSceneBuffers.meshNextBuffer(), sceneBytes);
+        writeStorageBuffer(gpuIndirectSet, 7, gpuSceneBuffers.groupedVisibleIndicesBuffer(), sceneBytes);
+        writeStorageBuffer(gpuIndirectSet, 8, gpuSceneBuffers.groupedVisibleCountBuffer(), sizeof(std::uint32_t));
+        writeStorageBuffer(gpuIndirectSet, 9, gpuSceneBuffers.visibleCountBuffer(), sizeof(std::uint32_t));
         vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.visibleCountBuffer(), 0,
+            sizeof(std::uint32_t), 0);
+        vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.meshHeadsBuffer(), 0,
+            static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t), 0xffffffffu);
+        vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.groupedVisibleCountBuffer(), 0,
+            sizeof(std::uint32_t), 0);
+        vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.indirectDrawCountBuffer(), 0,
             sizeof(std::uint32_t), 0);
         VkBufferMemoryBarrier2 resetBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
         resetBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -2258,8 +2313,14 @@ VoidResult Renderer::Impl::recordM3Frame(
         resetBarrier.buffer = gpuSceneBuffers.visibleCountBuffer();
         resetBarrier.size = sizeof(std::uint32_t);
         VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dependency.bufferMemoryBarrierCount = 1;
-        dependency.pBufferMemoryBarriers = &resetBarrier;
+        std::array<VkBufferMemoryBarrier2, 4> resetBarriers{resetBarrier, resetBarrier,
+            resetBarrier, resetBarrier};
+        resetBarriers[1].buffer = gpuSceneBuffers.meshHeadsBuffer();
+        resetBarriers[1].size = VK_WHOLE_SIZE;
+        resetBarriers[2].buffer = gpuSceneBuffers.groupedVisibleCountBuffer();
+        resetBarriers[3].buffer = gpuSceneBuffers.indirectDrawCountBuffer();
+        dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(resetBarriers.size());
+        dependency.pBufferMemoryBarriers = resetBarriers.data();
         vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
         writeGpuStageTimestamp(0, true);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -2320,11 +2381,40 @@ VoidResult Renderer::Impl::recordM3Frame(
                 indirectBuildPipeline.computePipeline());
             vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                 indirectBuildPipeline.layout(), 0, 1, &gpuIndirectSet, 0, nullptr);
-            struct IndirectConstants { std::uint32_t instanceCount; std::uint32_t pad[3]; } indirect{};
+            struct IndirectConstants { std::uint32_t instanceCount; std::uint32_t meshCount;
+                std::uint32_t mode; std::uint32_t reserved; } indirect{};
             indirect.instanceCount = constants.instanceCount;
+            indirect.meshCount = sceneResources.meshDrawCount();
+            indirect.mode = 0;
             vkCmdPushConstants(frame.commandBuffer, indirectBuildPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
                 0, sizeof(indirect), &indirect);
             vkCmdDispatch(frame.commandBuffer, (indirect.instanceCount + 63u) / 64u, 1, 1);
+            VkBufferMemoryBarrier2 groupBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            groupBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            groupBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            groupBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            groupBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            std::array<VkBufferMemoryBarrier2, 2> groupBarriers{groupBarrier, groupBarrier};
+            groupBarriers[0].buffer = gpuSceneBuffers.meshHeadsBuffer(); groupBarriers[0].size = VK_WHOLE_SIZE;
+            groupBarriers[1].buffer = gpuSceneBuffers.meshNextBuffer(); groupBarriers[1].size = VK_WHOLE_SIZE;
+            dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(groupBarriers.size());
+            dependency.pBufferMemoryBarriers = groupBarriers.data();
+            vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
+            vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.indirectDrawCountBuffer(), 0,
+                sizeof(std::uint32_t), 0);
+            vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.groupedVisibleCountBuffer(), 0,
+                sizeof(std::uint32_t), 0);
+            std::array<VkBufferMemoryBarrier2, 2> buildReset{resetBarrier, resetBarrier};
+            buildReset[0].buffer = gpuSceneBuffers.indirectDrawCountBuffer();
+            buildReset[1].buffer = gpuSceneBuffers.groupedVisibleCountBuffer();
+            dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(buildReset.size());
+            dependency.pBufferMemoryBarriers = buildReset.data();
+            vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
+            indirect.mode = 1;
+            vkCmdPushConstants(frame.commandBuffer, indirectBuildPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                0, sizeof(indirect), &indirect);
+            vkCmdDispatch(frame.commandBuffer,
+                (std::max(1u, indirect.meshCount) + 63u) / 64u, 1, 1);
             VkBufferMemoryBarrier2 indirectBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
             indirectBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             indirectBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -2332,11 +2422,16 @@ VoidResult Renderer::Impl::recordM3Frame(
                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
             indirectBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
                 VK_ACCESS_2_SHADER_READ_BIT;
-            std::array<VkBufferMemoryBarrier2, 2> indirectBarriers{indirectBarrier, indirectBarrier};
+            std::array<VkBufferMemoryBarrier2, 4> indirectBarriers{indirectBarrier, indirectBarrier,
+                indirectBarrier, indirectBarrier};
             indirectBarriers[0].buffer = gpuSceneBuffers.indirectCommandsBuffer();
             indirectBarriers[0].size = VK_WHOLE_SIZE;
-            indirectBarriers[1].buffer = gpuSceneBuffers.visibleCountBuffer();
+            indirectBarriers[1].buffer = gpuSceneBuffers.indirectDrawCountBuffer();
             indirectBarriers[1].size = sizeof(std::uint32_t);
+            indirectBarriers[2].buffer = gpuSceneBuffers.groupedVisibleIndicesBuffer();
+            indirectBarriers[2].size = VK_WHOLE_SIZE;
+            indirectBarriers[3].buffer = gpuSceneBuffers.groupedVisibleCountBuffer();
+            indirectBarriers[3].size = sizeof(std::uint32_t);
             dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(indirectBarriers.size());
             dependency.pBufferMemoryBarriers = indirectBarriers.data();
             vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
@@ -2895,28 +2990,72 @@ VoidResult Renderer::Impl::recordM3Frame(
                          static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(Halcyon::Renderer::Scene::MeshMaterialRow));
                      writeStorageBuffer(indirectSet, 2, gpuSceneBuffers.indirectCommandsBuffer(),
                          static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(VkDrawIndexedIndirectCommand));
-                     writeStorageBuffer(indirectSet, 3, phase1Count, sizeof(std::uint32_t));
+                     writeStorageBuffer(indirectSet, 3, gpuSceneBuffers.indirectDrawCountBuffer(), sizeof(std::uint32_t));
                      writeStorageBuffer(indirectSet, 4, gpuMeshDrawBuffer,
                          static_cast<VkDeviceSize>(sceneResources.meshDrawCount()) *
                              sizeof(Halcyon::Renderer::Scene::MeshDrawRow));
+                     writeStorageBuffer(indirectSet, 5, gpuSceneBuffers.meshHeadsBuffer(),
+                         static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                     writeStorageBuffer(indirectSet, 6, gpuSceneBuffers.meshNextBuffer(),
+                         static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                     writeStorageBuffer(indirectSet, 7, gpuSceneBuffers.groupedVisibleIndicesBuffer(),
+                         static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                     writeStorageBuffer(indirectSet, 8, gpuSceneBuffers.groupedVisibleCountBuffer(), sizeof(std::uint32_t));
+                     writeStorageBuffer(indirectSet, 9, phase1Count, sizeof(std::uint32_t));
                      vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                          indirectBuildPipeline.computePipeline());
                      vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                          indirectBuildPipeline.layout(), 0, 1, &indirectSet, 0, nullptr);
-                     struct IndirectConstants { std::uint32_t instanceCount; std::uint32_t pad[3]; } indirect{};
+                     struct IndirectConstants { std::uint32_t instanceCount; std::uint32_t meshCount;
+                         std::uint32_t mode; std::uint32_t reserved; } indirect{};
                      indirect.instanceCount = gpuSceneInstanceCount;
+                     indirect.meshCount = sceneResources.meshDrawCount();
+                     indirect.mode = 0;
                      vkCmdPushConstants(frame.commandBuffer, indirectBuildPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
                          0, sizeof(indirect), &indirect);
                      vkCmdDispatch(frame.commandBuffer, (std::max(1u, gpuSceneInstanceCount) + 63u) / 64u, 1, 1);
+                     VkBufferMemoryBarrier2 groupBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                     groupBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                     groupBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                     groupBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                     groupBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                     std::array<VkBufferMemoryBarrier2, 2> groupBarriers{groupBarrier, groupBarrier};
+                     groupBarriers[0].buffer = gpuSceneBuffers.meshHeadsBuffer(); groupBarriers[0].size = VK_WHOLE_SIZE;
+                     groupBarriers[1].buffer = gpuSceneBuffers.meshNextBuffer(); groupBarriers[1].size = VK_WHOLE_SIZE;
+                     dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(groupBarriers.size());
+                     dep.pBufferMemoryBarriers = groupBarriers.data();
+                     vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
+                     vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.indirectDrawCountBuffer(), 0,
+                         sizeof(std::uint32_t), 0);
+                     vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.groupedVisibleCountBuffer(), 0,
+                         sizeof(std::uint32_t), 0);
+                     std::array<VkBufferMemoryBarrier2, 2> buildReset{groupBarrier, groupBarrier};
+                     buildReset[0].buffer = gpuSceneBuffers.indirectDrawCountBuffer();
+                     buildReset[0].size = sizeof(std::uint32_t);
+                     buildReset[1].buffer = gpuSceneBuffers.groupedVisibleCountBuffer();
+                     buildReset[1].size = sizeof(std::uint32_t);
+                     dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(buildReset.size());
+                     dep.pBufferMemoryBarriers = buildReset.data();
+                     vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
+                     indirect.mode = 1;
+                     vkCmdPushConstants(frame.commandBuffer, indirectBuildPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                         0, sizeof(indirect), &indirect);
+                     vkCmdDispatch(frame.commandBuffer,
+                         (std::max(1u, indirect.meshCount) + 63u) / 64u, 1, 1);
                      VkBufferMemoryBarrier2 drawBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
                      drawBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                      drawBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                     drawBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-                     drawBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-                     std::array<VkBufferMemoryBarrier2, 2> drawBarriers{drawBarrier, drawBarrier};
+                     drawBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                         VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                     drawBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                         VK_ACCESS_2_SHADER_READ_BIT;
+                     std::array<VkBufferMemoryBarrier2, 4> drawBarriers{drawBarrier, drawBarrier,
+                         drawBarrier, drawBarrier};
                      drawBarriers[0].buffer = gpuSceneBuffers.indirectCommandsBuffer(); drawBarriers[0].size = VK_WHOLE_SIZE;
-                     drawBarriers[1].buffer = phase1Count; drawBarriers[1].size = sizeof(std::uint32_t);
-                     dep.bufferMemoryBarrierCount = 2; dep.pBufferMemoryBarriers = drawBarriers.data();
+                     drawBarriers[1].buffer = gpuSceneBuffers.indirectDrawCountBuffer(); drawBarriers[1].size = sizeof(std::uint32_t);
+                     drawBarriers[2].buffer = gpuSceneBuffers.groupedVisibleIndicesBuffer(); drawBarriers[2].size = VK_WHOLE_SIZE;
+                     drawBarriers[3].buffer = gpuSceneBuffers.groupedVisibleCountBuffer(); drawBarriers[3].size = sizeof(std::uint32_t);
+                     dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(drawBarriers.size()); dep.pBufferMemoryBarriers = drawBarriers.data();
                      vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
                      writeGpuStageTimestamp(1, false);
                  }
@@ -3022,9 +3161,9 @@ VoidResult Renderer::Impl::recordM3Frame(
                      vkCmdDrawIndexedIndirectCount(frame.commandBuffer,
                          gpuSceneBuffers.indirectCommandsBuffer(), 0,
                          config.enableTwoPhaseOcclusion
-                             ? gpuSceneBuffers.phase1VisibleCountBuffer()
-                             : gpuSceneBuffers.visibleCountBuffer(), 0,
-                         std::max<std::uint32_t>(1u, gpuSceneInstanceCount),
+                             ? gpuSceneBuffers.phase1IndirectDrawCountBuffer()
+                             : gpuSceneBuffers.indirectDrawCountBuffer(), 0,
+                         std::max<std::uint32_t>(1u, sceneResources.meshDrawCount()),
                          sizeof(VkDrawIndexedIndirectCommand));
                      // Transparent, double-sided, and non-bindless material
                      // mismatches stay on the existing CPU path, but they no
@@ -3259,10 +3398,18 @@ VoidResult Renderer::Impl::recordM3Frame(
                     static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(Halcyon::Renderer::Scene::MeshMaterialRow));
                 writeStorageBuffer(indirectSet, 2, gpuSceneBuffers.phase2IndirectCommandsBuffer(),
                     static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(VkDrawIndexedIndirectCommand));
-                writeStorageBuffer(indirectSet, 3, phase2Count, sizeof(std::uint32_t));
+                writeStorageBuffer(indirectSet, 3, gpuSceneBuffers.phase2IndirectDrawCountBuffer(), sizeof(std::uint32_t));
                 writeStorageBuffer(indirectSet, 4, gpuMeshDrawBuffer,
                     static_cast<VkDeviceSize>(sceneResources.meshDrawCount()) *
                         sizeof(Halcyon::Renderer::Scene::MeshDrawRow));
+                writeStorageBuffer(indirectSet, 5, gpuSceneBuffers.meshHeadsBuffer(),
+                    static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                writeStorageBuffer(indirectSet, 6, gpuSceneBuffers.meshNextBuffer(),
+                    static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                writeStorageBuffer(indirectSet, 7, gpuSceneBuffers.phase2GroupedVisibleIndicesBuffer(),
+                    static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                writeStorageBuffer(indirectSet, 8, gpuSceneBuffers.phase2GroupedVisibleCountBuffer(), sizeof(std::uint32_t));
+                writeStorageBuffer(indirectSet, 9, phase2Count, sizeof(std::uint32_t));
                 VkBufferMemoryBarrier2 visibleBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
                 visibleBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 visibleBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -3271,29 +3418,91 @@ VoidResult Renderer::Impl::recordM3Frame(
                 visibleBarrier.buffer = gpuSceneBuffers.phase2VisibleIndicesBuffer(); visibleBarrier.size = VK_WHOLE_SIZE;
                 dep.bufferMemoryBarrierCount = 1; dep.pBufferMemoryBarriers = &visibleBarrier;
                 vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
+                // meshHeads is reused by the second grouping pass.  Clear it
+                // after the first pass has finished reading it, then make the
+                // transfer visible to the mode-0 compute dispatch below.
+                VkBufferMemoryBarrier2 meshHeadBeforeReset{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                meshHeadBeforeReset.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                meshHeadBeforeReset.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
+                    VK_ACCESS_2_SHADER_WRITE_BIT;
+                meshHeadBeforeReset.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                meshHeadBeforeReset.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                meshHeadBeforeReset.buffer = gpuSceneBuffers.meshHeadsBuffer();
+                meshHeadBeforeReset.size = VK_WHOLE_SIZE;
+                dep.bufferMemoryBarrierCount = 1;
+                dep.pBufferMemoryBarriers = &meshHeadBeforeReset;
+                vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
+                vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.meshHeadsBuffer(), 0,
+                    static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t),
+                    0xffffffffu);
+                VkBufferMemoryBarrier2 meshHeadAfterReset{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                meshHeadAfterReset.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                meshHeadAfterReset.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                meshHeadAfterReset.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                meshHeadAfterReset.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
+                    VK_ACCESS_2_SHADER_WRITE_BIT;
+                meshHeadAfterReset.buffer = gpuSceneBuffers.meshHeadsBuffer();
+                meshHeadAfterReset.size = VK_WHOLE_SIZE;
+                dep.bufferMemoryBarrierCount = 1;
+                dep.pBufferMemoryBarriers = &meshHeadAfterReset;
+                vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
                 vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     indirectBuildPipeline.computePipeline());
                 vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     indirectBuildPipeline.layout(), 0, 1, &indirectSet, 0, nullptr);
-                struct IndirectConstants { std::uint32_t instanceCount; std::uint32_t pad[3]; } indirect{};
+                struct IndirectConstants { std::uint32_t instanceCount; std::uint32_t meshCount;
+                    std::uint32_t mode; std::uint32_t reserved; } indirect{};
                 indirect.instanceCount = gpuSceneInstanceCount;
+                indirect.meshCount = sceneResources.meshDrawCount();
+                indirect.mode = 0;
                 vkCmdPushConstants(frame.commandBuffer, indirectBuildPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
                     0, sizeof(indirect), &indirect);
                 vkCmdDispatch(frame.commandBuffer, (std::max(1u, gpuSceneInstanceCount) + 63u) / 64u, 1, 1);
+                VkBufferMemoryBarrier2 groupBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                groupBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                groupBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                groupBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                groupBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                std::array<VkBufferMemoryBarrier2, 2> groupBarriers{groupBarrier, groupBarrier};
+                groupBarriers[0].buffer = gpuSceneBuffers.meshHeadsBuffer(); groupBarriers[0].size = VK_WHOLE_SIZE;
+                groupBarriers[1].buffer = gpuSceneBuffers.meshNextBuffer(); groupBarriers[1].size = VK_WHOLE_SIZE;
+                dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(groupBarriers.size()); dep.pBufferMemoryBarriers = groupBarriers.data();
+                vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
+                vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.phase2IndirectDrawCountBuffer(), 0,
+                    sizeof(std::uint32_t), 0);
+                vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.phase2GroupedVisibleCountBuffer(), 0,
+                    sizeof(std::uint32_t), 0);
+                std::array<VkBufferMemoryBarrier2, 2> buildReset{groupBarrier, groupBarrier};
+                buildReset[0].buffer = gpuSceneBuffers.phase2IndirectDrawCountBuffer();
+                buildReset[0].size = sizeof(std::uint32_t);
+                buildReset[1].buffer = gpuSceneBuffers.phase2GroupedVisibleCountBuffer();
+                buildReset[1].size = sizeof(std::uint32_t);
+                dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(buildReset.size()); dep.pBufferMemoryBarriers = buildReset.data();
+                vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
+                indirect.mode = 1;
+                vkCmdPushConstants(frame.commandBuffer, indirectBuildPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                    0, sizeof(indirect), &indirect);
+                vkCmdDispatch(frame.commandBuffer,
+                    (std::max(1u, indirect.meshCount) + 63u) / 64u, 1, 1);
                 VkBufferMemoryBarrier2 commandBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
                 commandBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 commandBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                commandBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-                commandBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-                std::array<VkBufferMemoryBarrier2, 2> commandBarriers{commandBarrier, commandBarrier};
+                commandBarrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                    VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                commandBarrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                    VK_ACCESS_2_SHADER_READ_BIT;
+                std::array<VkBufferMemoryBarrier2, 4> commandBarriers{commandBarrier, commandBarrier,
+                    commandBarrier, commandBarrier};
                 commandBarriers[0].buffer = gpuSceneBuffers.phase2IndirectCommandsBuffer(); commandBarriers[0].size = VK_WHOLE_SIZE;
-                commandBarriers[1].buffer = phase2Count; commandBarriers[1].size = sizeof(std::uint32_t);
-                dep.bufferMemoryBarrierCount = 2; dep.pBufferMemoryBarriers = commandBarriers.data();
+                commandBarriers[1].buffer = gpuSceneBuffers.phase2IndirectDrawCountBuffer(); commandBarriers[1].size = sizeof(std::uint32_t);
+                commandBarriers[2].buffer = gpuSceneBuffers.phase2GroupedVisibleIndicesBuffer(); commandBarriers[2].size = VK_WHOLE_SIZE;
+                commandBarriers[3].buffer = gpuSceneBuffers.phase2GroupedVisibleCountBuffer(); commandBarriers[3].size = sizeof(std::uint32_t);
+                dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(commandBarriers.size()); dep.pBufferMemoryBarriers = commandBarriers.data();
                 vkCmdPipelineBarrier2(frame.commandBuffer, &dep);
 
                 // Overlay the objects that became visible after the current
                 // frame's Hi-Z was built, preserving all existing G-buffer data.
-                const VkDescriptorSet graphicsSet = gpuGraphicsSet;
+                const VkDescriptorSet graphicsSet = gpuPhase2GraphicsSet;
                 if (graphicsSet == VK_NULL_HANDLE) return;
                 transitionImage(frameGraphProvider.image(resources.getTexture(data.gbuffer0).native), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -3341,7 +3550,8 @@ VoidResult Renderer::Impl::recordM3Frame(
                     vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &gpuVertexBuffer, &offset);
                     vkCmdBindIndexBuffer(frame.commandBuffer, gpuIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
                     vkCmdDrawIndexedIndirectCount(frame.commandBuffer, gpuSceneBuffers.phase2IndirectCommandsBuffer(), 0,
-                        phase2Count, 0, std::max(1u, gpuSceneInstanceCount), sizeof(VkDrawIndexedIndirectCommand));
+                        gpuSceneBuffers.phase2IndirectDrawCountBuffer(), 0,
+                        std::max(1u, sceneResources.meshDrawCount()), sizeof(VkDrawIndexedIndirectCommand));
                 }
                 vkCmdEndRendering(frame.commandBuffer);
                 transitionImage(frameGraphProvider.image(resources.getTexture(data.depth).native), VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -4044,8 +4254,9 @@ VoidResult Renderer::Impl::recordM3Frame(
         sourceBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
         sourceBarrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         sourceBarrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-        std::array<VkBufferMemoryBarrier2, 5> sourceBarriers{
-            sourceBarrier, sourceBarrier, sourceBarrier, sourceBarrier, sourceBarrier};
+        std::array<VkBufferMemoryBarrier2, 7> sourceBarriers{
+            sourceBarrier, sourceBarrier, sourceBarrier, sourceBarrier, sourceBarrier,
+            sourceBarrier, sourceBarrier};
         const VkBuffer firstIndices = config.enableTwoPhaseOcclusion
             ? gpuSceneBuffers.phase1VisibleIndicesBuffer()
             : gpuSceneBuffers.visibleIndicesBuffer();
@@ -4054,6 +4265,8 @@ VoidResult Renderer::Impl::recordM3Frame(
         sourceBarriers[2].buffer = firstIndices; sourceBarriers[2].size = VK_WHOLE_SIZE;
         sourceBarriers[3].buffer = gpuSceneBuffers.phase2VisibleIndicesBuffer(); sourceBarriers[3].size = VK_WHOLE_SIZE;
         sourceBarriers[4].buffer = gpuSceneBuffers.visibleIndicesBuffer(); sourceBarriers[4].size = VK_WHOLE_SIZE;
+        sourceBarriers[5].buffer = gpuSceneBuffers.indirectDrawCountBuffer(); sourceBarriers[5].size = sizeof(std::uint32_t);
+        sourceBarriers[6].buffer = gpuSceneBuffers.phase2IndirectDrawCountBuffer(); sourceBarriers[6].size = sizeof(std::uint32_t);
         VkDependencyInfo sourceDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         sourceDependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(sourceBarriers.size());
         sourceDependency.pBufferMemoryBarriers = sourceBarriers.data();
@@ -4066,12 +4279,20 @@ VoidResult Renderer::Impl::recordM3Frame(
             sizeof(std::uint32_t) * VisibilityReadbackHeaderCount, indexBytes};
         const VkBufferCopy secondCountCopy{0, sizeof(std::uint32_t) * 2u,
             sizeof(std::uint32_t)};
+        const VkBufferCopy indirectCountCopy{0, sizeof(std::uint32_t) * 3u,
+            sizeof(std::uint32_t)};
+        const VkBufferCopy phase2IndirectCountCopy{0, sizeof(std::uint32_t) * 4u,
+            sizeof(std::uint32_t)};
         const VkBufferCopy secondIndicesCopy{0,
             sizeof(std::uint32_t) * (VisibilityReadbackHeaderCount + VisibilityReadbackCapacity),
             indexBytes};
         vkCmdCopyBuffer(frame.commandBuffer, gpuSceneBuffers.visibleCountBuffer(), readback,
             1, &frustumCountCopy);
         vkCmdCopyBuffer(frame.commandBuffer, visibleCount, readback, 1, &countCopy);
+        vkCmdCopyBuffer(frame.commandBuffer, gpuSceneBuffers.indirectDrawCountBuffer(), readback,
+            1, &indirectCountCopy);
+        vkCmdCopyBuffer(frame.commandBuffer, gpuSceneBuffers.phase2IndirectDrawCountBuffer(), readback,
+            1, &phase2IndirectCountCopy);
         vkCmdCopyBuffer(frame.commandBuffer, firstIndices, readback, 1, &firstIndicesCopy);
         if (config.enableTwoPhaseOcclusion && hasRenderedFrame)
         {
@@ -4080,8 +4301,14 @@ VoidResult Renderer::Impl::recordM3Frame(
                 readback, 1, &secondIndicesCopy);
         }
         else
+        {
+            // Keep the phase-1 indirect command count at header slot 3;
+            // only the phase-2 fields are absent in a frustum-only frame.
             vkCmdFillBuffer(frame.commandBuffer, readback, sizeof(std::uint32_t) * 2u,
                 sizeof(std::uint32_t), 0);
+            vkCmdFillBuffer(frame.commandBuffer, readback, sizeof(std::uint32_t) * 4u,
+                sizeof(std::uint32_t), 0);
+        }
     }
     if (timestampsEnabled)
     {
@@ -4450,8 +4677,10 @@ Halcyon::Result<void> Renderer::updateGpuScene(
         scene.meshMaterials[i] = {instances[i].meshId, instances[i].materialId,
             instances[i].flags | cpuFallback, 0};
     }
-    const std::uint32_t requiredCapacity = static_cast<std::uint32_t>(std::max(
-        instances.size(), impl_->bindlessMaterialRows.size()));
+    const std::uint32_t requiredCapacity = static_cast<std::uint32_t>(std::max({
+        instances.size(),
+        impl_->bindlessMaterialRows.size(),
+        static_cast<std::size_t>(impl_->sceneResources.meshDrawCount())}));
     auto result = impl_->gpuSceneBuffers.ensureCapacity(requiredCapacity);
     if (!result) return result;
     impl_->gpuSceneInstanceCount = static_cast<std::uint32_t>(instances.size());
@@ -4537,8 +4766,9 @@ Halcyon::Result<void> Renderer::updateGpuSceneDelta(
     for (const auto& range : dirty)
         required = std::max(required, range.first + range.count);
     impl_->gpuSceneInstanceCount = std::max(impl_->gpuSceneInstanceCount, required);
-    required = std::max(required,
-        static_cast<std::uint32_t>(impl_->bindlessMaterialRows.size()));
+    required = std::max({required,
+        static_cast<std::uint32_t>(impl_->bindlessMaterialRows.size()),
+        impl_->sceneResources.meshDrawCount()});
     const bool requiresFullUpload = required > impl_->gpuSceneBuffers.capacity();
     auto result = impl_->gpuSceneBuffers.ensureCapacity(required);
     if (!result) return result;

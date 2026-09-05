@@ -1,8 +1,10 @@
 // GPU-driven vertex stage. firstInstance supplied by an indirect command is
-// the persistent GPU Scene slot, so no model push constant is required.
+// an offset into the compacted visible-slot list; the list resolves it to the
+// persistent GPU Scene slot for this instance.
 struct MeshMaterialRow { uint meshIndex; uint materialIndex; uint flags; uint lodState; };
 [[vk::binding(0, 1)]] StructuredBuffer<float4x4> transforms;
 [[vk::binding(1, 1)]] StructuredBuffer<MeshMaterialRow> meshMaterials;
+[[vk::binding(2, 1)]] StructuredBuffer<uint> visibleInstanceIndices;
 
 struct VertexIn
 {
@@ -29,7 +31,10 @@ struct Constants { float4x4 viewProjection; float4x4 previousViewProjection; };
 VertexOut main(VertexIn input, uint instanceId : SV_InstanceID)
 {
     VertexOut output;
-    const float4x4 model = transforms[instanceId];
+    // Vulkan's InstanceIndex includes the indirect command's firstInstance,
+    // so this indexes the compacted list at command-local offset directly.
+    const uint slot = visibleInstanceIndices[instanceId];
+    const float4x4 model = transforms[slot];
     const float4 world = mul(model, float4(input.position, 1.0));
     output.position = mul(constants.viewProjection, world);
     output.currentPosition = output.position;
@@ -38,7 +43,7 @@ VertexOut main(VertexIn input, uint instanceId : SV_InstanceID)
     output.normal = normalize(mul((float3x3)model, input.normal));
     output.uv = input.uv;
     output.tangent = float4(normalize(mul((float3x3)model, input.tangent.xyz)), input.tangent.w);
-    output.materialIndex = meshMaterials[instanceId].materialIndex;
-    output.instanceId = instanceId;
+    output.materialIndex = meshMaterials[slot].materialIndex;
+    output.instanceId = slot;
     return output;
 }

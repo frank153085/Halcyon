@@ -1,6 +1,7 @@
 #include "VulkanGpuSceneBuffers.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -67,7 +68,15 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::initialize(
         makeOutputs(occludedCount_, sizeof(std::uint32_t), "occluded count", 1) &&
         makeOutputs(phase2Visible_, sizeof(std::uint32_t), "phase2 visible indices", capacity_) &&
         makeOutputs(phase2VisibleCount_, sizeof(std::uint32_t), "phase2 visible count", 1) &&
-        makeOutputs(phase2Indirect_, sizeof(VkDrawIndexedIndirectCommand), "phase2 indirect commands", capacity_);
+        makeOutputs(phase2Indirect_, sizeof(VkDrawIndexedIndirectCommand), "phase2 indirect commands", capacity_) &&
+        makeOutputs(meshHeads_, sizeof(std::uint32_t), "mesh grouping heads", capacity_) &&
+        makeOutputs(meshNext_, sizeof(std::uint32_t), "mesh grouping next", capacity_) &&
+        makeOutputs(groupedVisible_, sizeof(std::uint32_t), "grouped visible indices", capacity_) &&
+        makeOutputs(groupedCount_, sizeof(std::uint32_t), "grouped visible count", 1) &&
+        makeOutputs(phase2GroupedVisible_, sizeof(std::uint32_t), "phase2 grouped visible indices", capacity_) &&
+        makeOutputs(phase2GroupedCount_, sizeof(std::uint32_t), "phase2 grouped visible count", 1) &&
+        makeOutputs(indirectCount_, sizeof(std::uint32_t), "indirect draw count", 1) &&
+        makeOutputs(phase2IndirectCount_, sizeof(std::uint32_t), "phase2 indirect draw count", 1);
     if (!t || !b || !m || !material || !outputsCreated)
     {
         cleanup();
@@ -117,11 +126,23 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::ensureCapacity(std::uint32_t requir
     phase2Visible_ = std::move(replacement.phase2Visible_);
     phase2VisibleCount_ = std::move(replacement.phase2VisibleCount_);
     phase2Indirect_ = std::move(replacement.phase2Indirect_);
+    meshHeads_ = std::move(replacement.meshHeads_);
+    meshNext_ = std::move(replacement.meshNext_);
+    groupedVisible_ = std::move(replacement.groupedVisible_);
+    groupedCount_ = std::move(replacement.groupedCount_);
+    phase2GroupedVisible_ = std::move(replacement.phase2GroupedVisible_);
+    phase2GroupedCount_ = std::move(replacement.phase2GroupedCount_);
+    indirectCount_ = std::move(replacement.indirectCount_);
+    phase2IndirectCount_ = std::move(replacement.phase2IndirectCount_);
     capacity_ = replacement.capacity_;
     frameCount_ = replacement.frameCount_;
     activeFrame_ = replacement.activeFrame_;
     replacement.transforms_ = {}; replacement.bounds_ = {}; replacement.meshMaterials_ = {};
     replacement.materials_ = {};
+    replacement.meshHeads_ = {}; replacement.meshNext_ = {};
+    replacement.groupedVisible_ = {}; replacement.groupedCount_ = {};
+    replacement.phase2GroupedVisible_ = {}; replacement.phase2GroupedCount_ = {};
+    replacement.indirectCount_ = {}; replacement.phase2IndirectCount_ = {};
     replacement.device_ = VK_NULL_HANDLE;
     replacement.allocator_ = nullptr;
     replacement.capacity_ = 0;
@@ -140,11 +161,14 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::upload(VkCommandPool commandPool, V
         scene.meshMaterials.size() > capacity_)
         return Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
             "GPU scene data exceeds allocated capacity", "VulkanGpuSceneBuffers"});
+    (void)commandPool;
+    (void)queue;
+    (void)uploader;
     const auto uploadOne = [&](BufferAllocation destination, const auto& values)
     {
         if (values.empty()) return Halcyon::Result<void>::success();
         const auto bytes = std::as_bytes(std::span{values});
-        return uploader.uploadBuffer(device_, commandPool, queue, *allocator_, destination, bytes);
+        return queueUpload(destination, bytes);
     };
     auto result = uploadOne(transforms_, scene.transforms);
     if (!result) return result;
@@ -161,6 +185,9 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::uploadDirty(VkCommandPool commandPo
 {
     if (device_ == VK_NULL_HANDLE || ranges.empty())
         return Halcyon::Result<void>::success();
+    (void)commandPool;
+    (void)queue;
+    (void)uploader;
     for (const auto& range : ranges)
     {
         if (range.empty() || range.first >= scene.transforms.size()) continue;
@@ -169,8 +196,8 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::uploadDirty(VkCommandPool commandPo
         const auto uploadRange = [&](BufferAllocation destination, const auto& values)
         {
             const auto bytes = std::as_bytes(std::span{values}.subspan(range.first, count));
-            return uploader.uploadBuffer(device_, commandPool, queue, *allocator_, destination,
-                bytes, static_cast<VkDeviceSize>(range.first) * sizeof(values[0]));
+            return queueUpload(destination, bytes,
+                static_cast<VkDeviceSize>(range.first) * sizeof(values[0]));
         };
         auto result = uploadRange(transforms_, scene.transforms);
         if (!result) return result;
@@ -190,12 +217,117 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::uploadMaterials(VkCommandPool comma
     if (materials.size() > capacity_)
         return Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
             "GPU material data exceeds allocated capacity", "VulkanGpuSceneBuffers"});
-    return uploader.uploadBuffer(device_, commandPool, queue, *allocator_, materials_,
-        std::as_bytes(materials));
+    (void)commandPool;
+    (void)queue;
+    (void)uploader;
+    return queueUpload(materials_, std::as_bytes(materials));
+}
+
+Halcyon::Result<void> VulkanGpuSceneBuffers::queueUpload(
+    BufferAllocation destination,
+    std::span<const std::byte> bytes,
+    VkDeviceSize destinationOffset)
+{
+    if (destination.buffer == VK_NULL_HANDLE || bytes.empty() ||
+        destinationOffset > destination.size || bytes.size_bytes() > destination.size - destinationOffset)
+    {
+        return Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "invalid GPU scene upload range", "VulkanGpuSceneBuffers"});
+    }
+    try
+    {
+        PendingUpload pending;
+        pending.destination = destination.buffer;
+        pending.destinationOffset = destinationOffset;
+        pending.bytes.assign(bytes.begin(), bytes.end());
+        pendingUploads_.push_back(std::move(pending));
+    }
+    catch (const std::bad_alloc&)
+    {
+        return Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "failed to queue GPU scene upload", "VulkanGpuSceneBuffers"});
+    }
+    return Halcyon::Result<void>::success();
+}
+
+Halcyon::Result<void> VulkanGpuSceneBuffers::recordPendingUploads(
+    VkCommandBuffer commandBuffer,
+    GpuAllocator& allocator,
+    std::vector<BufferAllocation>& stagingKeepAlive)
+{
+    if (pendingUploads_.empty()) return Halcyon::Result<void>::success();
+    if (commandBuffer == VK_NULL_HANDLE)
+    {
+        return Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "GPU scene upload recording requires a command buffer", "VulkanGpuSceneBuffers"});
+    }
+
+    auto alignUp = [](VkDeviceSize value, VkDeviceSize alignment) noexcept
+    {
+        return (value + alignment - 1u) & ~(alignment - 1u);
+    };
+    VkDeviceSize stagingSize = 0;
+    for (const auto& pending : pendingUploads_)
+        stagingSize = alignUp(stagingSize, 16u) + pending.bytes.size();
+    if (stagingSize == 0) {
+        pendingUploads_.clear();
+        return Halcyon::Result<void>::success();
+    }
+
+    VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    info.size = stagingSize;
+    info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const auto allocation = allocator.createBuffer(info, MemoryUsage::CpuToGpu);
+    if (!allocation) return allocation.error();
+    const BufferAllocation staging = allocation.value();
+    VkDeviceSize stagingOffset = 0;
+    for (const auto& pending : pendingUploads_)
+    {
+        stagingOffset = alignUp(stagingOffset, 16u);
+        const auto write = allocator.writeBuffer(staging,
+            std::span<const std::byte>{pending.bytes.data(), pending.bytes.size()}, stagingOffset);
+        if (!write)
+        {
+            allocator.destroy(staging);
+            return write;
+        }
+        VkBufferCopy copy{};
+        copy.srcOffset = stagingOffset;
+        copy.dstOffset = pending.destinationOffset;
+        copy.size = pending.bytes.size();
+        vkCmdCopyBuffer(commandBuffer, staging.buffer, pending.destination, 1, &copy);
+        VkBufferMemoryBarrier2 ready{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        ready.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        ready.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        ready.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        ready.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        ready.buffer = pending.destination;
+        ready.offset = pending.destinationOffset;
+        ready.size = pending.bytes.size();
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.bufferMemoryBarrierCount = 1;
+        dependency.pBufferMemoryBarriers = &ready;
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        stagingOffset += pending.bytes.size();
+    }
+    try
+    {
+        stagingKeepAlive.push_back(staging);
+    }
+    catch (const std::bad_alloc&)
+    {
+        allocator.destroy(staging);
+        return Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "failed to retain GPU scene staging allocation", "VulkanGpuSceneBuffers"});
+    }
+    pendingUploads_.clear();
+    return Halcyon::Result<void>::success();
 }
 
 void VulkanGpuSceneBuffers::cleanup() noexcept
 {
+    pendingUploads_.clear();
     if (allocator_ != nullptr)
     {
         allocator_->destroy(transforms_); allocator_->destroy(bounds_); allocator_->destroy(meshMaterials_);
@@ -209,13 +341,19 @@ void VulkanGpuSceneBuffers::cleanup() noexcept
         destroyAll(phase1Visible_); destroyAll(phase1VisibleCount_);
         destroyAll(occluded_); destroyAll(occludedCount_);
         destroyAll(phase2Visible_); destroyAll(phase2VisibleCount_);
-        destroyAll(phase2Indirect_);
+        destroyAll(phase2Indirect_); destroyAll(meshHeads_); destroyAll(meshNext_);
+        destroyAll(groupedVisible_); destroyAll(groupedCount_);
+        destroyAll(phase2GroupedVisible_); destroyAll(phase2GroupedCount_);
+        destroyAll(indirectCount_); destroyAll(phase2IndirectCount_);
     }
     transforms_ = {}; bounds_ = {}; meshMaterials_ = {}; materials_ = {}; visibleIndices_ = {};
     visibleIndices_.clear(); indirectCommands_.clear(); visibleCount_.clear(); capacity_ = 0; device_ = VK_NULL_HANDLE;
     allocator_ = nullptr; frameCount_ = 0; activeFrame_ = 0;
     phase1Visible_.clear(); phase1VisibleCount_.clear(); occluded_.clear(); occludedCount_.clear();
     phase2Visible_.clear(); phase2VisibleCount_.clear(); phase2Indirect_.clear();
+    meshHeads_.clear(); meshNext_.clear(); groupedVisible_.clear(); groupedCount_.clear();
+    phase2GroupedVisible_.clear(); phase2GroupedCount_.clear();
+    indirectCount_.clear(); phase2IndirectCount_.clear();
 }
 
 } // namespace Halcyon::Vulkan

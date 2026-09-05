@@ -25,11 +25,14 @@ material-set fallback. The unchanged deferred path remains available.
 `frustum_cull.comp.hlsl` appends visible slot indices using an atomic counter;
 it also reads the per-slot `MeshMaterialRow.lodState` and writes a parallel
 reserved state stream for the next LOD stage;
-`build_indirect_commands.comp.hlsl` emits one indexed indirect command per
-visible slot. Mesh vertex/index data is consolidated into renderer-owned
-streams when scene assets change, and a GPU mesh-draw table supplies each
-command's `indexCount`, `firstIndex`, and `vertexOffset`. This allows mixed
-opaque meshes and bindless materials to share one indirect command list;
+`build_indirect_commands.comp.hlsl` first links visible slots into per-mesh
+lists, then emits one indexed indirect command per mesh with an instanced
+`instanceCount`. A compacted slot list is consumed by the vertex shader via
+`firstInstance`, so instances sharing one mesh no longer create one command
+each. Mesh vertex/index data is consolidated into renderer-owned streams when
+scene assets change, and a GPU mesh-draw table supplies each command's
+`indexCount`, `firstIndex`, and `vertexOffset`. This allows mixed opaque meshes
+and bindless materials to share one indirect command list;
 transparent or double-sided packets retain the M3 CPU path.
 `hiz_build.comp.hlsl` performs reversed-Z 2x2 minimum reduction. Hi-Z mip 0 is
 half the scene-depth resolution, so its first dispatch is the first reduction
@@ -49,9 +52,12 @@ pass declares its LOAD/STORE G-buffer and depth accesses explicitly, so the
 FrameGraph versions consumed by deferred lighting include the phase-2 overlay.
 
 The renderer uploads GPU scene deltas through destination-offset staging copies;
-unchanged slots do not cause a full scene upload. The upload helper currently
-waits for the transfer queue as a development bridge and should be replaced by
-the frame upload ring before performance sign-off.
+unchanged slots do not cause a full scene upload. Dirty CPU bytes are queued and
+recorded as copies in the current graphics frame command buffer, and their
+staging allocations remain alive until that frame slot's fence completes. The
+generic `GpuUploader` one-shot path is still synchronous for initialization and
+resource loading, but the GPU Scene hot path no longer waits on the transfer
+queue for each range.
 
 Visibility/indirect scratch buffers are allocated per frame-in-flight and the
 renderer selects the matching set before recording. This prevents a later
@@ -70,19 +76,23 @@ outgrows the current capacity, `VulkanGpuSceneBuffers::ensureCapacity()` waits
 for the device, creates larger SoA/scratch buffers, and rebinds the next
 frame's descriptors; the caller then performs a full scene re-upload. The
 `vkDeviceWaitIdle` call is a visible whole-device stall and should be replaced
-with a retired-buffer/upload-ring handoff before performance sign-off. Uploads
-currently use a queue-idle bridge for the same reason.
+with a retired-buffer handoff before performance sign-off. This growth path is
+separate from the normal dirty-range upload ring described above.
 
 ## Known performance scope
 
-The initial indirect builder emits one command per instance. For N visible
-instances sharing one mesh this means N indirect commands instead of one
-instanced draw; it is functionally correct, but adds GPU command-processing
-and indirect-buffer traffic whose impact has not yet been quantified. It also
-supports mixed meshes through consolidated geometry, but does not yet merge
-adjacent commands into instanced mesh batches. Command compaction remains a
-follow-up optimization. Two-phase occlusion is implemented but intentionally
-opt-in while GPU validation and capture coverage are expanded.
+The indirect builder uses two compute dispatches (link and emit) and a small
+per-frame scratch set (`meshHeads`, `meshNext`, and the compacted slot list).
+Two-phase frames keep separate compacted slot lists for phase 1 and phase 2;
+the phase-2 overlay therefore cannot overwrite the `firstInstance` data that
+the next use of the phase-1 indirect commands will consume. The GPU vertex
+shader reads Vulkan's `InstanceIndex` (DXC's `SV_InstanceID` mapping), which
+includes the indirect command's `firstInstance` value under the current DXC
+compile flags.
+For N visible instances sharing one mesh this produces one command with
+`instanceCount = N`; command count therefore tracks visible meshes rather than
+visible instances. Two-phase occlusion is implemented but intentionally opt-in
+while GPU validation and capture coverage are expanded.
 For B13/B17 the development path copies the frustum/phase-2 slot-index lists
 into a per-frame readback buffer and compares their union against a CPU
 reference set built from the same world-space bounds and clip planes. The
@@ -104,6 +114,6 @@ survive: candidates rejected by a valid Hi-Z test are expected. The InstanceId
 comparison tool is the pixel-level check for visible-object coverage. A mixed
 frame is supported: bindless-compatible opaque slots use GPU indirect
 submission, while transparent, double-sided, or otherwise incompatible slots
-are filtered out of the compute list and drawn by the CPU fallback. Indirect
-submission is currently one command per instance; instances sharing one mesh
-are not yet compacted into an instanced command.
+are filtered out of the compute list and drawn by the CPU fallback. The GPU
+path batches only the compatible subset, so fallback materials do not disable
+GPU-driven rendering for the rest of the scene.
