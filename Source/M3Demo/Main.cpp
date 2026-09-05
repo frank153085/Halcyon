@@ -12,6 +12,7 @@
 int main(int argc, char** argv)
 {
     std::string scene = "damaged-helmet";
+    std::size_t instanceCount = 100'000;
     for (int i = 1; i < argc; ++i)
     {
         const std::string argument = argv[i] != nullptr ? argv[i] : "";
@@ -29,11 +30,19 @@ int main(int argc, char** argv)
         {
             scene = argument.substr(8);
         }
+        else if (argument == "--instance-count" && i + 1 < argc)
+        {
+            instanceCount = static_cast<std::size_t>(std::strtoull(argv[++i], nullptr, 10));
+        }
+        else if (argument.rfind("--instance-count=", 0) == 0)
+        {
+            instanceCount = static_cast<std::size_t>(std::strtoull(argument.c_str() + 17, nullptr, 10));
+        }
     }
-    if (scene != "sponza" && scene != "damaged-helmet")
+    if (scene != "sponza" && scene != "damaged-helmet" && scene != "stress")
     {
         std::fprintf(stderr,
-            "Unsupported scene '%s'. Expected 'damaged-helmet' or 'sponza'.\n",
+            "Unsupported scene '%s'. Expected 'damaged-helmet', 'sponza', or 'stress'.\n",
             scene.c_str());
         return EXIT_FAILURE;
     }
@@ -44,7 +53,7 @@ int main(int argc, char** argv)
     const std::filesystem::path helmet = "m3/DamagedHelmet.glb";
     const std::filesystem::path sponza = "m3/Sponza/Sponza.gltf";
     const std::filesystem::path selected = scene == "sponza" ? sponza : helmet;
-    if (!std::filesystem::exists(root / selected))
+    if (scene != "stress" && !std::filesystem::exists(root / selected))
     {
         std::fprintf(stderr,
             "M3 asset '%s' is missing. Run: cmake --build out/build/m3-msvc-debug "
@@ -54,7 +63,17 @@ int main(int argc, char** argv)
     }
     config.engine.scene.name = scene;
     config.engine.scene.assetRoot = root;
-    config.engine.scene.assets.push_back({scene, selected});
+    if (scene == "stress")
+    {
+        Halcyon::ProceduralStressSceneConfig stressConfig;
+        stressConfig.instanceCount = instanceCount;
+        config.engine.scene.assets.push_back(
+            {scene, Halcyon::makeProceduralStressScene(stressConfig)});
+    }
+    else
+    {
+        config.engine.scene.assets.push_back({scene, selected});
+    }
     config.engine.scene.instances.push_back({"main", scene});
     config.enableDiagnostics = true;
     return Halcyon::Application::run(

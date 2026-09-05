@@ -21,6 +21,9 @@ build/
 out/
 bin/
 lib/
+# Checked-in M3 golden images are regression artifacts, not build output.
+!Tests/GoldenImages/
+!Tests/GoldenImages/*.png
 
 ### Compiler outputs ###
 *.o

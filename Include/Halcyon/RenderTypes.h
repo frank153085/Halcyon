@@ -49,6 +49,14 @@ struct FrameStats
     };
 
     double cpuFrameMs = 0.0;
+    // Visibility timings are -1 until the GPU-driven path is enabled.
+    double cpuVisibilityMs = -1.0;
+    double gpuFrustumCullMs = -1.0;
+    double gpuIndirectBuildMs = -1.0;
+    double gpuHiZBuildMs = -1.0;
+    double gpuTwoPhaseMs = -1.0;
+    std::uint32_t visibleInstanceCount = 0;
+    std::uint32_t indirectDrawCount = 0;
     double gpuFrameMs = -1.0;
     // Exact execution order produced by the compiled FrameGraph for this
     // frame. Timings are reported separately because timestamp results become

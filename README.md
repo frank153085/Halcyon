@@ -134,7 +134,20 @@ out\build\m3-msvc-debug\HalcyonM3Demo.exe `
   --perf-csv out\captures\sponza.csv --no-validation
 ```
 
-Quality switches are `--fixed-dt`, `--exposure`, `--no-taa`,
+The deterministic stress scene exercises large instance counts without
+downloading additional assets:
+
+```powershell
+out\build\m3-msvc-debug\HalcyonM3Demo.exe `
+  --scene stress --instance-count 100000 --frames 1 --no-validation
+```
+
+On a machine with the M3 assets and a Vulkan device, the two-scene regression
+wrapper is `powershell -ExecutionPolicy Bypass -File scripts/run_regression.ps1`.
+It writes screenshots and performance CSV files under `out/captures/regression`
+and fails on a non-zero demo or golden-image comparison result.
+
+Quality switches are `--fixed-dt <seconds>` (for example, `--fixed-dt 0.016666`), `--exposure`, `--no-taa`,
 `--no-clustered-lighting`, and `--no-transparency`. A standalone image gate is
 available for CI and RenderDoc captures:
 

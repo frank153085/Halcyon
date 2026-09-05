@@ -62,6 +62,7 @@ struct SceneManager::Impl
     std::map<std::string, SceneInstanceHandle, std::less<>> instanceNames;
     std::filesystem::path assetRoot;
     std::string name;
+    mutable Renderer::Scene::Ecs::RenderExtractor renderExtractor;
 
     void eraseImported(const SceneImportResult& imported) noexcept
     {
@@ -574,6 +575,26 @@ const std::string& SceneManager::name() const noexcept
 {
     static const std::string empty;
     return impl_ != nullptr ? impl_->name : empty;
+}
+
+Result<SceneManager::SceneRenderDelta> SceneManager::extractDelta(
+    const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const
+{
+    if (impl_ == nullptr)
+    {
+        return Result<SceneRenderDelta>::failure(sceneManagerError(
+            ErrorCode::InvalidState, "scene manager state is unavailable"));
+    }
+    try
+    {
+        return Result<SceneRenderDelta>::success(
+            impl_->renderExtractor.extractDelta(impl_->scene, camera, frameIndex));
+    }
+    catch (const std::bad_alloc&)
+    {
+        return Result<SceneRenderDelta>::failure(
+            sceneManagerError(ErrorCode::OutOfMemory, "failed to build scene render delta"));
+    }
 }
 
 Result<OwnedSceneFramePacket> SceneManager::extract(

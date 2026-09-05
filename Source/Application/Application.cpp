@@ -591,8 +591,10 @@ int Application::run(
                         csv << "frame,scene,width,height,device_name,vendor_id,device_id,"
                                "driver_version,device_api_version,device_memory_bytes,"
                                "exposure,taa_enabled,clustered_lighting_enabled,"
-                               "transparency_enabled,cpu_ms,gpu_ms,primitive_count,"
-                               "cluster_overflow,taa_history_valid";
+                               "transparency_enabled,cpu_ms,cpu_visibility_ms,gpu_ms,"
+                               "gpu_frustum_cull_ms,gpu_indirect_build_ms,gpu_hiz_build_ms,"
+                               "gpu_two_phase_ms,visible_instance_count,indirect_draw_count,"
+                               "primitive_count,cluster_overflow,taa_history_valid";
                         for (const auto& passName : previousStats.executedPasses)
                         {
                             std::string name{passName};
@@ -626,7 +628,15 @@ int Application::run(
                         << (config.engine.enableClusteredLighting ? 1 : 0) << ','
                         << (config.engine.enableTransparency ? 1 : 0) << ','
                         << previousStats.cpuFrameMs << ','
-                        << previousStats.gpuFrameMs << ',' << previousStats.primitiveCount << ','
+                        << previousStats.cpuVisibilityMs << ','
+                        << previousStats.gpuFrameMs << ','
+                        << previousStats.gpuFrustumCullMs << ','
+                        << previousStats.gpuIndirectBuildMs << ','
+                        << previousStats.gpuHiZBuildMs << ','
+                        << previousStats.gpuTwoPhaseMs << ','
+                        << previousStats.visibleInstanceCount << ','
+                        << previousStats.indirectDrawCount << ','
+                        << previousStats.primitiveCount << ','
                         << previousStats.clusterOverflowCount << ','
                         << (previousStats.taaHistoryValid ? 1 : 0);
                     for (const auto& passName : previousStats.executedPasses)

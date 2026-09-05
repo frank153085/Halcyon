@@ -67,6 +67,27 @@ void entityTests(TestContext& context)
     HALCYON_EXPECT(context, !manager.isAlive(replacement));
 }
 
+void deltaExtractionTests(TestContext& context)
+{
+    Scene scene;
+    const Entity entity = scene.createEntity();
+    (void)scene.transforms().add(entity);
+    (void)scene.renderables().add(entity);
+    scene.updateTransforms();
+    RenderExtractor extractor;
+    const auto first = extractor.extractDelta(scene, {}, 1u);
+    HALCYON_EXPECT(context, first.created.size() == 1u && first.updated.empty());
+    const auto second = extractor.extractDelta(scene, {}, 2u);
+    HALCYON_EXPECT(context, second.empty());
+    scene.transforms().get(entity)->localTransform[3].x = 2.0f;
+    scene.updateTransforms();
+    const auto third = extractor.extractDelta(scene, {}, 3u);
+    HALCYON_EXPECT(context, third.updated.size() == 1u);
+    scene.destroyEntity(entity);
+    const auto fourth = extractor.extractDelta(scene, {}, 4u);
+    HALCYON_EXPECT(context, fourth.destroyed.size() == 1u);
+}
+
 void componentTests(TestContext& context)
 {
     Scene scene;
@@ -137,6 +158,7 @@ int main()
 {
     TestContext context;
     entityTests(context);
+    deltaExtractionTests(context);
     componentTests(context);
     transformAndExtractionTests(context);
 

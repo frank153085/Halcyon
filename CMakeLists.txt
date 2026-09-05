@@ -101,8 +101,11 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/Camera.cpp
     Source/Renderer/Scene/Camera.h
     Source/Renderer/Scene/FramePacket.h
+    Source/Renderer/Scene/GpuScene.h
     Source/Renderer/Scene/StaticSceneLoader.cpp
     Source/Renderer/Scene/StaticSceneLoader.h
+    Source/Renderer/Scene/ProceduralStressScene.cpp
+    Source/Renderer/Scene/ProceduralStressScene.h
     Source/Renderer/Scene/SceneDatabase.h
     Source/Renderer/Scene/Ecs/Entity.h
     Source/Renderer/Scene/Ecs/Ecs.h
@@ -278,6 +281,9 @@ if(HALCYON_DXC_EXECUTABLE)
     set(HALCYON_TAA_COMPUTE_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/taa.comp.spv")
     set(HALCYON_CSM_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/csm.vert.spv")
     set(HALCYON_CLUSTER_BUILD_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/cluster_build.comp.spv")
+    set(HALCYON_FRUSTUM_CULL_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/frustum_cull.comp.spv")
+    set(HALCYON_INDIRECT_BUILD_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/build_indirect_commands.comp.spv")
+    set(HALCYON_HIZ_BUILD_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/hiz_build.comp.spv")
     add_custom_command(OUTPUT "${HALCYON_PBR_VERTEX_SPIRV}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
@@ -328,11 +334,27 @@ if(HALCYON_DXC_EXECUTABLE)
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
                 -Fo "${HALCYON_CLUSTER_BUILD_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/cluster_build.comp.hlsl"
         DEPENDS Shaders/cluster_build.comp.hlsl VERBATIM COMMENT "Compiling clustered-lighting compute shader")
+    add_custom_command(OUTPUT "${HALCYON_FRUSTUM_CULL_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_FRUSTUM_CULL_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frustum_cull.comp.hlsl"
+        DEPENDS Shaders/frustum_cull.comp.hlsl VERBATIM COMMENT "Compiling frustum culling shader")
+    add_custom_command(OUTPUT "${HALCYON_INDIRECT_BUILD_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_INDIRECT_BUILD_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/build_indirect_commands.comp.hlsl"
+        DEPENDS Shaders/build_indirect_commands.comp.hlsl VERBATIM COMMENT "Compiling indirect command shader")
+    add_custom_command(OUTPUT "${HALCYON_HIZ_BUILD_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_HIZ_BUILD_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/hiz_build.comp.hlsl"
+        DEPENDS Shaders/hiz_build.comp.hlsl VERBATIM COMMENT "Compiling Hi-Z shader")
     add_custom_target(HalcyonShaders ALL
         DEPENDS "${HALCYON_FULLSCREEN_VERTEX_SPIRV}"
             "${HALCYON_PBR_VERTEX_SPIRV}" "${HALCYON_TRANSPARENT_VERTEX_SPIRV}" "${HALCYON_PBR_FRAGMENT_SPIRV}" "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
             "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}" "${HALCYON_TONEMAP_FRAGMENT_SPIRV}" "${HALCYON_TAA_COMPUTE_SPIRV}"
             "${HALCYON_CSM_VERTEX_SPIRV}" "${HALCYON_CLUSTER_BUILD_SPIRV}"
+            "${HALCYON_FRUSTUM_CULL_SPIRV}" "${HALCYON_INDIRECT_BUILD_SPIRV}" "${HALCYON_HIZ_BUILD_SPIRV}"
     )
     if(HALCYON_SPIRV_VAL_EXECUTABLE)
         add_custom_target(HalcyonShaderValidation ALL
@@ -346,6 +368,9 @@ if(HALCYON_DXC_EXECUTABLE)
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_TAA_COMPUTE_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_CSM_VERTEX_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_CLUSTER_BUILD_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_FRUSTUM_CULL_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_INDIRECT_BUILD_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_HIZ_BUILD_SPIRV}"
             DEPENDS HalcyonShaders
             COMMENT "Validating generated M3 SPIR-V modules"
             VERBATIM
@@ -364,6 +389,7 @@ add_library(HalcyonEngine STATIC
     Include/Halcyon/Engine.h
     Include/Halcyon/RenderTypes.h
     Include/Halcyon/Scene.h
+    Include/Halcyon/GpuScene.h
     Include/Halcyon/SceneManager.h
     Include/Halcyon/Quality.h
     Include/Halcyon/TraditionalQuality.h
@@ -560,6 +586,35 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonDeferredDeletionTests)
     add_test(NAME Halcyon.DeferredDeletion COMMAND HalcyonDeferredDeletionTests)
 
+    add_executable(HalcyonGpuSceneTests Tests/GpuSceneTests.cpp)
+    target_link_libraries(HalcyonGpuSceneTests PRIVATE HalcyonCore glm::glm)
+    target_include_directories(HalcyonGpuSceneTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    halcyon_enable_warnings(HalcyonGpuSceneTests)
+    add_test(NAME Halcyon.GpuScene COMMAND HalcyonGpuSceneTests)
+
+    add_executable(HalcyonRenderExtractorDeltaTests
+        Tests/RenderExtractorDeltaTests.cpp
+        Source/Renderer/Scene/Ecs/EntityManager.cpp
+        Source/Renderer/Scene/Ecs/TransformManager.cpp
+        Source/Renderer/Scene/Ecs/Scene.cpp
+        Source/Renderer/Scene/Ecs/RenderExtractor.cpp)
+    target_link_libraries(HalcyonRenderExtractorDeltaTests PRIVATE HalcyonCore glm::glm Halcyon::RobinMap)
+    target_include_directories(HalcyonRenderExtractorDeltaTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    halcyon_enable_warnings(HalcyonRenderExtractorDeltaTests)
+    add_test(NAME Halcyon.RenderExtractorDelta COMMAND HalcyonRenderExtractorDeltaTests)
+
+    add_executable(HalcyonFrustumCullingTests Tests/FrustumCullingTests.cpp)
+    target_link_libraries(HalcyonFrustumCullingTests PRIVATE HalcyonCore glm::glm)
+    target_include_directories(HalcyonFrustumCullingTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    halcyon_enable_warnings(HalcyonFrustumCullingTests)
+    add_test(NAME Halcyon.FrustumCulling COMMAND HalcyonFrustumCullingTests)
+
+    add_executable(HalcyonHiZReductionTests Tests/HiZReductionTests.cpp)
+    target_link_libraries(HalcyonHiZReductionTests PRIVATE HalcyonCore glm::glm)
+    target_include_directories(HalcyonHiZReductionTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    halcyon_enable_warnings(HalcyonHiZReductionTests)
+    add_test(NAME Halcyon.HiZReduction COMMAND HalcyonHiZReductionTests)
+
     # Convenience aggregate target used by IDEs and CI jobs that only need to
     # build the complete CPU test suite.  CTest remains the runner of record.
     add_custom_target(HalcyonTests)
@@ -572,7 +627,11 @@ if(HALCYON_BUILD_TESTS)
         HalcyonEcsTests
         HalcyonSceneManagerTests
         HalcyonInfrastructureTests
-        HalcyonDeferredDeletionTests)
+        HalcyonDeferredDeletionTests
+        HalcyonGpuSceneTests
+        HalcyonRenderExtractorDeltaTests
+        HalcyonFrustumCullingTests
+        HalcyonHiZReductionTests)
     if(HALCYON_BUILD_EXPERIMENTAL_M2)
         add_dependencies(HalcyonTests HalcyonRendererCoreTests HalcyonShaderReflectionTests)
         if(HALCYON_ENABLE_GOOGLETEST)

@@ -3,6 +3,7 @@
 #include "Core/Handle.h"
 #include "Core/Result.h"
 #include "Scene.h"
+#include "Renderer/Scene/Ecs/RenderExtractor.h"
 
 #include <filesystem>
 #include <glm/glm.hpp>
@@ -84,6 +85,10 @@ public:
     [[nodiscard]] const SceneDatabase& database() const noexcept;
     [[nodiscard]] const std::filesystem::path& assetRoot() const noexcept;
     [[nodiscard]] const std::string& name() const noexcept;
+
+    using SceneRenderDelta = Renderer::Scene::Ecs::RenderExtractor::Delta;
+    [[nodiscard]] Result<SceneRenderDelta> extractDelta(
+        const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex = 0) const;
 
     void shutdown() noexcept;
 

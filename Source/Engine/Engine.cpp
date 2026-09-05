@@ -4,7 +4,9 @@
 #include "EngineInternal.h"
 #include "Halcyon/Window.h"
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.h"
+#include "Core/Profiler.h"
 
+#include <chrono>
 #include <exception>
 #include <new>
 #include <utility>
@@ -58,6 +60,13 @@ namespace
 {
     FrameStats result{};
     result.cpuFrameMs = source.cpuFrameMs;
+    result.cpuVisibilityMs = source.cpuVisibilityMs;
+    result.gpuFrustumCullMs = source.gpuFrustumCullMs;
+    result.gpuIndirectBuildMs = source.gpuIndirectBuildMs;
+    result.gpuHiZBuildMs = source.gpuHiZBuildMs;
+    result.gpuTwoPhaseMs = source.gpuTwoPhaseMs;
+    result.visibleInstanceCount = source.visibleInstanceCount;
+    result.indirectDrawCount = source.indirectDrawCount;
     result.gpuFrameMs = source.gpuFrameMs;
     result.deviceMemoryBytes = source.deviceMemoryBytes;
     result.primitiveCount = source.primitiveCount;
@@ -252,6 +261,8 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
 
     try
     {
+        HALCYON_PROFILE_SCOPE("CPU visibility extraction");
+        const auto visibilityBegin = std::chrono::steady_clock::now();
         impl_->sceneManager.scene().updateTransforms();
         auto packet = impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
         if (!packet)
@@ -259,7 +270,9 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
             return Result<FrameStats>::failure(packet.error().withContext("Engine::render"));
         }
         const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.value().view());
-        const FrameStats stats = translateStats(backendStats);
+        FrameStats stats = translateStats(backendStats);
+        stats.cpuVisibilityMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - visibilityBegin).count();
         if (stats.deviceLost)
         {
             impl_->initialized = false;

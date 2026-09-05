@@ -6,6 +6,7 @@
 #include "Renderer/Scene/Ecs/Ecs.h"
 #include "Renderer/Scene/SceneDatabase.h"
 #include "Renderer/Scene/StaticSceneLoader.h"
+#include "Renderer/Scene/ProceduralStressScene.h"
 
 namespace Halcyon
 {
@@ -34,5 +35,7 @@ using SceneImportResult = Renderer::Scene::SceneImportResult;
 using SceneMeshHandle = Renderer::Resources::MeshHandle;
 using SceneMaterialHandle = Renderer::Resources::MaterialHandle;
 using SceneTextureHandle = Renderer::Resources::TextureHandle;
+using ProceduralStressSceneConfig = Renderer::Scene::ProceduralStressSceneConfig;
+using Renderer::Scene::makeProceduralStressScene;
 
 } // namespace Halcyon
