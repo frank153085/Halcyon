@@ -5,6 +5,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <string_view>
+#include <utility>
 
 namespace
 {
@@ -83,8 +84,16 @@ void deltaExtractionTests(TestContext& context)
     scene.updateTransforms();
     const auto third = extractor.extractDelta(scene, {}, 3u);
     HALCYON_EXPECT(context, third.updated.size() == 1u);
+
+    auto* renderable = scene.renderables().get(entity);
+    HALCYON_EXPECT(context, renderable != nullptr);
+    renderable->flags = 17u;
+    const auto materialChange = extractor.extractDelta(scene, {}, 4u);
+    HALCYON_EXPECT(context, materialChange.updated.size() == 1u);
+    HALCYON_EXPECT(context, materialChange.updated[0].instance.flags == 17u);
+
     scene.destroyEntity(entity);
-    const auto fourth = extractor.extractDelta(scene, {}, 4u);
+    const auto fourth = extractor.extractDelta(scene, {}, 5u);
     HALCYON_EXPECT(context, fourth.destroyed.size() == 1u);
 }
 
@@ -150,6 +159,26 @@ void transformAndExtractionTests(TestContext& context)
     HALCYON_EXPECT(context, packet.instances[0].materialId == 9u);
     HALCYON_EXPECT(context, packet.instances[0].flags == 3u);
     HALCYON_EXPECT(context, packet.lights[0].positionAndRadius[3] == 4.0f);
+
+    // A parent-only edit must propagate to descendants, while a subsequent
+    // static update must report no work.
+    auto* mutableParent = scene.transforms().get(parent);
+    mutableParent->localTransform = glm::translate(
+        glm::mat4{1.0f}, glm::vec3{5.0f, 0.0f, 0.0f});
+    scene.updateTransforms();
+    const auto updated = scene.transforms().updatedEntities();
+    HALCYON_EXPECT(context, updated.size() == 2u);
+    const auto* movedChild = std::as_const(scene).transforms().get(child);
+    HALCYON_EXPECT(context, std::abs(movedChild->worldTransform[3].x - 5.0f) < 0.001f);
+    scene.updateTransforms();
+    HALCYON_EXPECT(context, scene.transforms().updatedEntities().empty());
+
+    // Malformed parent cycles are contained and never duplicate updates.
+    mutableParent = scene.transforms().get(parent);
+    mutableParent->parent = child;
+    scene.transforms().get(child)->parent = parent;
+    scene.updateTransforms();
+    HALCYON_EXPECT(context, scene.transforms().updatedEntities().size() == 2u);
 }
 
 } // namespace

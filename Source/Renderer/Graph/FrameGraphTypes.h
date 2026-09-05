@@ -38,6 +38,8 @@ enum class TextureFormat : std::uint8_t
     RGBA8Unorm,
     BGRA8Unorm,
     RGBA16Float,
+    R32Float,
+    R32Uint,
     R16Float,
     D32Float,
     RG16Float,

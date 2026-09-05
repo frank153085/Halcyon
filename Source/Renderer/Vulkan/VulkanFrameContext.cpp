@@ -110,8 +110,9 @@ Halcyon::Result<void> VulkanFrameContext::createResources(VkDevice device,
         {
             return fail(vkFailure("vkCreateFence", result));
         }
-        frame.queryBase = i * (2u + passCount * 2u);
+        frame.queryBase = i * (2u + passCount * 2u + VulkanFrameContext::StageQueryCount);
         frame.passQueryBase = frame.queryBase + 2u;
+        frame.stageQueryBase = frame.passQueryBase + passCount * 2u;
     }
     std::uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
@@ -128,7 +129,7 @@ Halcyon::Result<void> VulkanFrameContext::createResources(VkDevice device,
         VkQueryPoolCreateInfo queryInfo{};
         queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        queryInfo.queryCount = frameCount * (2u + passCount * 2u);
+        queryInfo.queryCount = frameCount * (2u + passCount * 2u + VulkanFrameContext::StageQueryCount);
         const VkResult result = vkCreateQueryPool(device, &queryInfo, nullptr, &timestampPool);
         if (result == VK_SUCCESS)
         {
@@ -323,6 +324,25 @@ VkResult VulkanFrameContext::readPassTime(VkDevice device,
         ((timestampValues[1] & validMask) - (timestampValues[0] & validMask)) & validMask;
     milliseconds =
         static_cast<double>(elapsedTicks) * static_cast<double>(timestampPeriod) / 1'000'000.0;
+    return VK_SUCCESS;
+}
+
+VkResult VulkanFrameContext::readStageTime(VkDevice device, const VulkanFrame& frame,
+    std::uint32_t stageIndex, double& milliseconds) const noexcept
+{
+    if (!timestampsEnabled) return VK_NOT_READY;
+    if (device == VK_NULL_HANDLE || timestampPool == VK_NULL_HANDLE || stageIndex >= 4u)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    std::array<std::uint64_t, 2> values{};
+    const VkResult result = vkGetQueryPoolResults(device, timestampPool,
+        frame.stageQueryBase + stageIndex * 2u, 2, sizeof(values), values.data(),
+        sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS) return result;
+    const std::uint64_t validMask = presentTimestampValidBits >= 64
+        ? ~std::uint64_t{0}
+        : ((std::uint64_t{1} << presentTimestampValidBits) - 1u);
+    const std::uint64_t elapsed = ((values[1] & validMask) - (values[0] & validMask)) & validMask;
+    milliseconds = static_cast<double>(elapsed) * static_cast<double>(timestampPeriod) / 1'000'000.0;
     return VK_SUCCESS;
 }
 

@@ -31,6 +31,7 @@ struct VulkanFrameGraphResource
     std::uint32_t mipLevels = 1;
     std::uint32_t arrayLayers = 1;
     std::vector<VkImageView> layerViews;
+    std::vector<VkImageView> mipViews;
     bool isBuffer = false;
     bool persistent = false;
     bool imported = false;
@@ -83,6 +84,8 @@ public:
         Halcyon::Renderer::Graph::FrameGraphNativeResource token) const noexcept;
     [[nodiscard]] VkImageView layerView(Halcyon::Renderer::Graph::FrameGraphNativeResource token,
         std::uint32_t layer) const noexcept;
+    [[nodiscard]] VkImageView mipView(Halcyon::Renderer::Graph::FrameGraphNativeResource token,
+        std::uint32_t mip) const noexcept;
 
     // Transient resources are released by FrameGraph at their last use. This
     // method is for resize/shutdown and releases cached persistent objects.

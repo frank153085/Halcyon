@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Scene/SceneDatabase.h"
+#include "../Scene/GpuScene.h"
 #include "Core/Result.h"
 #include "GpuResourceManager.h"
 
@@ -33,7 +34,8 @@ public:
         VkCommandPool uploadCommandPool,
         VkQueue graphicsQueue,
         GpuAllocator& allocator,
-        GpuUploader& uploader);
+        GpuUploader& uploader,
+        bool enableGpuDrivenMeshes);
     [[nodiscard]] Halcyon::Result<void> uploadAsset(
         const Halcyon::Renderer::Scene::SceneDatabase& database,
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
@@ -42,7 +44,35 @@ public:
     void cleanup() noexcept;
 
     [[nodiscard]] const MeshResource* mesh(std::uint32_t index) const noexcept;
+    [[nodiscard]] VkBuffer gpuDrivenVertexBuffer() const noexcept
+    {
+        return gpuDrivenVertices_.buffer;
+    }
+    [[nodiscard]] VkBuffer gpuDrivenIndexBuffer() const noexcept
+    {
+        return gpuDrivenIndices_.buffer;
+    }
+    [[nodiscard]] VkBuffer meshDrawBuffer() const noexcept
+    {
+        return meshDraws_.buffer;
+    }
+    [[nodiscard]] std::uint32_t meshDrawCount() const noexcept
+    {
+        return static_cast<std::uint32_t>(meshDrawRows_.size());
+    }
     [[nodiscard]] VkDescriptorSet materialDescriptor(std::uint32_t index) const noexcept;
+    [[nodiscard]] std::uint32_t materialCount() const noexcept
+    {
+        return static_cast<std::uint32_t>(denseMaterialStable_.size());
+    }
+    [[nodiscard]] std::uint32_t textureCount() const noexcept
+    {
+        return static_cast<std::uint32_t>(denseTextureStable_.size());
+    }
+    [[nodiscard]] Halcyon::Renderer::Scene::MaterialGpuData materialRow(
+        std::uint32_t denseIndex) const noexcept;
+    [[nodiscard]] const TextureResource* textureDense(
+        std::uint32_t denseIndex) const noexcept;
     // Resolve a stable SceneDatabase slot to a dense GPU index. Frame packets
     // submitted to render() are already remapped and never dereference a
     // backend allocation through Handle::index().
@@ -77,6 +107,7 @@ private:
         std::uint32_t emissiveTexture = 0;
         std::uint32_t occlusionTexture = 0;
         BufferAllocation factorsBuffer{};
+        Halcyon::Renderer::Scene::MaterialGpuData bindlessRow{};
     };
 
     // std140-compatible material constants consumed by gbuffer and forward
@@ -92,6 +123,7 @@ private:
 
     [[nodiscard]] Halcyon::Result<void> createDescriptorLayout();
     [[nodiscard]] Halcyon::Result<void> rebuildMaterialDescriptors();
+    [[nodiscard]] Halcyon::Result<void> rebuildGpuDrivenMeshes();
     [[nodiscard]] Halcyon::Result<BufferAllocation> createMaterialBuffer(
         const Halcyon::Renderer::Scene::SceneMaterial& material);
     [[nodiscard]] Halcyon::Result<std::string> retainTexture(
@@ -106,10 +138,15 @@ private:
     VkQueue graphicsQueue_ = VK_NULL_HANDLE;
     GpuAllocator* allocator_ = nullptr;
     GpuUploader* uploader_ = nullptr;
+    bool gpuDrivenMeshesEnabled_ = false;
     GpuResourceManager resourceManager_;
     VkDescriptorSetLayout textureSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool textureDescriptorPool_ = VK_NULL_HANDLE;
     std::unordered_map<std::uint32_t, MeshResource> meshes_;
+    BufferAllocation gpuDrivenVertices_{};
+    BufferAllocation gpuDrivenIndices_{};
+    BufferAllocation meshDraws_{};
+    std::vector<Halcyon::Renderer::Scene::MeshDrawRow> meshDrawRows_;
     std::unordered_map<std::uint32_t, MaterialResource> materials_;
     std::unordered_map<std::uint32_t, VkDescriptorSet> materialDescriptors_;
     std::unordered_map<std::uint32_t, std::uint32_t> meshDenseByStable_;

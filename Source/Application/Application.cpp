@@ -69,15 +69,19 @@ void printUsage() noexcept
                 "  --frames N       render N frames and exit (default: until close)\n"
                 "  --width N        initial window width (default: 1280)\n"
                 "  --height N       initial window height (default: 720)\n"
-                "  --scene NAME     scene name (damaged-helmet or sponza)\n"
+                "  --scene NAME     scene name (damaged-helmet, sponza, or stress)\n"
                 "  --fixed-dt S     fixed simulation timestep\n"
                 "  --exposure EV    HDR exposure\n"
                 "  --screenshot P   write a PNG after the final frame\n"
                 "  --golden P       compare the final PNG against a golden image\n"
                 "  --perf-csv P     write per-frame timings\n"
+                "  --instance-id-report P  write debug InstanceId slot sets\n"
+                "  --instance-count N  stress-scene instance count\n"
                 "  --no-taa         disable temporal anti-aliasing\n"
                 "  --no-clustered-lighting  disable clustered lighting\n"
                 "  --no-transparency         disable forward transparency\n"
+                "  --gpu-driven              enable GPU scene/culling/indirect draws\n"
+                "  --two-phase-occlusion    enable previous/current Hi-Z re-test\n"
                 "  --no-validation  disable Vulkan validation layers\n"
                 "  --validation     enable Vulkan validation layers\n"
                 "  --help           show this message\n");
@@ -185,6 +189,12 @@ void printUsage() noexcept
             heightSpecified = true;
             continue;
         }
+        if (consumeValue("--instance-count", value) && value > 0)
+        {
+            // The selected demo consumes the value while constructing its
+            // procedural scene; the common runner still owns validation.
+            continue;
+        }
         const auto consumeString = [&](std::string_view name, std::string& output)
         {
             if (argument == name && index + 1 < argc)
@@ -205,6 +215,7 @@ void printUsage() noexcept
         if (consumeString("--screenshot", stringValue)) { config.screenshotPath = stringValue; continue; }
         if (consumeString("--golden", stringValue)) { config.goldenPath = stringValue; continue; }
         if (consumeString("--perf-csv", stringValue)) { config.performanceCsvPath = stringValue; continue; }
+        if (consumeString("--instance-id-report", stringValue)) { config.instanceIdReportPath = stringValue; continue; }
         const auto consumeFloat = [&](std::string_view name, float& output)
         {
             std::string text;
@@ -231,6 +242,13 @@ void printUsage() noexcept
         if (argument == "--no-taa") { config.engine.enableTaa = false; continue; }
         if (argument == "--no-clustered-lighting") { config.engine.enableClusteredLighting = false; continue; }
         if (argument == "--no-transparency") { config.engine.enableTransparency = false; continue; }
+        if (argument == "--gpu-driven") { config.engine.enableGpuDrivenScene = true; continue; }
+        if (argument == "--two-phase-occlusion")
+        {
+            config.engine.enableGpuDrivenScene = true;
+            config.engine.enableTwoPhaseOcclusion = true;
+            continue;
+        }
         HALCYON_LOG_ERROR("Unknown or malformed command-line option: ", argument);
         return false;
     }
@@ -306,6 +324,7 @@ int Application::run(
     {
         return EXIT_FAILURE;
     }
+    config.engine.instanceIdReportPath = config.instanceIdReportPath;
     constexpr std::uint64_t performanceWarmupFrameCount = 300;
     constexpr std::uint64_t performanceMeasurementFrameCount = 1800;
     constexpr std::uint64_t goldenWarmupFrameCount = 120;
@@ -594,7 +613,9 @@ int Application::run(
                                "transparency_enabled,cpu_ms,cpu_visibility_ms,gpu_ms,"
                                "gpu_frustum_cull_ms,gpu_indirect_build_ms,gpu_hiz_build_ms,"
                                "gpu_two_phase_ms,visible_instance_count,indirect_draw_count,"
-                               "primitive_count,cluster_overflow,taa_history_valid";
+                               "gpu_visibility_missing_count,gpu_visibility_validation_passed,"
+                               "gpu_instance_id_invalid_pixels,material_descriptor_bind_count,primitive_count,"
+                               "cluster_overflow,taa_history_valid";
                         for (const auto& passName : previousStats.executedPasses)
                         {
                             std::string name{passName};
@@ -636,6 +657,10 @@ int Application::run(
                         << previousStats.gpuTwoPhaseMs << ','
                         << previousStats.visibleInstanceCount << ','
                         << previousStats.indirectDrawCount << ','
+                        << previousStats.gpuVisibilityMissingCount << ','
+                        << (previousStats.gpuVisibilityValidationPassed ? 1 : 0) << ','
+                        << previousStats.gpuInstanceIdInvalidPixelCount << ','
+                        << previousStats.materialDescriptorBindCount << ','
                         << previousStats.primitiveCount << ','
                         << previousStats.clusterOverflowCount << ','
                         << (previousStats.taaHistoryValid ? 1 : 0);

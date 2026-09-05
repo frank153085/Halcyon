@@ -13,6 +13,7 @@ int main(int argc, char** argv)
 {
     std::string scene = "damaged-helmet";
     std::size_t instanceCount = 100'000;
+    bool twoPhaseOcclusion = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string argument = argv[i] != nullptr ? argv[i] : "";
@@ -37,6 +38,10 @@ int main(int argc, char** argv)
         else if (argument.rfind("--instance-count=", 0) == 0)
         {
             instanceCount = static_cast<std::size_t>(std::strtoull(argument.c_str() + 17, nullptr, 10));
+        }
+        else if (argument == "--two-phase-occlusion")
+        {
+            twoPhaseOcclusion = true;
         }
     }
     if (scene != "sponza" && scene != "damaged-helmet" && scene != "stress")
@@ -63,12 +68,14 @@ int main(int argc, char** argv)
     }
     config.engine.scene.name = scene;
     config.engine.scene.assetRoot = root;
+    config.engine.enableTwoPhaseOcclusion = twoPhaseOcclusion;
     if (scene == "stress")
     {
         Halcyon::ProceduralStressSceneConfig stressConfig;
         stressConfig.instanceCount = instanceCount;
         config.engine.scene.assets.push_back(
             {scene, Halcyon::makeProceduralStressScene(stressConfig)});
+        config.engine.enableGpuDrivenScene = true;
     }
     else
     {

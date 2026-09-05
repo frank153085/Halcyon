@@ -683,7 +683,11 @@ VoidResult VulkanDevice::pickPhysicalDevice()
         capabilities.dynamicRendering = best.features13.dynamicRendering != VK_FALSE;
         capabilities.synchronization2 = best.features13.synchronization2 != VK_FALSE;
         capabilities.timelineSemaphore = best.features12.timelineSemaphore != VK_FALSE;
-        capabilities.descriptorIndexing = best.features12.descriptorIndexing != VK_FALSE;
+        descriptorIndexingNonUniform_ =
+            best.features12.shaderSampledImageArrayNonUniformIndexing != VK_FALSE;
+        capabilities.descriptorIndexing = best.features12.descriptorIndexing != VK_FALSE &&
+            descriptorIndexingNonUniform_ &&
+            best.features12.descriptorBindingPartiallyBound != VK_FALSE;
         capabilities.bufferDeviceAddress = best.features12.bufferDeviceAddress != VK_FALSE;
         capabilities.indirectCount = best.features12.drawIndirectCount != VK_FALSE;
         capabilities.fragmentBarycentric = best.barycentricSupported;
@@ -776,6 +780,10 @@ VoidResult VulkanDevice::createDevice()
         enabled12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         enabled12.timelineSemaphore = VK_TRUE;
         enabled12.descriptorIndexing = capabilities.descriptorIndexing ? VK_TRUE : VK_FALSE;
+        enabled12.shaderSampledImageArrayNonUniformIndexing =
+            capabilities.descriptorIndexing ? VK_TRUE : VK_FALSE;
+        enabled12.descriptorBindingPartiallyBound =
+            capabilities.descriptorIndexing ? VK_TRUE : VK_FALSE;
         enabled12.bufferDeviceAddress = capabilities.bufferDeviceAddress ? VK_TRUE : VK_FALSE;
         enabled12.drawIndirectCount = capabilities.indirectCount ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceVulkan13Features enabled13{};

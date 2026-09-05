@@ -78,6 +78,14 @@ Halcyon::Result<void> VulkanBindlessTable::initialize(
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    std::array<VkDescriptorBindingFlags, Resources::kDescriptorTypeCount> bindingFlags{};
+    bindingFlags.fill(VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT);
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+    bindingFlagsInfo.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    bindingFlagsInfo.bindingCount = static_cast<std::uint32_t>(bindingFlags.size());
+    bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+    layoutInfo.pNext = &bindingFlagsInfo;
     layoutInfo.bindingCount = static_cast<std::uint32_t>(bindings.size());
     layoutInfo.pBindings = bindings.data();
     VkResult result = vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &layout_);

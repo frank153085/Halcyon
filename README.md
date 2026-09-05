@@ -146,10 +146,26 @@ On a machine with the M3 assets and a Vulkan device, the two-scene regression
 wrapper is `powershell -ExecutionPolicy Bypass -File scripts/run_regression.ps1`.
 It writes screenshots and performance CSV files under `out/captures/regression`
 and fails on a non-zero demo or golden-image comparison result.
+The M4 submission-path A/B gate is
+`powershell -ExecutionPolicy Bypass -File scripts/run_m4_ab.ps1`; it renders
+both scenes with fixed timestep and TAA disabled, then compares the
+GPU-driven capture against the legacy baseline at SSIM 0.995.
 
 Quality switches are `--fixed-dt <seconds>` (for example, `--fixed-dt 0.016666`), `--exposure`, `--no-taa`,
-`--no-clustered-lighting`, and `--no-transparency`. A standalone image gate is
+`--no-clustered-lighting`, `--no-transparency`, and the opt-in
+`--gpu-driven` path. `--two-phase-occlusion` enables GPU-driven rendering plus
+the previous/current-frame Hi-Z re-test. A standalone image gate is
 available for CI and RenderDoc captures:
+
+GPU-driven runs also perform an asynchronous per-frame visibility audit. The
+performance CSV exposes `gpu_visibility_missing_count` (CPU-reference slots
+absent from the GPU result) and `gpu_visibility_validation_passed`; the audit
+consumes a completed frame-slot readback without blocking command recording.
+For a deterministic stress-scene orbit and an automated pass/fail check, run
+`powershell -ExecutionPolicy Bypass -File scripts/run_m4_visibility.ps1`.
+The literal R32Uint attachment set comparison (frustum-only reference versus
+two-phase occlusion) is available through
+`powershell -ExecutionPolicy Bypass -File scripts/run_m4_instance_id.ps1`.
 
 ```powershell
 out\build\m3-msvc-debug\HalcyonGoldenCompare.exe `

@@ -234,7 +234,8 @@ Halcyon::Result<MeshResource> GpuResourceManager::uploadMesh(
     VkBufferCreateInfo vertexInfo{};
     vertexInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     vertexInfo.size = vertices.size() * sizeof(MeshVertex);
-    vertexInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    vertexInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     vertexInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     const auto vertexResult = allocator_->createBuffer(vertexInfo, MemoryUsage::GpuOnly);
     if (!vertexResult)
@@ -244,7 +245,8 @@ Halcyon::Result<MeshResource> GpuResourceManager::uploadMesh(
     mesh.vertexBuffer = vertexResult.value();
     VkBufferCreateInfo indexInfo = vertexInfo;
     indexInfo.size = sourceMesh.indices.size() * sizeof(std::uint32_t);
-    indexInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    indexInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     const auto indexResult = allocator_->createBuffer(indexInfo, MemoryUsage::GpuOnly);
     if (!indexResult)
     {
@@ -273,6 +275,8 @@ Halcyon::Result<MeshResource> GpuResourceManager::uploadMesh(
         return upload.error();
     }
     mesh.indexCount = static_cast<std::uint32_t>(sourceMesh.indices.size());
+    mesh.boundsMin = sourceMesh.boundsMin;
+    mesh.boundsMax = sourceMesh.boundsMax;
     return mesh;
 }
 

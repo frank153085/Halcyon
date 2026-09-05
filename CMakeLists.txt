@@ -149,6 +149,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/GpuAllocator.cpp
     Source/Renderer/Vulkan/GpuAllocator.h
     Source/Renderer/Vulkan/GpuUploader.cpp
+    Source/Renderer/Vulkan/VulkanGpuSceneBuffers.cpp
+    Source/Renderer/Vulkan/VulkanGpuSceneBuffers.h
     Source/Renderer/Vulkan/GpuUploader.h
     Source/Renderer/Vulkan/GpuResourceManager.cpp
     Source/Renderer/Vulkan/StbImage.cpp
@@ -284,6 +286,10 @@ if(HALCYON_DXC_EXECUTABLE)
     set(HALCYON_FRUSTUM_CULL_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/frustum_cull.comp.spv")
     set(HALCYON_INDIRECT_BUILD_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/build_indirect_commands.comp.spv")
     set(HALCYON_HIZ_BUILD_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/hiz_build.comp.spv")
+    set(HALCYON_GPU_DRIVEN_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/gpu_driven.vert.spv")
+    set(HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/gpu_driven.frag.spv")
+    set(HALCYON_OCCLUSION_PHASE1_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/occlusion_phase1.comp.spv")
+    set(HALCYON_OCCLUSION_PHASE2_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/occlusion_phase2.comp.spv")
     add_custom_command(OUTPUT "${HALCYON_PBR_VERTEX_SPIRV}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
@@ -349,12 +355,34 @@ if(HALCYON_DXC_EXECUTABLE)
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
                 -Fo "${HALCYON_HIZ_BUILD_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/hiz_build.comp.hlsl"
         DEPENDS Shaders/hiz_build.comp.hlsl VERBATIM COMMENT "Compiling Hi-Z shader")
+    add_custom_command(OUTPUT "${HALCYON_GPU_DRIVEN_VERTEX_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
+                -Fo "${HALCYON_GPU_DRIVEN_VERTEX_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/gpu_driven.vert.hlsl"
+        DEPENDS Shaders/gpu_driven.vert.hlsl VERBATIM COMMENT "Compiling GPU-driven vertex shader")
+    add_custom_command(OUTPUT "${HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T ps_6_6 -E main
+                -Fo "${HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/gpu_driven.frag.hlsl"
+        DEPENDS Shaders/gpu_driven.frag.hlsl VERBATIM COMMENT "Compiling GPU-driven bindless fragment shader")
+    add_custom_command(OUTPUT "${HALCYON_OCCLUSION_PHASE1_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_OCCLUSION_PHASE1_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/occlusion_phase1.comp.hlsl"
+        DEPENDS Shaders/occlusion_phase1.comp.hlsl VERBATIM COMMENT "Compiling phase 1 occlusion shader")
+    add_custom_command(OUTPUT "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+        COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T cs_6_6 -E main
+                -Fo "${HALCYON_OCCLUSION_PHASE2_SPIRV}" "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/occlusion_phase2.comp.hlsl"
+        DEPENDS Shaders/occlusion_phase2.comp.hlsl VERBATIM COMMENT "Compiling phase 2 occlusion shader")
     add_custom_target(HalcyonShaders ALL
         DEPENDS "${HALCYON_FULLSCREEN_VERTEX_SPIRV}"
             "${HALCYON_PBR_VERTEX_SPIRV}" "${HALCYON_TRANSPARENT_VERTEX_SPIRV}" "${HALCYON_PBR_FRAGMENT_SPIRV}" "${HALCYON_GBUFFER_FRAGMENT_SPIRV}"
             "${HALCYON_TRANSPARENT_FRAGMENT_SPIRV}" "${HALCYON_TONEMAP_FRAGMENT_SPIRV}" "${HALCYON_TAA_COMPUTE_SPIRV}"
             "${HALCYON_CSM_VERTEX_SPIRV}" "${HALCYON_CLUSTER_BUILD_SPIRV}"
             "${HALCYON_FRUSTUM_CULL_SPIRV}" "${HALCYON_INDIRECT_BUILD_SPIRV}" "${HALCYON_HIZ_BUILD_SPIRV}"
+            "${HALCYON_GPU_DRIVEN_VERTEX_SPIRV}" "${HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV}"
+            "${HALCYON_OCCLUSION_PHASE1_SPIRV}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
     )
     if(HALCYON_SPIRV_VAL_EXECUTABLE)
         add_custom_target(HalcyonShaderValidation ALL
@@ -371,6 +399,10 @@ if(HALCYON_DXC_EXECUTABLE)
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_FRUSTUM_CULL_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_INDIRECT_BUILD_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_HIZ_BUILD_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_GPU_DRIVEN_VERTEX_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE1_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
             DEPENDS HalcyonShaders
             COMMENT "Validating generated M3 SPIR-V modules"
             VERBATIM
@@ -615,9 +647,24 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonHiZReductionTests)
     add_test(NAME Halcyon.HiZReduction COMMAND HalcyonHiZReductionTests)
 
+    add_executable(HalcyonStressSceneTests
+        Tests/StressSceneTests.cpp
+        Source/Renderer/Scene/ProceduralStressScene.cpp)
+    target_link_libraries(HalcyonStressSceneTests PRIVATE HalcyonCore glm::glm Halcyon::RobinMap)
+    target_include_directories(HalcyonStressSceneTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source" "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+    halcyon_enable_warnings(HalcyonStressSceneTests)
+    add_test(NAME Halcyon.StressScene COMMAND HalcyonStressSceneTests)
+
     # Convenience aggregate target used by IDEs and CI jobs that only need to
     # build the complete CPU test suite.  CTest remains the runner of record.
     add_custom_target(HalcyonTests)
+    add_custom_target(HalcyonM4Tests)
+    add_dependencies(HalcyonM4Tests
+        HalcyonGpuSceneTests
+        HalcyonFrustumCullingTests
+        HalcyonHiZReductionTests)
+    add_dependencies(HalcyonM4Tests HalcyonStressSceneTests)
     add_dependencies(HalcyonTests
         HalcyonCoreTests
         HalcyonMemoryAllocatorTests

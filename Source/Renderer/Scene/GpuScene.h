@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -52,6 +53,32 @@ struct MeshMaterialRow
     std::uint32_t materialIndex = 0;
     std::uint32_t flags = 0;
     std::uint32_t lodState = 0;
+};
+
+// Draw metadata indexes a renderer-owned consolidated vertex/index stream.
+// Keeping it separate from instances lets one indirect command list contain
+// arbitrary meshes without rebinding vertex or index buffers per object.
+struct MeshDrawRow
+{
+    std::uint32_t indexCount = 0;
+    std::uint32_t firstIndex = 0;
+    std::int32_t vertexOffset = 0;
+    std::uint32_t reserved = 0;
+};
+static_assert(sizeof(MeshDrawRow) == 16);
+
+struct alignas(16) MaterialGpuData
+{
+    std::array<float, 4> baseColorFactor{1, 1, 1, 1};
+    std::array<float, 4> emissiveFactor{0, 0, 0, 0};
+    std::array<float, 4> factors{0, 1, 0.5f, 0};
+    std::array<std::uint32_t, 8> textureIndices{};
+};
+static_assert(sizeof(MaterialGpuData) == 80);
+
+struct MaterialSoA
+{
+    std::vector<MaterialGpuData> materials;
 };
 
 struct GpuSceneDirtyRange
@@ -101,6 +128,17 @@ public:
         free_.pop_back();
         states_[slot] = State::Live;
         return slot;
+    }
+
+    void ensureCapacity(std::uint32_t required)
+    {
+        const std::uint32_t oldCapacity = capacity();
+        if (required <= oldCapacity) return;
+        generations_.resize(required, 1u);
+        states_.resize(required, State::Free);
+        free_.reserve(free_.size() + required - oldCapacity);
+        for (std::uint32_t slot = required; slot-- > oldCapacity;)
+            free_.push_back(slot);
     }
 
     [[nodiscard]] SlotHandle allocateHandle()
@@ -199,6 +237,115 @@ struct GpuSceneSoA
     std::vector<TransformRow> transforms;
     std::vector<BoundsRow> bounds;
     std::vector<MeshMaterialRow> meshMaterials;
+    MaterialSoA materials;
+};
+
+// CPU mirror that applies RenderExtractor deltas while retaining stable slot
+// indices. The Vulkan uploader can consume dirtyRanges() after each update.
+class GpuSceneState final
+{
+public:
+    explicit GpuSceneState(std::uint32_t capacity = 1024)
+        : allocator_(capacity), soa_{std::vector<TransformRow>(capacity),
+                  std::vector<BoundsRow>(capacity), std::vector<MeshMaterialRow>(capacity), {}}
+    {
+    }
+
+    void reset(std::uint32_t capacity = 1024)
+    {
+        allocator_ = GpuSceneSlotAllocator(capacity);
+        soa_.transforms.assign(capacity, {});
+        soa_.bounds.assign(capacity, {});
+        soa_.meshMaterials.assign(capacity, {});
+        soa_.materials.materials.clear();
+        entityToSlot_.clear();
+        dirty_.clear();
+    }
+
+    [[nodiscard]] bool applyCreated(Ecs::Entity entity, const InstanceData& instance,
+        BoundsRow bounds = {})
+    {
+        if (entityToSlot_.contains(entity)) return false;
+        std::uint32_t slot = allocator_.allocate();
+        if (slot == GpuSceneSlotAllocator::invalidSlot)
+        {
+            const std::uint32_t oldCapacity = allocator_.capacity();
+            if (oldCapacity == std::numeric_limits<std::uint32_t>::max()) return false;
+            const std::uint32_t nextCapacity = oldCapacity >
+                    std::numeric_limits<std::uint32_t>::max() / 2u
+                ? std::numeric_limits<std::uint32_t>::max()
+                : std::max(1u, oldCapacity * 2u);
+            allocator_.ensureCapacity(nextCapacity);
+            soa_.transforms.resize(nextCapacity);
+            soa_.bounds.resize(nextCapacity);
+            soa_.meshMaterials.resize(nextCapacity);
+            slot = allocator_.allocate();
+        }
+        if (slot == GpuSceneSlotAllocator::invalidSlot) return false;
+        entityToSlot_[entity] = slot;
+        soa_.transforms[slot].model = instance.transform;
+        soa_.bounds[slot] = bounds;
+        soa_.meshMaterials[slot] = {instance.meshId, instance.materialId, instance.flags, 0};
+        markDirty(slot);
+        return true;
+    }
+
+    [[nodiscard]] bool applyUpdated(Ecs::Entity entity, const InstanceData& instance,
+        BoundsRow bounds = {})
+    {
+        const auto found = entityToSlot_.find(entity);
+        if (found == entityToSlot_.end()) return false;
+        const std::uint32_t slot = found->second;
+        soa_.transforms[slot].model = instance.transform;
+        soa_.bounds[slot] = bounds;
+        soa_.meshMaterials[slot] = {instance.meshId, instance.materialId, instance.flags,
+            soa_.meshMaterials[slot].lodState};
+        markDirty(slot);
+        return true;
+    }
+
+    [[nodiscard]] bool applyDestroyed(Ecs::Entity entity, std::uint64_t retireTimeline)
+    {
+        const auto found = entityToSlot_.find(entity);
+        if (found == entityToSlot_.end()) return false;
+        const bool released = allocator_.release(found->second, retireTimeline);
+        if (released)
+        {
+            const auto slot = found->second;
+            soa_.bounds[slot].sphereCenterRadius[3] = -1.0f;
+            soa_.meshMaterials[slot].meshIndex = std::numeric_limits<std::uint32_t>::max();
+            markDirty(slot);
+            entityToSlot_.erase(found);
+        }
+        return released;
+    }
+
+    [[nodiscard]] std::size_t collect(std::uint64_t completedTimeline)
+    {
+        return allocator_.collect(completedTimeline);
+    }
+    [[nodiscard]] const GpuSceneSoA& soa() const noexcept { return soa_; }
+    [[nodiscard]] const std::vector<GpuSceneDirtyRange>& dirtyRanges() const noexcept { return dirty_; }
+    void clearDirtyRanges() noexcept { dirty_.clear(); }
+    [[nodiscard]] std::uint32_t slot(Ecs::Entity entity) const noexcept
+    {
+        const auto found = entityToSlot_.find(entity);
+        return found == entityToSlot_.end() ? GpuSceneSlotAllocator::invalidSlot : found->second;
+    }
+
+private:
+    void markDirty(std::uint32_t slot)
+    {
+        if (!dirty_.empty() && dirty_.back().first + dirty_.back().count == slot)
+            ++dirty_.back().count;
+        else
+            dirty_.push_back({slot, 1});
+    }
+
+    GpuSceneSlotAllocator allocator_;
+    GpuSceneSoA soa_;
+    std::unordered_map<Ecs::Entity, std::uint32_t, Ecs::Entity::Hasher> entityToSlot_;
+    std::vector<GpuSceneDirtyRange> dirty_;
 };
 
 [[nodiscard]] inline BoundsRow computeWorldBounds(

@@ -20,7 +20,8 @@ public:
         VkQueue queue,
         GpuAllocator& allocator,
         BufferAllocation destination,
-        std::span<const std::byte> data);
+        std::span<const std::byte> data,
+        VkDeviceSize destinationOffset = 0);
 
     [[nodiscard]] Halcyon::Result<void> uploadImage(VkDevice device,
         VkCommandPool commandPool,

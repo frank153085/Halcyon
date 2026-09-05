@@ -42,6 +42,7 @@ private:
 
     GLFWwindow* window_ = nullptr;
     RendererConfig config_{};
+    bool descriptorIndexingNonUniform_ = false;
 };
 
 } // namespace Halcyon::Vulkan

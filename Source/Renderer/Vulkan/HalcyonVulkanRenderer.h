@@ -9,6 +9,8 @@
 #include "../Scene/Camera.h"
 #include "../Scene/FramePacket.h"
 #include "../Scene/SceneDatabase.h"
+#include "../Scene/GpuScene.h"
+#include "../Scene/Ecs/RenderExtractor.h"
 #include "Halcyon/RenderTypes.h"
 
 #include <array>
@@ -41,6 +43,9 @@ struct RendererConfig
     bool enableTaa = true;
     bool enableClusteredLighting = true;
     bool enableTransparency = true;
+    bool enableGpuDrivenScene = false;
+    bool enableTwoPhaseOcclusion = false;
+    std::filesystem::path instanceIdReportPath{};
 };
 
 // The Vulkan backend consumes the canonical packet types from the
@@ -103,6 +108,11 @@ public:
     // this exactly once while assembling each immutable frame packet.
     [[nodiscard]] Halcyon::Result<void> remapFramePacket(
         Halcyon::Renderer::Scene::OwnedFramePacket& packet) const;
+    [[nodiscard]] Halcyon::Result<void> updateGpuScene(
+        std::span<const InstanceData> instances);
+    [[nodiscard]] Halcyon::Result<void> updateGpuSceneDelta(
+        const Halcyon::Renderer::Scene::Ecs::RenderExtractor::Delta& delta);
+    [[nodiscard]] bool gpuDrivenSceneEnabled() const noexcept;
     // Scene topology or material changes invalidate temporal history before
     // the next frame is submitted.
     void invalidateTaaHistory() noexcept;

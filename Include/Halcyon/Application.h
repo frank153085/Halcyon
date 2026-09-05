@@ -39,6 +39,7 @@ struct ApplicationConfig
     std::filesystem::path screenshotPath{};
     std::filesystem::path goldenPath{};
     std::filesystem::path performanceCsvPath{};
+    std::filesystem::path instanceIdReportPath{};
 };
 
 class Application final

@@ -7,60 +7,64 @@ namespace Halcyon::Renderer::Scene::Ecs
 
 void TransformManager::updateWorldTransforms()
 {
-    // 0 = unvisited, 1 = visiting, 2 = resolved.  A cycle is treated as a
-    // root at the point where it is detected, keeping the update finite and
-    // deterministic while still producing useful transforms.
-    tsl::robin_map<Entity, std::uint8_t, Entity::Hasher> state;
-    state.reserve(storage_.size());
+    updatedEntities_.clear();
+    if (!hasDirtyTransforms_) return;
+    if (updatedEntities_.capacity() < storage_.size())
+        updatedEntities_.reserve(storage_.size());
+    // Dense indices avoid a per-frame hash allocation.  0 = unvisited,
+    // 1 = visiting, 2 = resolved; parentChanged propagates dirty transforms
+    // to descendants even when only the parent was edited.
+    state_.assign(storage_.size(), 0u);
+    parentChanged_.assign(storage_.size(), 0u);
 
-    std::function<void(Entity)> resolve = [&](Entity entity)
+    std::function<bool(std::uint32_t)> resolve = [&](std::uint32_t index) -> bool
     {
-        TransformComponent* component = storage_.get(entity);
-        if (component == nullptr)
+        if (index >= storage_.size()) return false;
+        if (state_[index] == 2u) return parentChanged_[index] != 0u;
+        TransformComponent& component = storage_.components()[index];
+        if (state_[index] == 1u)
         {
-            return;
+            component.worldTransform = component.localTransform;
+            component.dirty = false;
+            state_[index] = 2u;
+            parentChanged_[index] = 1u;
+            updatedEntities_.push_back(storage_.entities()[index]);
+            return true;
         }
-
-        auto [stateIt, inserted] = state.emplace(entity, 0u);
-        (void)inserted;
-        if (stateIt->second == 2u)
+        state_[index] = 1u;
+        bool inheritedChange = false;
+        std::uint32_t parentIndex = DenseComponentManager<TransformComponent>::kInvalidInstance;
+        if (component.parent.isValid() && component.parent != storage_.entities()[index])
         {
-            return;
-        }
-        if (stateIt->second == 1u)
-        {
-            component->worldTransform = component->localTransform;
-            component->dirty = false;
-            stateIt.value() = 2u;
-            return;
-        }
-
-        stateIt.value() = 1u;
-        if (component->parent.isValid() && storage_.has(component->parent) &&
-            component->parent != entity)
-        {
-            resolve(component->parent);
-            if (const TransformComponent* parent = storage_.get(component->parent))
+            parentIndex = storage_.instance(component.parent);
+            if (parentIndex != DenseComponentManager<TransformComponent>::kInvalidInstance)
             {
-                component->worldTransform = parent->worldTransform * component->localTransform;
+                // Break a malformed parent cycle at the edge that reaches an
+                // already-visiting node. Every component is still resolved
+                // exactly once and remains usable as a local root.
+                if (state_[parentIndex] == 1u)
+                    parentIndex = DenseComponentManager<TransformComponent>::kInvalidInstance;
+                else
+                    inheritedChange = resolve(parentIndex);
             }
+        }
+        const bool changed = component.dirty || inheritedChange;
+        if (changed)
+        {
+            if (parentIndex == DenseComponentManager<TransformComponent>::kInvalidInstance)
+                component.worldTransform = component.localTransform;
             else
-            {
-                component->worldTransform = component->localTransform;
-            }
+                component.worldTransform = storage_.components()[parentIndex].worldTransform *
+                    component.localTransform;
+            updatedEntities_.push_back(storage_.entities()[index]);
         }
-        else
-        {
-            component->worldTransform = component->localTransform;
-        }
-        component->dirty = false;
-        stateIt.value() = 2u;
+        component.dirty = false;
+        state_[index] = 2u;
+        parentChanged_[index] = changed ? 1u : 0u;
+        return changed;
     };
-
-    for (const Entity entity : storage_.entities())
-    {
-        resolve(entity);
-    }
+    for (std::uint32_t index = 0; index < storage_.size(); ++index) (void)resolve(index);
+    hasDirtyTransforms_ = false;
 }
 
 } // namespace Halcyon::Renderer::Scene::Ecs

@@ -35,6 +35,8 @@ struct MeshResource
     BufferAllocation vertexBuffer{};
     BufferAllocation indexBuffer{};
     std::uint32_t indexCount = 0;
+    glm::vec3 boundsMin{0.0f};
+    glm::vec3 boundsMax{0.0f};
 };
 
 class GpuResourceManager final

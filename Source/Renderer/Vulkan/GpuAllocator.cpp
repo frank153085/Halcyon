@@ -123,7 +123,11 @@ Halcyon::Result<BufferAllocation> GpuAllocator::createBuffer(
             {Halcyon::ErrorCode::OutOfMemory, "GPU allocation bookkeeping failed"});
     }
     impl_->bytes += details.size;
-    return BufferAllocation{buffer, details.size, id};
+    // `details.size` is the backing allocation size and may include allocator
+    // padding. BufferAllocation::size is the Vulkan buffer's logical range;
+    // using the padded value in VkBufferCopy can exceed VkBufferCreateInfo's
+    // size on drivers that report extra allocation bytes.
+    return BufferAllocation{buffer, createInfo.size, id};
 }
 
 Halcyon::Result<ImageAllocation> GpuAllocator::createImage(

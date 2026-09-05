@@ -191,6 +191,33 @@ void fileAndShutdownTests(TestContext& context)
     HALCYON_EXPECT(context, !manager.findInstance("monkey-instance").isValid());
 }
 
+void proceduralStressSharingTests(TestContext& context)
+{
+    constexpr std::size_t instanceCount = 257;
+    Halcyon::ProceduralStressSceneConfig config;
+    config.instanceCount = instanceCount;
+    const Halcyon::StaticScene stress = Halcyon::makeProceduralStressScene(config);
+    HALCYON_EXPECT(context, stress.primitives.size() == 1);
+    HALCYON_EXPECT(context, stress.nodes.size() == instanceCount);
+
+    Halcyon::SceneManager manager;
+    const auto asset = manager.createAsset("stress", stress);
+    HALCYON_EXPECT(context, asset);
+    HALCYON_EXPECT(context, manager.database().meshCount() == 1);
+    const auto instance = manager.createInstance({"stress-instance", "stress"});
+    HALCYON_EXPECT(context, instance);
+    HALCYON_EXPECT(context, manager.scene().renderables().size() == instanceCount);
+    manager.scene().updateTransforms();
+    const auto packet = Halcyon::Renderer::Scene::Ecs::RenderExtractor::extract(manager.scene(), {});
+    HALCYON_EXPECT(context, packet.instances.size() == instanceCount);
+    if (!packet.instances.empty())
+    {
+        const std::uint32_t mesh = packet.instances.front().meshId;
+        for (const auto& item : packet.instances)
+            HALCYON_EXPECT(context, item.meshId == mesh);
+    }
+}
+
 } // namespace
 
 int main()
@@ -198,6 +225,7 @@ int main()
     TestContext context;
     proceduralLifecycleTests(context);
     fileAndShutdownTests(context);
+    proceduralStressSharingTests(context);
     if (context.failures() != 0)
     {
         std::cerr << context.failures() << " SceneManager test(s) failed\n";

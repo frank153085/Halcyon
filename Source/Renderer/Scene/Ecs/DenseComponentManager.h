@@ -97,6 +97,11 @@ public:
         return components_;
     }
 
+    [[nodiscard]] std::span<Component> components() noexcept
+    {
+        return components_;
+    }
+
     [[nodiscard]] std::size_t size() const noexcept
     {
         return components_.size();

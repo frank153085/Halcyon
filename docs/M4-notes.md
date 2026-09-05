@@ -10,25 +10,74 @@ Instances use stable slots. Transform, bounds, and mesh/material metadata are
 stored as separate arrays (SoA), allowing transform-only updates without
 rewriting metadata. Bounds are world-space AABBs plus a conservative bounding
 sphere and are recomputed only when a transform changes. Slot reclamation is
-deferred until the submitted timeline has completed.
+deferred until the submitted frame timeline has completed; the Vulkan frame
+loop feeds that same completion value to both the slot allocator and bindless
+descriptor table.
+
+`MaterialGpuData` is the row ABI for the bindless material table (factors plus
+five texture indices). GPU-driven draws use one global bindless descriptor set
+with a 256-entry sampled-image array and a 16-entry sampler array when device
+capacities permit it; devices below that fixed shader ABI use the M3
+material-set fallback. The unchanged deferred path remains available.
 
 ## Compute stages
 
 `frustum_cull.comp.hlsl` appends visible slot indices using an atomic counter;
+it also reads the per-slot `MeshMaterialRow.lodState` and writes a parallel
+reserved state stream for the next LOD stage;
 `build_indirect_commands.comp.hlsl` emits one indexed indirect command per
-visible slot (mesh batching is intentionally left for a later optimization);
-`hiz_build.comp.hlsl` performs reversed-Z 2x2 minimum reduction. The latter is
-the conservative choice: a maximum reduction could incorrectly classify a
-partially covered object as fully occluded.
+visible slot. Mesh vertex/index data is consolidated into renderer-owned
+streams when scene assets change, and a GPU mesh-draw table supplies each
+command's `indexCount`, `firstIndex`, and `vertexOffset`. This allows mixed
+opaque meshes and bindless materials to share one indirect command list;
+transparent or double-sided packets retain the M3 CPU path.
+`hiz_build.comp.hlsl` performs reversed-Z 2x2 minimum reduction. Hi-Z mip 0 is
+half the scene-depth resolution, so its first dispatch is the first reduction
+rather than a same-size copy. Minimum reduction is the conservative choice: a
+maximum reduction could incorrectly classify a partially covered object as
+fully occluded.
 
-The two-phase occlusion scheduler is staged after the culling/indirect path.
-Phase 1 consumes the previous frame's Hi-Z pyramid, while phase 2 re-tests
-potential false occlusions against the current frame depth before submitting
-the G-buffer pass.
+The Hi-Z pyramid is a persistent FrameGraph resource and is built level by
+level after the G-buffer pass. When enabled, phase 1 classifies the frustum
+candidate list against the previous pyramid, while phase 2 re-tests rejected
+objects against the current pyramid and overlays any newly visible instances
+into the existing G-buffer. The feature is opt-in (`enableTwoPhaseOcclusion`)
+and the first frame conservatively skips history-based rejection. Because the
+overlay can change depth, the renderer rebuilds the complete final pyramid
+after phase 2; only that pyramid is retained for the following frame. The Hi-Z
+pass declares its LOAD/STORE G-buffer and depth accesses explicitly, so the
+FrameGraph versions consumed by deferred lighting include the phase-2 overlay.
+
+The renderer uploads GPU scene deltas through destination-offset staging copies;
+unchanged slots do not cause a full scene upload. The upload helper currently
+waits for the transfer queue as a development bridge and should be replaced by
+the frame upload ring before performance sign-off.
+
+Visibility/indirect scratch buffers are allocated per frame-in-flight and the
+renderer selects the matching set before recording. This prevents a later
+frame's culling pass from overwriting counters still consumed by an earlier
+frame. GPU stage timestamps (frustum, indirect, Hi-Z, and two-phase) are
+reported through the regular performance CSV fields when timestamp queries are
+available.
 
 ## Known performance scope
 
 The initial indirect builder emits one command per instance. It is functionally
-correct and provides the required synchronization/descriptor boundaries, but
-does not yet batch commands by mesh. Mesh batching and full two-phase GPU
-integration are follow-up optimizations.
+correct and supports mixed meshes through consolidated geometry, but does not
+yet merge adjacent commands into instanced mesh batches. Command compaction
+remains a follow-up optimization; two-phase occlusion is implemented but
+intentionally opt-in while GPU validation and capture coverage are expanded.
+For B13/B17 the development path copies the frustum/phase-2 slot-index lists
+into a per-frame readback buffer and compares their union against a CPU
+reference set built from the same world-space bounds and clip planes. The
+result is exposed as `gpu_visibility_missing_count` and
+`gpu_visibility_validation_passed` in `FrameStats`/performance CSV. In
+GPU-driven mode the G-buffer also carries a debug `R32Uint InstanceId` MRT
+(encoded as `slot + 1`, with zero reserved for clear/background). That image
+is copied asynchronously into a frame-slot readback buffer and scanned after
+the slot fence completes; out-of-range IDs are reported as
+`gpu_instance_id_invalid_pixels`. The `scripts/run_m4_visibility.ps1` audit
+requires both visibility checks to pass. For the strict reference-vs-occlusion
+set comparison, `scripts/run_m4_instance_id.ps1` runs a frustum-only reference
+and a two-phase pass with fixed timestep, then compares the per-frame ID report
+files and emits a compact summary CSV.

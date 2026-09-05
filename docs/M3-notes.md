@@ -31,8 +31,9 @@ before changing the frame submission path for M4.
 - CSM uses 3x3 PCF without cascade interval blending (`Shaders/pbr.frag.hlsl`).
 - TAA resolve (`Shaders/taa.comp.hlsl`) has no camera Halton/2x2 jitter; it
   relies on history clamping for temporal stability.
-- Golden images are generated under `out/`, which is ignored by Git. A checked-
-  in baseline and automated image-regression job are therefore still required.
+- Golden images are checked in under `Tests/GoldenImages/`; the local
+  `scripts/run_regression.ps1` wrapper regenerates deterministic captures and
+  verifies SSIM against those baselines.
 
 ## Capture and regression workflow
 

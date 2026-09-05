@@ -19,6 +19,7 @@ struct VulkanFrame
     std::uint64_t timelineValue = 0;
     std::uint32_t queryBase = 0;
     std::uint32_t passQueryBase = 0;
+    std::uint32_t stageQueryBase = 0;
     // Names are copied from the compiled graph for delayed timestamp reads.
     // They are kept per frame because the graph can change between frames.
     std::vector<std::string> passNames;
@@ -28,6 +29,7 @@ struct VulkanFrame
 class VulkanFrameContext final
 {
 public:
+    static constexpr std::uint32_t StageQueryCount = 8;
     std::vector<VulkanFrame> frames;
     std::uint32_t currentFrame = 0;
     VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
@@ -69,6 +71,8 @@ public:
         const VulkanFrame& frame,
         std::uint32_t passIndex,
         double& milliseconds) const noexcept;
+    [[nodiscard]] VkResult readStageTime(VkDevice device, const VulkanFrame& frame,
+        std::uint32_t stageIndex, double& milliseconds) const noexcept;
     [[nodiscard]] bool writePassTimestamp(VkCommandBuffer commandBuffer,
         const VulkanFrame& frame,
         std::uint32_t passIndex,

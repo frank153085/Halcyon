@@ -12,7 +12,8 @@ foreach ($scene in @("damaged-helmet", "sponza")) {
     $actual = Join-Path $CaptureDirectory "$scene.png"
     $csv = Join-Path $CaptureDirectory "$scene.csv"
     $golden = Join-Path $GoldenDirectory "$scene-golden.png"
-    & $Demo --scene $scene --golden $golden --frames 120 --screenshot $actual --perf-csv $csv --no-validation
+    & $Demo --scene $scene --golden $golden --frames 120 --fixed-dt 0.016666 `
+        --no-taa --screenshot $actual --perf-csv $csv --no-validation
     if ($LASTEXITCODE -ne 0) {
         throw "M3 demo failed for scene '$scene' (exit code $LASTEXITCODE)"
     }

@@ -67,6 +67,10 @@ namespace
     result.gpuTwoPhaseMs = source.gpuTwoPhaseMs;
     result.visibleInstanceCount = source.visibleInstanceCount;
     result.indirectDrawCount = source.indirectDrawCount;
+    result.gpuVisibilityMissingCount = source.gpuVisibilityMissingCount;
+    result.gpuVisibilityValidationPassed = source.gpuVisibilityValidationPassed;
+    result.gpuInstanceIdInvalidPixelCount = source.gpuInstanceIdInvalidPixelCount;
+    result.materialDescriptorBindCount = source.materialDescriptorBindCount;
     result.gpuFrameMs = source.gpuFrameMs;
     result.deviceMemoryBytes = source.deviceMemoryBytes;
     result.primitiveCount = source.primitiveCount;
@@ -147,6 +151,10 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.enableTaa = config.enableTaa;
     backendConfig.enableClusteredLighting = config.enableClusteredLighting;
     backendConfig.enableTransparency = config.enableTransparency;
+    backendConfig.enableGpuDrivenScene = config.enableGpuDrivenScene ||
+        config.enableTwoPhaseOcclusion;
+    backendConfig.enableTwoPhaseOcclusion = config.enableTwoPhaseOcclusion;
+    backendConfig.instanceIdReportPath = config.instanceIdReportPath;
 
     impl->window = &window;
     const auto initializeResult = impl->renderer.initialize(
@@ -264,6 +272,19 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         HALCYON_PROFILE_SCOPE("CPU visibility extraction");
         const auto visibilityBegin = std::chrono::steady_clock::now();
         impl_->sceneManager.scene().updateTransforms();
+        if (impl_->renderer.gpuDrivenSceneEnabled())
+        {
+            auto delta = impl_->sceneManager.extractDelta(impl_->view.camera().data(), frameIndex);
+            if (!delta)
+                return Result<FrameStats>::failure(delta.error().withContext(
+                    "Engine::render GPU scene delta"));
+            const auto gpuSceneUpdate = impl_->renderer.updateGpuSceneDelta(delta.value());
+            if (!gpuSceneUpdate)
+                return Result<FrameStats>::failure(
+                    gpuSceneUpdate.error().withContext("Engine::render GPU scene delta upload"));
+        }
+        const double cpuVisibilityMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - visibilityBegin).count();
         auto packet = impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
         if (!packet)
         {
@@ -271,8 +292,7 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         }
         const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.value().view());
         FrameStats stats = translateStats(backendStats);
-        stats.cpuVisibilityMs = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - visibilityBegin).count();
+        stats.cpuVisibilityMs = cpuVisibilityMs;
         if (stats.deviceLost)
         {
             impl_->initialized = false;

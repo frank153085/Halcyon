@@ -24,7 +24,8 @@ Halcyon::Result<void> VulkanSceneResources::initialize(VkDevice device,
     VkCommandPool uploadCommandPool,
     VkQueue graphicsQueue,
     GpuAllocator& allocator,
-    GpuUploader& uploader)
+    GpuUploader& uploader,
+    bool enableGpuDrivenMeshes)
 {
     cleanup();
     if (device == VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE || uploadCommandPool == VK_NULL_HANDLE ||
@@ -39,6 +40,7 @@ Halcyon::Result<void> VulkanSceneResources::initialize(VkDevice device,
     graphicsQueue_ = graphicsQueue;
     allocator_ = &allocator;
     uploader_ = &uploader;
+    gpuDrivenMeshesEnabled_ = enableGpuDrivenMeshes;
     resourceManager_.initialize(device_, physicalDevice_, uploadCommandPool_, graphicsQueue_, allocator, uploader);
     const auto layout = createDescriptorLayout();
     if (!layout)
@@ -386,6 +388,22 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
             rollback();
             return Halcyon::Result<void>::failure(factorsBuffer.error());
         }
+        Halcyon::Renderer::Scene::MaterialGpuData bindlessRow{};
+        bindlessRow.baseColorFactor = {source->pbr.baseColor.r, source->pbr.baseColor.g,
+            source->pbr.baseColor.b, source->pbr.baseColor.a};
+        bindlessRow.emissiveFactor = {source->pbr.emissive.r, source->pbr.emissive.g,
+            source->pbr.emissive.b, std::clamp(source->pbr.ambientOcclusion, 0.0f, 1.0f)};
+        bindlessRow.factors = {std::clamp(source->pbr.metallic, 0.0f, 1.0f),
+            std::clamp(source->pbr.roughness, 0.0f, 1.0f),
+            std::clamp(source->alphaCutoff, 0.0f, 1.0f),
+            static_cast<float>((source->transparent ? 1u : 0u) |
+                (source->doubleSided ? 2u : 0u) | (source->alphaMasked ? 4u : 0u))};
+        const std::array<std::uint32_t, 5> textureStable = {
+            source->baseColorTexture.index(), source->normalTexture.index(),
+            source->metallicRoughnessTexture.index(), source->emissiveTexture.index(),
+            source->occlusionTexture.index()};
+        for (std::size_t textureIndex = 0; textureIndex < textureStable.size(); ++textureIndex)
+            bindlessRow.textureIndices[textureIndex] = textureDenseIndex(textureStable[textureIndex]);
         try
         {
             materials_.emplace(handle.index(), MaterialResource{
@@ -394,7 +412,7 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                 source->metallicRoughnessTexture.index(),
                 source->emissiveTexture.index(),
                 source->occlusionTexture.index(),
-                factorsBuffer.value()});
+                factorsBuffer.value(), bindlessRow});
             uploadedMaterials.push_back(handle.index());
             const std::uint32_t dense = freeMaterialDense_.empty()
                 ? static_cast<std::uint32_t>(denseMaterialStable_.size())
@@ -423,6 +441,12 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
     {
         rollback();
         return descriptors;
+    }
+    const auto gpuDrivenMeshes = rebuildGpuDrivenMeshes();
+    if (!gpuDrivenMeshes)
+    {
+        rollback();
+        return gpuDrivenMeshes;
     }
     return Halcyon::Result<void>::success();
 }
@@ -471,7 +495,172 @@ Halcyon::Result<void> VulkanSceneResources::releaseAsset(
     {
         releaseTexture(handle.index());
     }
+    auto result = rebuildGpuDrivenMeshes();
+    if (!result) return result;
     return rebuildMaterialDescriptors();
+}
+
+Halcyon::Result<void> VulkanSceneResources::rebuildGpuDrivenMeshes()
+{
+    if (!gpuDrivenMeshesEnabled_) return Halcyon::Result<void>::success();
+    if (allocator_ == nullptr || uploader_ == nullptr || device_ == VK_NULL_HANDLE ||
+        uploadCommandPool_ == VK_NULL_HANDLE || graphicsQueue_ == VK_NULL_HANDLE)
+        return resourceError(Halcyon::ErrorCode::InvalidState,
+            "GPU-driven mesh storage is not initialized");
+
+    VkDeviceSize vertexBytes = 0;
+    VkDeviceSize indexBytes = 0;
+    std::vector<Halcyon::Renderer::Scene::MeshDrawRow> rows(denseMeshStable_.size());
+    for (std::size_t dense = 0; dense < denseMeshStable_.size(); ++dense)
+    {
+        const auto found = meshes_.find(denseMeshStable_[dense]);
+        if (found == meshes_.end()) continue;
+        if (vertexBytes / sizeof(MeshVertex) >
+                static_cast<VkDeviceSize>(std::numeric_limits<std::int32_t>::max()) ||
+            indexBytes / sizeof(std::uint32_t) >
+                static_cast<VkDeviceSize>(std::numeric_limits<std::uint32_t>::max()))
+            return resourceError(Halcyon::ErrorCode::OutOfMemory,
+                "consolidated GPU mesh stream exceeds indirect draw limits");
+        rows[dense] = {found->second.indexCount,
+            static_cast<std::uint32_t>(indexBytes / sizeof(std::uint32_t)),
+            static_cast<std::int32_t>(vertexBytes / sizeof(MeshVertex)), 0u};
+        vertexBytes += found->second.vertexBuffer.size;
+        indexBytes += found->second.indexBuffer.size;
+    }
+
+    if (vertexBytes == 0 || indexBytes == 0 || rows.empty())
+    {
+        allocator_->destroy(gpuDrivenVertices_);
+        allocator_->destroy(gpuDrivenIndices_);
+        allocator_->destroy(meshDraws_);
+        gpuDrivenVertices_ = {};
+        gpuDrivenIndices_ = {};
+        meshDraws_ = {};
+        meshDrawRows_.clear();
+        return Halcyon::Result<void>::success();
+    }
+
+    const auto createBuffer = [&](VkDeviceSize size, VkBufferUsageFlags usage)
+    {
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = size;
+        info.usage = usage;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        return allocator_->createBuffer(info, MemoryUsage::GpuOnly);
+    };
+    auto vertices = createBuffer(vertexBytes,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    if (!vertices) return Halcyon::Result<void>::failure(vertices.error());
+    auto indices = createBuffer(indexBytes,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    if (!indices)
+    {
+        allocator_->destroy(vertices.value());
+        return Halcyon::Result<void>::failure(indices.error());
+    }
+    auto draws = createBuffer(rows.size() * sizeof(rows[0]),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    if (!draws)
+    {
+        allocator_->destroy(vertices.value());
+        allocator_->destroy(indices.value());
+        return Halcyon::Result<void>::failure(draws.error());
+    }
+    const auto destroyCandidates = [&]() noexcept
+    {
+        allocator_->destroy(vertices.value());
+        allocator_->destroy(indices.value());
+        allocator_->destroy(draws.value());
+    };
+
+    VkCommandBufferAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocation.commandPool = uploadCommandPool_;
+    allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocation.commandBufferCount = 1;
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkResult vkResult = vkAllocateCommandBuffers(device_, &allocation, &commandBuffer);
+    if (vkResult != VK_SUCCESS)
+    {
+        destroyCandidates();
+        return resourceError(Halcyon::ErrorCode::Backend,
+            "failed to allocate consolidated mesh copy command");
+    }
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkResult = vkBeginCommandBuffer(commandBuffer, &begin);
+    VkDeviceSize vertexOffset = 0;
+    VkDeviceSize indexOffset = 0;
+    if (vkResult == VK_SUCCESS)
+    {
+        for (const std::uint32_t stable : denseMeshStable_)
+        {
+            const auto found = meshes_.find(stable);
+            if (found == meshes_.end()) continue;
+            const VkBufferCopy vertexCopy{0, vertexOffset, found->second.vertexBuffer.size};
+            vkCmdCopyBuffer(commandBuffer, found->second.vertexBuffer.buffer,
+                vertices.value().buffer, 1, &vertexCopy);
+            const VkBufferCopy indexCopy{0, indexOffset, found->second.indexBuffer.size};
+            vkCmdCopyBuffer(commandBuffer, found->second.indexBuffer.buffer,
+                indices.value().buffer, 1, &indexCopy);
+            vertexOffset += found->second.vertexBuffer.size;
+            indexOffset += found->second.indexBuffer.size;
+        }
+        std::array<VkBufferMemoryBarrier2, 2> ready{};
+        for (auto& barrier : ready)
+        {
+            barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+            barrier.offset = 0;
+            barrier.size = VK_WHOLE_SIZE;
+        }
+        ready[0].buffer = vertices.value().buffer;
+        ready[0].dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+        ready[1].buffer = indices.value().buffer;
+        ready[1].dstAccessMask = VK_ACCESS_2_INDEX_READ_BIT;
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(ready.size());
+        dependency.pBufferMemoryBarriers = ready.data();
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        vkResult = vkEndCommandBuffer(commandBuffer);
+    }
+    if (vkResult == VK_SUCCESS)
+    {
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &commandBuffer;
+        vkResult = vkQueueSubmit(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+        if (vkResult == VK_SUCCESS) vkResult = vkQueueWaitIdle(graphicsQueue_);
+    }
+    vkFreeCommandBuffers(device_, uploadCommandPool_, 1, &commandBuffer);
+    if (vkResult != VK_SUCCESS)
+    {
+        destroyCandidates();
+        return resourceError(Halcyon::ErrorCode::Backend,
+            "failed to build consolidated GPU mesh stream");
+    }
+    const auto uploadRows = uploader_->uploadBuffer(device_, uploadCommandPool_, graphicsQueue_,
+        *allocator_, draws.value(), std::as_bytes(std::span{rows}));
+    if (!uploadRows)
+    {
+        destroyCandidates();
+        return uploadRows;
+    }
+
+    allocator_->destroy(gpuDrivenVertices_);
+    allocator_->destroy(gpuDrivenIndices_);
+    allocator_->destroy(meshDraws_);
+    gpuDrivenVertices_ = vertices.value();
+    gpuDrivenIndices_ = indices.value();
+    meshDraws_ = draws.value();
+    meshDrawRows_ = std::move(rows);
+    return Halcyon::Result<void>::success();
 }
 
 Halcyon::Result<void> VulkanSceneResources::rebuildMaterialDescriptors()
@@ -620,6 +809,23 @@ VkDescriptorSet VulkanSceneResources::materialDescriptor(std::uint32_t index) co
     return found != materialDescriptors_.end() ? found->second : VK_NULL_HANDLE;
 }
 
+Halcyon::Renderer::Scene::MaterialGpuData VulkanSceneResources::materialRow(
+    std::uint32_t denseIndex) const noexcept
+{
+    if (denseIndex >= denseMaterialStable_.size()) return {};
+    const auto found = materials_.find(denseMaterialStable_[denseIndex]);
+    return found != materials_.end() ? found->second.bindlessRow
+                                     : Halcyon::Renderer::Scene::MaterialGpuData{};
+}
+
+const TextureResource* VulkanSceneResources::textureDense(
+    std::uint32_t denseIndex) const noexcept
+{
+    if (denseIndex >= denseTextureStable_.size()) return nullptr;
+    const auto stable = denseTextureStable_[denseIndex];
+    return stable == std::numeric_limits<std::uint32_t>::max() ? nullptr : texture(stable);
+}
+
 std::uint32_t VulkanSceneResources::meshDenseIndex(std::uint32_t stableIndex) const noexcept
 {
     const auto found = meshDenseByStable_.find(stableIndex);
@@ -658,6 +864,16 @@ void VulkanSceneResources::cleanup() noexcept
             allocator_->destroy(material.factorsBuffer);
     }
     materials_.clear();
+    if (allocator_ != nullptr)
+    {
+        allocator_->destroy(gpuDrivenVertices_);
+        allocator_->destroy(gpuDrivenIndices_);
+        allocator_->destroy(meshDraws_);
+    }
+    gpuDrivenVertices_ = {};
+    gpuDrivenIndices_ = {};
+    meshDraws_ = {};
+    meshDrawRows_.clear();
     for (auto& [index, meshResource] : meshes_)
     {
         (void)index;
@@ -692,6 +908,7 @@ void VulkanSceneResources::cleanup() noexcept
     graphicsQueue_ = VK_NULL_HANDLE;
     allocator_ = nullptr;
     uploader_ = nullptr;
+    gpuDrivenMeshesEnabled_ = false;
 }
 
 } // namespace Halcyon::Vulkan

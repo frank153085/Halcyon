@@ -64,6 +64,8 @@ VkFormat VulkanFrameGraphProvider::toVkFormat(Halcyon::Renderer::Graph::TextureF
         case F::RGBA8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
         case F::BGRA8Unorm: return VK_FORMAT_B8G8R8A8_UNORM;
         case F::RGBA16Float: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case F::R32Float: return VK_FORMAT_R32_SFLOAT;
+        case F::R32Uint: return VK_FORMAT_R32_UINT;
         case F::R16Float: return VK_FORMAT_R16_SFLOAT;
         case F::D32Float: return VK_FORMAT_D32_SFLOAT;
         case F::RG16Float: return VK_FORMAT_R16G16_SFLOAT;
@@ -205,6 +207,22 @@ bool VulkanFrameGraphProvider::createImage(
             }
         }
     }
+    if (d.mipLevels > 1 && imageInfo.arrayLayers == 1)
+    {
+        out.mipViews.resize(d.mipLevels, VK_NULL_HANDLE);
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.subresourceRange.layerCount = 1;
+        viewInfo.subresourceRange.levelCount = 1;
+        for (std::uint32_t mip = 0; mip < d.mipLevels; ++mip)
+        {
+            viewInfo.subresourceRange.baseMipLevel = mip;
+            if (vkCreateImageView(device_, &viewInfo, nullptr, &out.mipViews[mip]) != VK_SUCCESS)
+            {
+                release(out);
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -274,6 +292,9 @@ void VulkanFrameGraphProvider::release(VulkanFrameGraphResource& resource) noexc
         for (auto view : resource.layerViews)
             if (view != VK_NULL_HANDLE) vkDestroyImageView(resource.device, view, nullptr);
         resource.layerViews.clear();
+        for (auto view : resource.mipViews)
+            if (view != VK_NULL_HANDLE) vkDestroyImageView(resource.device, view, nullptr);
+        resource.mipViews.clear();
         if (resource.view != VK_NULL_HANDLE) vkDestroyImageView(resource.device, resource.view, nullptr);
     }
     if (resource.allocator != nullptr)
@@ -282,6 +303,15 @@ void VulkanFrameGraphProvider::release(VulkanFrameGraphResource& resource) noexc
         else resource.allocator->destroy(resource.image);
     }
     resource = {};
+}
+
+VkImageView VulkanFrameGraphProvider::mipView(
+    Halcyon::Renderer::Graph::FrameGraphNativeResource token, std::uint32_t mip) const noexcept
+{
+    const auto* resource = static_cast<const VulkanFrameGraphResource*>(token.token);
+    if (resource == nullptr) return VK_NULL_HANDLE;
+    if (mip < resource->mipViews.size()) return resource->mipViews[mip];
+    return mip == 0 ? resource->view : VK_NULL_HANDLE;
 }
 
 void VulkanFrameGraphProvider::destroy(const Halcyon::Renderer::Graph::FrameGraphNativeResource& native) noexcept

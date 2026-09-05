@@ -42,6 +42,9 @@ public:
     void resetDeltaState() noexcept
     {
         previousInstances_.clear();
+        lastRenderableRevision_ = 0;
+        validationFrame_ = 0;
+        hasState_ = false;
     }
 
     // Convenience overload for callers that keep extractor state externally.
@@ -58,6 +61,9 @@ public:
 
 private:
     std::unordered_map<Entity, InstanceData, Entity::Hasher> previousInstances_;
+    std::uint64_t lastRenderableRevision_ = 0;
+    std::uint32_t validationFrame_ = 0;
+    bool hasState_ = false;
 };
 
 } // namespace Halcyon::Renderer::Scene::Ecs

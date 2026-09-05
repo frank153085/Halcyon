@@ -317,7 +317,9 @@ Result<SceneInstanceHandle> SceneManager::createInstance(const SceneInstanceConf
     {
         // Reserve all entity slots before creating the root so an allocation
         // failure cannot leave an untracked ECS entity behind.
-        record.entities.reserve(1u + asset->source.nodes.size() + asset->source.primitives.size());
+        const bool proceduralAsset = asset->source.sourcePath.rfind("procedural://", 0) == 0;
+        record.entities.reserve(1u + asset->source.nodes.size() +
+            (proceduralAsset ? asset->source.nodes.size() : asset->source.primitives.size()));
         record.root = impl_->scene.createEntity();
         if (!record.root.isValid())
         {
@@ -330,7 +332,7 @@ Result<SceneInstanceHandle> SceneManager::createInstance(const SceneInstanceConf
         (void)impl_->scene.transforms().add(record.root, rootTransform);
 
         std::vector<Entity> nodeEntities(asset->source.nodes.size(), Entity::invalid());
-        for (std::size_t i = 0; i < asset->source.nodes.size(); ++i)
+        if (!proceduralAsset) for (std::size_t i = 0; i < asset->source.nodes.size(); ++i)
         {
             const Entity entity = impl_->scene.createEntity();
             nodeEntities[i] = entity;
@@ -340,7 +342,7 @@ Result<SceneInstanceHandle> SceneManager::createInstance(const SceneInstanceConf
             transform.parent = record.root;
             (void)impl_->scene.transforms().add(entity, transform);
         }
-        for (std::size_t i = 0; i < asset->source.nodes.size(); ++i)
+        if (!proceduralAsset) for (std::size_t i = 0; i < asset->source.nodes.size(); ++i)
         {
             const std::int32_t parent = asset->source.nodes[i].parent;
             if (parent >= 0 && static_cast<std::size_t>(parent) < nodeEntities.size())
@@ -364,57 +366,69 @@ Result<SceneInstanceHandle> SceneManager::createInstance(const SceneInstanceConf
             }
         }
 
-        for (std::size_t i = 0; i < asset->source.primitives.size(); ++i)
+        const auto addRenderableEntity = [&](std::uint32_t primitiveIndex, Entity parent,
+                                             const glm::mat4& localTransform)
         {
-            const auto& primitive = asset->source.primitives[i];
+            if (primitiveIndex >= asset->source.primitives.size()) return;
+            const auto& primitive = asset->source.primitives[primitiveIndex];
             const Entity entity = impl_->scene.createEntity();
+            if (!entity.isValid()) return;
             record.entities.push_back(entity);
             TransformComponent transform{};
-            const std::int32_t owner = primitiveOwners[i];
-            if (owner >= 0 && static_cast<std::size_t>(owner) < nodeEntities.size())
-            {
-                transform.parent = nodeEntities[static_cast<std::size_t>(owner)];
-            }
-            else
-            {
-                transform.parent = record.root;
-                transform.localTransform = primitive.worldTransform;
-            }
+            transform.parent = parent;
+            transform.localTransform = localTransform;
             (void)impl_->scene.transforms().add(entity, transform);
 
             RenderableComponent renderable{};
-            if (i < asset->imported.meshes.size())
-            {
-                renderable.mesh = asset->imported.meshes[i];
-            }
+            if (primitiveIndex < asset->imported.meshes.size())
+                renderable.mesh = asset->imported.meshes[primitiveIndex];
             const std::uint32_t materialIndex = primitive.materialIndex;
             if (materialIndex < asset->imported.materials.size())
-            {
                 renderable.material = asset->imported.materials[materialIndex];
-            }
             else if (!asset->imported.materials.empty())
-            {
                 renderable.material = asset->imported.materials.front();
-            }
-            renderable.flags = static_cast<std::uint32_t>(RenderableFlags::CastShadow) |
-                               static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow);
+            renderable.flags = static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow);
+            if (!proceduralAsset)
+                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::CastShadow);
             if (materialIndex < asset->source.materials.size())
             {
                 const auto& material = asset->source.materials[materialIndex];
                 if (material.transparent)
-                {
                     renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::Transparent);
-                }
                 if (material.doubleSided)
-                {
                     renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::DoubleSided);
-                }
                 if (material.alphaMasked)
-                {
                     renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::AlphaMasked);
-                }
             }
             (void)impl_->scene.renderables().add(entity, renderable);
+        };
+
+        if (proceduralAsset)
+        {
+            // Procedural stress scenes intentionally share one immutable mesh
+            // across many node transforms. This keeps the stress case focused
+            // on instance/visibility throughput instead of duplicating vertex
+            // data once per object.
+            for (std::size_t nodeIndex = 0; nodeIndex < asset->source.nodes.size(); ++nodeIndex)
+            {
+                const Entity parent = record.root;
+                for (const std::uint32_t primitive : asset->source.nodes[nodeIndex].primitiveIndices)
+                    addRenderableEntity(primitive, parent,
+                        asset->source.nodes[nodeIndex].localTransform);
+            }
+        }
+        else for (std::size_t i = 0; i < asset->source.primitives.size(); ++i)
+        {
+            const auto& primitive = asset->source.primitives[i];
+            const std::int32_t owner = primitiveOwners[i];
+            Entity parent = record.root;
+            glm::mat4 localTransform = primitive.worldTransform;
+            if (owner >= 0 && static_cast<std::size_t>(owner) < nodeEntities.size())
+            {
+                parent = nodeEntities[static_cast<std::size_t>(owner)];
+                localTransform = glm::mat4{1.0f};
+            }
+            addRenderableEntity(static_cast<std::uint32_t>(i), parent, localTransform);
         }
 
         const auto created = impl_->instances.tryEmplace(std::move(record));

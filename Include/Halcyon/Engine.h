@@ -40,6 +40,9 @@ struct EngineConfig
     bool enableTaa = true;
     bool enableClusteredLighting = true;
     bool enableTransparency = true;
+    bool enableGpuDrivenScene = false;
+    bool enableTwoPhaseOcclusion = false;
+    std::filesystem::path instanceIdReportPath{};
 };
 
 class Engine final

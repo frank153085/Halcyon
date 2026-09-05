@@ -1,6 +1,7 @@
 #include "RenderExtractor.h"
 
 #include <cstring>
+#include <optional>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -31,20 +32,62 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
     delta.frameIndex = frameIndex;
     delta.camera = camera;
 
-    std::unordered_map<Entity, InstanceData, Entity::Hasher> current;
-    current.reserve(scene.renderables().size());
-    for (const Entity entity : scene.members())
+    const auto makeInstance = [&](Entity entity) -> std::optional<InstanceData>
     {
-        if (!scene.entities().isAlive(entity))
-        {
-            continue;
-        }
+        if (!scene.entities().isAlive(entity)) return std::nullopt;
         const TransformComponent* transform = scene.transforms().get(entity);
         const RenderableComponent* renderable = scene.renderables().get(entity);
-        if (transform != nullptr && renderable != nullptr)
+        return transform != nullptr && renderable != nullptr
+            ? std::optional<InstanceData>{instanceData(*transform, *renderable)}
+            : std::nullopt;
+    };
+
+    const std::uint64_t renderableRevision = scene.renderables().revision();
+    const bool periodicValidation = (++validationFrame_ % 300u) == 0u;
+    const bool fullScan = !hasState_ || periodicValidation ||
+        renderableRevision != lastRenderableRevision_;
+    if (!fullScan)
+    {
+        // TransformManager reports only entities whose world transform changed
+        // (including descendants of a changed parent). This is the hot path
+        // for large static scenes: no hash rebuild and no full renderable scan.
+        for (const Entity entity : scene.transforms().updatedEntities())
         {
-            current.emplace(entity, instanceData(*transform, *renderable));
+            const auto value = makeInstance(entity);
+            const auto previous = previousInstances_.find(entity);
+            if (!value)
+            {
+                if (previous != previousInstances_.end())
+                {
+                    previousInstances_.erase(previous);
+                    delta.destroyed.push_back(entity);
+                }
+                continue;
+            }
+            if (previous == previousInstances_.end())
+            {
+                previousInstances_.emplace(entity, *value);
+                delta.created.push_back({entity, *value});
+            }
+            else if (std::memcmp(previous->second.transform.data(), value->transform.data(),
+                              sizeof(value->transform)) != 0 ||
+                previous->second.meshId != value->meshId ||
+                previous->second.materialId != value->materialId ||
+                previous->second.flags != value->flags)
+            {
+                previous->second = *value;
+                delta.updated.push_back({entity, *value});
+            }
         }
+        return delta;
+    }
+
+    std::unordered_map<Entity, InstanceData, Entity::Hasher> current;
+    current.reserve(scene.renderables().size());
+    for (const Entity entity : scene.renderables().entities())
+    {
+        const auto value = makeInstance(entity);
+        if (value) current.emplace(entity, *value);
     }
 
     delta.created.reserve(current.size());
@@ -76,6 +119,8 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
         }
     }
     previousInstances_ = std::move(current);
+    lastRenderableRevision_ = renderableRevision;
+    hasState_ = true;
     return delta;
 }
 

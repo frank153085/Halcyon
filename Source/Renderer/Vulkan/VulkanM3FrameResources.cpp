@@ -57,8 +57,17 @@ Halcyon::Result<VulkanM3FrameResources::Handles> VulkanM3FrameResources::declare
         Graph::TextureFormat::RGBA8Unorm, true});
     result.motion = graph.createTexture({"Motion", extent_.width, extent_.height, 1, 1, 1,
         Graph::TextureFormat::RG16Float, true});
+    result.instanceId = graph.createTexture({"InstanceId", extent_.width, extent_.height, 1, 1, 1,
+        Graph::TextureFormat::R32Uint, true});
     result.depth = graph.createTexture({"SceneDepth", extent_.width, extent_.height, 1, 1, 1,
         Graph::TextureFormat::D32Float, true});
+    const std::uint32_t hizWidth = std::max(1u, (extent_.width + 1u) / 2u);
+    const std::uint32_t hizHeight = std::max(1u, (extent_.height + 1u) / 2u);
+    std::uint32_t hizMips = 1;
+    for (std::uint32_t size = std::max(hizWidth, hizHeight); size > 1; size >>= 1)
+        ++hizMips;
+    result.hiz = graph.createTexture({"HiZ", hizWidth, hizHeight, 1, hizMips, 1,
+        Graph::TextureFormat::R32Float, false});
     result.hdr = graph.createTexture({"HDR", extent_.width, extent_.height, 1, 1, 1,
         Graph::TextureFormat::RGBA16Float, true});
     result.historyA = graph.createTexture({"TAAHistoryA", extent_.width, extent_.height, 1, 1, 1,

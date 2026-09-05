@@ -28,7 +28,9 @@ public:
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> gbuffer1;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> gbuffer2;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> motion;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> instanceId;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> depth;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> hiz;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> hdr;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> historyA;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> historyB;

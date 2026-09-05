@@ -38,11 +38,16 @@ class RenderableManager final
 public:
     [[nodiscard]] std::uint32_t add(Entity entity, const RenderableComponent& component = {})
     {
-        return storage_.add(entity, component);
+        const auto instance = storage_.add(entity, component);
+        if (instance != DenseComponentManager<RenderableComponent>::kInvalidInstance)
+            ++revision_;
+        return instance;
     }
     [[nodiscard]] bool remove(Entity entity) noexcept
     {
-        return storage_.remove(entity);
+        const bool removed = storage_.remove(entity);
+        if (removed) ++revision_;
+        return removed;
     }
     [[nodiscard]] bool has(Entity entity) const noexcept
     {
@@ -54,7 +59,11 @@ public:
     }
     [[nodiscard]] RenderableComponent* get(Entity entity) noexcept
     {
-        return storage_.get(entity);
+        RenderableComponent* component = storage_.get(entity);
+        // Mutable access is a write-intent signal, matching TransformManager.
+        // This makes direct mesh/material/flag edits visible to extractDelta.
+        if (component != nullptr) ++revision_;
+        return component;
     }
     [[nodiscard]] const RenderableComponent* get(Entity entity) const noexcept
     {
@@ -71,10 +80,14 @@ public:
     void clear() noexcept
     {
         storage_.clear();
+        ++revision_;
     }
+
+    [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
 private:
     DenseComponentManager<RenderableComponent> storage_;
+    std::uint64_t revision_ = 0;
 };
 
 } // namespace Halcyon::Renderer::Scene::Ecs

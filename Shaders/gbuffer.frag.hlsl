@@ -30,6 +30,7 @@ struct FragmentOut
     float4 normalRoughness : SV_Target1;
     float4 materialData : SV_Target2;
     float2 motion : SV_Target3;
+    uint instanceId : SV_Target4;
 };
 
 FragmentOut main(FragmentIn input)
@@ -62,5 +63,8 @@ FragmentOut main(FragmentIn input)
     const float2 currentNdc = input.currentPosition.xy / max(abs(input.currentPosition.w), 1e-6);
     const float2 previousNdc = input.previousPosition.xy / max(abs(input.previousPosition.w), 1e-6);
     output.motion = (currentNdc - previousNdc) * 0.5;
+    // The legacy indexed path has no stable GPU-scene slot; zero is a valid
+    // sentinel for its debug attachment.
+    output.instanceId = 0u;
     return output;
 }

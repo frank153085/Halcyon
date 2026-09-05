@@ -2,6 +2,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 #include <memory>
 
 namespace Halcyon::M3Demo
@@ -78,6 +79,18 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
     {
         if (state->scene == "sponza")
         {
+            return Result<void>::success();
+        }
+        if (state->scene == "stress")
+        {
+            // Deterministic camera trajectory used by the M4 visibility audit:
+            // a slow orbit crosses occluder boundaries without introducing
+            // input-dependent results in scripted runs.
+            const float angle = static_cast<float>(frame.elapsedSeconds) * glm::radians(9.0f);
+            const glm::vec3 position{std::sin(angle) * 34.0f, 22.0f,
+                std::cos(angle) * 34.0f};
+            const auto cameraResult = engine.defaultView().lookAt(position, {0.0f, 0.0f, 0.0f});
+            if (!cameraResult) return cameraResult;
             return Result<void>::success();
         }
         auto* transform = engine.scene().transforms().get(state->model);

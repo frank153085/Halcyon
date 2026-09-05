@@ -74,7 +74,8 @@ Halcyon::Result<void> GpuUploader::uploadBuffer(VkDevice device,
     VkQueue queue,
     GpuAllocator& allocator,
     BufferAllocation destination,
-    std::span<const std::byte> data)
+    std::span<const std::byte> data,
+    VkDeviceSize destinationOffset)
 {
     if (device == VK_NULL_HANDLE || commandPool == VK_NULL_HANDLE || queue == VK_NULL_HANDLE ||
         data.empty() || destination.buffer == VK_NULL_HANDLE)
@@ -107,8 +108,23 @@ Halcyon::Result<void> GpuUploader::uploadBuffer(VkDevice device,
     }
     const VkCommandBuffer commandBuffer = commandResult.value();
     VkBufferCopy copy{};
+    copy.dstOffset = destinationOffset;
     copy.size = data.size_bytes();
     vkCmdCopyBuffer(commandBuffer, staging.buffer, destination.buffer, 1, &copy);
+    VkBufferMemoryBarrier2 ready{};
+    ready.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    ready.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    ready.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    ready.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    ready.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    ready.buffer = destination.buffer;
+    ready.offset = destinationOffset;
+    ready.size = data.size_bytes();
+    VkDependencyInfo dependency{};
+    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependency.bufferMemoryBarrierCount = 1;
+    dependency.pBufferMemoryBarriers = &ready;
+    vkCmdPipelineBarrier2(commandBuffer, &dependency);
     const auto submitResult = submitOneShot(device, commandPool, queue, commandBuffer);
     allocator.destroy(staging);
     return submitResult;

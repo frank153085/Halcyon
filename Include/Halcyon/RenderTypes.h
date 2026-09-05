@@ -57,6 +57,18 @@ struct FrameStats
     double gpuTwoPhaseMs = -1.0;
     std::uint32_t visibleInstanceCount = 0;
     std::uint32_t indirectDrawCount = 0;
+    // Debug validation for GPU-driven visibility. The count is the number of
+    // CPU-reference frustum-visible slots absent from the GPU result; a
+    // non-zero value identifies a potentially missing object.
+    std::uint32_t gpuVisibilityMissingCount = 0;
+    bool gpuVisibilityValidationPassed = false;
+    // Number of non-clear InstanceId pixels that reference a slot outside the
+    // CPU scene table. This guards the debug attachment's ABI independently of
+    // the set-level visibility comparison.
+    std::uint32_t gpuInstanceIdInvalidPixelCount = 0;
+    // Number of per-material descriptor-set binds recorded by the legacy
+    // draw loop. GPU-driven opaque draws should keep this at zero.
+    std::uint32_t materialDescriptorBindCount = 0;
     double gpuFrameMs = -1.0;
     // Exact execution order produced by the compiled FrameGraph for this
     // frame. Timings are reported separately because timestamp results become

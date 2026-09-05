@@ -15,9 +15,9 @@ struct ProceduralStressSceneConfig
     std::string baseMeshName = "unit-cube";
 };
 
-// Builds a deterministic grid of independent rigid instances. Geometry is
-// duplicated per primitive intentionally: this exercises the same ECS and
-// upload path as file-backed scenes while keeping the generator self-contained.
+// Builds a deterministic grid of independent rigid instances sharing one
+// immutable primitive. This keeps the stress case focused on instance,
+// upload, and visibility throughput instead of duplicating vertex data.
 [[nodiscard]] StaticScene makeProceduralStressScene(
     const ProceduralStressSceneConfig& config = {});
 
