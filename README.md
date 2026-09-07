@@ -10,7 +10,7 @@ descriptors, and a runnable traditional-quality scene demonstration.
 
 - Reproducible Debug and RelWithDebInfo presets for MSVC v143 and Ninja.
 - Separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonEngine`,
-  `HalcyonApplication`, `HalcyonSandbox`, and `HalcyonCooker` targets.
+  `HalcyonApplication`, and `HalcyonCooker` targets.
 - Vulkan 1.3 instance and device selection, Validation Messenger, Dynamic
   Rendering, Synchronization2, and Timeline Semaphores.
 - Three frame contexts, swapchain recreation, and safe minimize, resize, and
@@ -103,31 +103,30 @@ it cannot be found. When the Vulkan SDK also provides `spirv-val`, CMake adds a
 the renderer is linked. Install the Vulkan SDK and configure again after fixing
 the toolchain path.
 
-## Run the Sandbox
+## Run an example
 
 ```powershell
-out\build\windows-msvc-debug\Halcyon.exe --frames 300
+out\build\windows-msvc-debug\Examples\HalcyonExample02TexturedModel\HalcyonExample02TexturedModel.exe --frames 300
 ```
 
 Available options are `--width N`, `--height N`, `--frames N`,
 `--no-validation`, and `--help`. The render loop pauses image acquisition while
 the window is minimized and recreates the swapchain after restoration.
-The Sandbox and standalone textured example both load the checked-in Monkey
-glTF through `SceneManager`; the Vulkan backend no longer contains an OBJ or
-startup-texture loader.
+Example 02 loads the checked-in Monkey glTF through `SceneManager`.
 
 ## Run the demo
 
-`HalcyonDemo` uses fixed cameras and a fixed 60 Hz timestep by default. The
-downloaded Damaged Helmet and Sponza assets are selected with `--scene`:
+`HalcyonExample03PbrScenes` uses fixed cameras and a fixed 60 Hz timestep by
+default. The downloaded Damaged Helmet and Sponza assets are selected with
+`--scene`:
 
 ```powershell
-out\build\demo-msvc-debug\HalcyonDemo.exe `
+out\build\demo-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03PbrScenes.exe `
   --scene damaged-helmet --frames 300 --width 1280 --height 720 `
   --screenshot out\captures\helmet.png `
   --perf-csv out\captures\helmet.csv --no-validation
 
-out\build\demo-msvc-debug\HalcyonDemo.exe `
+out\build\demo-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03PbrScenes.exe `
   --scene sponza --frames 300 --screenshot out\captures\sponza.png `
   --perf-csv out\captures\sponza.csv --no-validation
 ```
@@ -136,7 +135,7 @@ The deterministic stress scene exercises large instance counts without
 downloading additional assets:
 
 ```powershell
-out\build\demo-msvc-debug\HalcyonDemo.exe `
+out\build\demo-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03PbrScenes.exe `
   --scene stress --instance-count 100000 --frames 1 --no-validation
 ```
 
@@ -210,7 +209,6 @@ Source/Renderer/Resources   Upload/deletion and bindless slot infrastructure
 Source/Renderer/Vulkan      Vulkan 1.3 backend
 Source/Engine                Engine, View, and SceneManager orchestration
 Source/Application           Window, input, lifecycle, and diagnostics layer
-Source/Sandbox              Runnable demonstration application
 Examples                    Independent executable examples
 Source/Cooker               Deterministic resource-manifest tool
 Tests                       CPU unit tests

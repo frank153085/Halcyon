@@ -20,6 +20,7 @@ without compiling the other examples:
 ```powershell
 cmake --build out\build\windows-msvc-debug --target HalcyonExample01Triangle
 cmake --build out\build\windows-msvc-debug --target HalcyonExample02TexturedModel
+cmake --build out\build\windows-msvc-debug --target HalcyonExample03PbrScenes
 ```
 
 ## Run
@@ -30,14 +31,17 @@ replaces an older executable:
 ```powershell
 out\build\windows-msvc-debug\Examples\HalcyonExample01Triangle\HalcyonExample01Triangle.exe --frames 300
 out\build\windows-msvc-debug\Examples\HalcyonExample02TexturedModel\HalcyonExample02TexturedModel.exe --frames 300
+out\build\windows-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03PbrScenes.exe --scene damaged-helmet --frames 300
 ```
 
-Both programs accept `--width`, `--height`, `--frames`, `--no-validation`, and
-`--help`.
+The first two programs accept `--width`, `--height`, `--frames`, `--no-validation`,
+and `--help`. Example 03 also accepts `--scene damaged-helmet|sponza|stress`,
+`--instance-count`, `--gpu-driven`, and `--two-phase-occlusion`.
 
-Example 01 supplies an in-memory `StaticScene`, while Example 02 references
-`models/monkey/monkey.gltf` relative to the shared asset root. Both sources use
-the same asset loading, SceneDatabase registration, instancing, and GPU upload
+Example 01 supplies an in-memory `StaticScene`, Example 02 references
+`models/monkey/monkey.gltf` relative to the shared asset root, and Example 03
+loads the Damaged Helmet / Sponza glTF assets or a procedural stress scene.
+All three use the same SceneDatabase registration, instancing, and GPU upload
 path.
 
 ## Add an Example

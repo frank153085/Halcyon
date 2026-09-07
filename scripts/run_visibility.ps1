@@ -1,5 +1,5 @@
 param(
-    [string]$Exe = "out\build\demo-msvc-debug\HalcyonDemo.exe",
+    [string]$Exe = "out\build\demo-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03PbrScenes.exe",
     [int]$InstanceCount = 100000,
     [int]$Frames = 12,
     [int]$FramesInFlight = 3,

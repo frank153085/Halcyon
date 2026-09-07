@@ -1,6 +1,5 @@
 # Each example is a real executable target with its own output directory.  A
-# new example therefore adds a binary instead of replacing an older one, which
-# makes it possible to compare milestones side by side.
+# new example therefore adds a binary instead of replacing an older one.
 add_library(HalcyonExampleSupport STATIC
     Common/ExampleRunner.cpp
     Common/ExampleRunner.h
@@ -10,6 +9,7 @@ target_include_directories(HalcyonExampleSupport PUBLIC
 target_link_libraries(HalcyonExampleSupport PUBLIC HalcyonApplication)
 target_compile_definitions(HalcyonExampleSupport PRIVATE
     HALCYON_ENABLE_VALIDATION=$<BOOL:${HALCYON_ENABLE_VALIDATION}>
+    HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>
 )
 halcyon_configure_asset_root(HalcyonExampleSupport)
 set_target_properties(HalcyonExampleSupport PROPERTIES FOLDER "Examples")
@@ -22,6 +22,9 @@ function(halcyon_add_example target source)
         OUTPUT_NAME "${target}"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Examples/${target}"
         FOLDER "Examples")
+    target_compile_definitions(${target} PRIVATE
+        HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
+    halcyon_configure_asset_root(${target})
     halcyon_enable_warnings(${target})
 endfunction()
 
@@ -29,7 +32,9 @@ add_custom_target(HalcyonExamples)
 
 add_subdirectory(01_Triangle)
 add_subdirectory(02_TexturedModel)
+add_subdirectory(03_PbrScenes)
 
 add_dependencies(HalcyonExamples
     HalcyonExample01Triangle
-    HalcyonExample02TexturedModel)
+    HalcyonExample02TexturedModel
+    HalcyonExample03PbrScenes)

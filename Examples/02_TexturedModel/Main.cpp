@@ -1,5 +1,7 @@
 #include "ExampleRunner.h"
 
+#include <filesystem>
+
 int main(int argc, char** argv)
 {
     Halcyon::Examples::ExampleDefinition definition{};

@@ -495,35 +495,10 @@ if(HALCYON_ENABLE_IMGUI)
 endif()
 halcyon_enable_warnings(HalcyonApplication)
 
-add_executable(HalcyonSandbox Source/Sandbox/Main.cpp)
-target_sources(HalcyonSandbox PRIVATE
-    Source/Sandbox/SandboxExample.cpp
-    Source/Sandbox/SandboxExample.h)
-set_target_properties(HalcyonSandbox PROPERTIES OUTPUT_NAME Halcyon)
-target_include_directories(HalcyonSandbox PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source/Sandbox")
-target_link_libraries(HalcyonSandbox PRIVATE HalcyonApplication)
-target_compile_definitions(HalcyonSandbox PRIVATE
-    HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>
-)
-halcyon_configure_asset_root(HalcyonSandbox)
-halcyon_enable_warnings(HalcyonSandbox)
-
-# Showcase executable. It has its own entry point so the original sandbox
-# remains a stable regression target.
-add_executable(HalcyonDemo
-    Source/Demo/Main.cpp
-    Source/Demo/Demo.cpp
-    Source/Demo/Demo.h)
-target_link_libraries(HalcyonDemo PRIVATE HalcyonApplication)
-target_compile_definitions(HalcyonDemo PRIVATE
-    HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
-halcyon_configure_asset_root(HalcyonDemo)
-halcyon_enable_warnings(HalcyonDemo)
-
 # Standalone image gate used by CI and local capture workflows.  It is kept
 # independent from the renderer so it can decode PNGs on machines without a
 # Vulkan device.
-add_executable(HalcyonGoldenCompare Source/Demo/GoldenCompare.cpp)
+add_executable(HalcyonGoldenCompare Tests/GoldenCompare.cpp)
 target_link_libraries(HalcyonGoldenCompare PRIVATE HalcyonCore Halcyon::Stb)
 halcyon_configure_asset_root(HalcyonGoldenCompare)
 halcyon_enable_warnings(HalcyonGoldenCompare)

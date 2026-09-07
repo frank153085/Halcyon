@@ -128,7 +128,7 @@ Wait for the current frame timeline
 
 **Dependencies:** None.
 
-**Core deliverables:** CMake 3.28, MSVC v143 and Ninja presets, separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonSandbox`, and `HalcyonCooker` targets, unified result and error paths, logging, generation handles, and a Validation Messenger.
+**Core deliverables:** CMake 3.28, MSVC v143 and Ninja presets, separate `HalcyonCore`, `HalcyonRenderer`, and `HalcyonCooker` targets, unified result and error paths, logging, generation handles, and a Validation Messenger.
 
 **Acceptance gate:** Debug and RelWithDebInfo builds are reproducible. Initialization failures, window exit, and normal shutdown produce no validation errors.
 
@@ -138,7 +138,7 @@ Wait for the current frame timeline
 
 **Core deliverables:** Vulkan 1.3 device and queue selection, swapchain, three frame contexts, Timeline Semaphores, Synchronization2, Dynamic Rendering, D32 reversed-Z, resize/minimize/out-of-date handling, GPU timestamps, and a runnable triangle slice.
 
-**Acceptance gate:** The Sandbox runs for 300 frames and exits normally. Resize, minimize, and restoration do not crash. Debug validation reports no warnings or errors, and RenderDoc can capture a complete frame.
+**Acceptance gate:** A textured-model example runs for 300 frames and exits normally. Resize, minimize, and restoration do not crash. Debug validation reports no warnings or errors, and RenderDoc can capture a complete frame.
 
 ### M2 Core Infrastructure (First Version)
 

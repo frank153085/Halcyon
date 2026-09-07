@@ -122,7 +122,11 @@ int run(const ExampleDefinition& definition, int argc, char** argv)
 {
     ApplicationConfig config;
     config.window.title = definition.title != nullptr ? definition.title : "Halcyon Example";
+    config.sceneName = definition.sceneName;
+    config.enableDiagnostics = definition.enableDiagnostics;
     config.engine.scene = definition.scene;
+    config.engine.enableGpuDrivenScene = definition.enableGpuDrivenScene;
+    config.engine.enableTwoPhaseOcclusion = definition.enableTwoPhaseOcclusion;
 #ifdef HALCYON_ASSET_ROOT
     if (config.engine.scene.assetRoot.empty())
     {

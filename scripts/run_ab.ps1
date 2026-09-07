@@ -1,5 +1,5 @@
 param(
-    [string]$Demo = "out\build\demo-msvc-debug\HalcyonDemo.exe",
+    [string]$Demo = "out\build\demo-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03PbrScenes.exe",
     [string]$CaptureDirectory = "out\captures\ab-compare",
     [int]$Frames = 120
 )
