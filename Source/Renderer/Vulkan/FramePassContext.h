@@ -75,6 +75,9 @@ struct FramePassContext
     VkDescriptorSet gpuIndirectSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuGraphicsSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuPhase2GraphicsSet = VK_NULL_HANDLE;
+    VkDescriptorSet gpuCsmCullSet = VK_NULL_HANDLE;
+    VkDescriptorSet gpuCsmIndirectSet = VK_NULL_HANDLE;
+    VkDescriptorSet gpuCsmGraphicsSet = VK_NULL_HANDLE;
 
     std::array<glm::mat4, 4> cascadeMatrices{};
     glm::vec4 cascadeSplits{0.0f};

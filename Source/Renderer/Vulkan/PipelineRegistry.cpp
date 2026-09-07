@@ -17,6 +17,7 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     frustumCullPipeline.destroy();
     indirectBuildPipeline.destroy();
     gpuDrivenGbufferPipeline.destroy();
+    gpuDrivenCsmPipeline.destroy();
     hizBuildPipeline.destroy();
     occlusionPhase1Pipeline.destroy();
     occlusionPhase2Pipeline.destroy();
@@ -38,6 +39,10 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
         {
             vkDestroyDescriptorSetLayout(device, gpuSceneGraphicsLayout, nullptr);
         }
+        if (gpuCsmGraphicsLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(device, gpuCsmGraphicsLayout, nullptr);
+        }
         if (hizLayout != VK_NULL_HANDLE)
         {
             vkDestroyDescriptorSetLayout(device, hizLayout, nullptr);
@@ -55,6 +60,7 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     gpuSceneCullLayout = VK_NULL_HANDLE;
     gpuSceneIndirectLayout = VK_NULL_HANDLE;
     gpuSceneGraphicsLayout = VK_NULL_HANDLE;
+    gpuCsmGraphicsLayout = VK_NULL_HANDLE;
     hizLayout = VK_NULL_HANDLE;
     occlusionPhase1Layout = VK_NULL_HANDLE;
     occlusionPhase2Layout = VK_NULL_HANDLE;

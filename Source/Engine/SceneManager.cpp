@@ -387,9 +387,8 @@ Result<SceneInstanceHandle> SceneManager::createInstance(const SceneInstanceConf
                 renderable.material = asset->imported.materials[materialIndex];
             else if (!asset->imported.materials.empty())
                 renderable.material = asset->imported.materials.front();
-            renderable.flags = static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow);
-            if (!proceduralAsset)
-                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::CastShadow);
+            renderable.flags = static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow) |
+                static_cast<std::uint32_t>(RenderableFlags::CastShadow);
             if (materialIndex < asset->source.materials.size())
             {
                 const auto& material = asset->source.materials[materialIndex];

@@ -303,12 +303,14 @@ struct Renderer::Impl
     VulkanPipeline& frustumCullPipeline = pipelines.frustumCullPipeline;
     VulkanPipeline& indirectBuildPipeline = pipelines.indirectBuildPipeline;
     VulkanPipeline& gpuDrivenGbufferPipeline = pipelines.gpuDrivenGbufferPipeline;
+    VulkanPipeline& gpuDrivenCsmPipeline = pipelines.gpuDrivenCsmPipeline;
     VulkanPipeline& hizBuildPipeline = pipelines.hizBuildPipeline;
     VulkanPipeline& occlusionPhase1Pipeline = pipelines.occlusionPhase1Pipeline;
     VulkanPipeline& occlusionPhase2Pipeline = pipelines.occlusionPhase2Pipeline;
     VkDescriptorSetLayout& gpuSceneCullLayout = pipelines.gpuSceneCullLayout;
     VkDescriptorSetLayout& gpuSceneIndirectLayout = pipelines.gpuSceneIndirectLayout;
     VkDescriptorSetLayout& gpuSceneGraphicsLayout = pipelines.gpuSceneGraphicsLayout;
+    VkDescriptorSetLayout& gpuCsmGraphicsLayout = pipelines.gpuCsmGraphicsLayout;
     VkDescriptorSetLayout& hizLayout = pipelines.hizLayout;
     VkDescriptorSetLayout& occlusionPhase1Layout = pipelines.occlusionPhase1Layout;
     VkDescriptorSetLayout& occlusionPhase2Layout = pipelines.occlusionPhase2Layout;
@@ -834,6 +836,13 @@ struct Renderer::Impl
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         result = makeLayout(graphicsBindings, gpuSceneGraphicsLayout);
         if (!result) return result;
+        const std::array<VkDescriptorSetLayoutBinding, 2> csmGraphicsBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr}};
+        result = makeLayout(csmGraphicsBindings, gpuCsmGraphicsLayout);
+        if (!result) return result;
         const std::array<VkDescriptorPoolSize, 1> poolSizes = {
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16}};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -916,6 +925,29 @@ struct Renderer::Impl
         result = gpuDrivenGbufferPipeline.createGraphics(device, gpuGraphics);
         if (!result) return result;
         gpuDrivenBindless = useBindless;
+        GraphicsPipelineDesc gpuCsmDesc{};
+        gpuCsmDesc.depthOnly = true;
+        gpuCsmDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
+        gpuCsmDesc.depthTest = true;
+        gpuCsmDesc.depthWrite = true;
+        gpuCsmDesc.depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+        gpuCsmDesc.cullMode = VK_CULL_MODE_BACK_BIT;
+        gpuCsmDesc.depthBiasEnable = true;
+        gpuCsmDesc.depthBiasConstant = -1.25f;
+        gpuCsmDesc.depthBiasSlope = -1.75f;
+        gpuCsmDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&gpuCsmGraphicsLayout, 1};
+        const std::array<DescriptorBindingDesc, 2> gpuCsmAbi = {
+            DescriptorBindingDesc{0, {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr}},
+            DescriptorBindingDesc{0, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr}}};
+        gpuCsmDesc.descriptorBindings = gpuCsmAbi;
+        const std::array<VkPushConstantRange, 1> gpuCsmPush = {{
+            {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)}}};
+        gpuCsmDesc.pushConstants = gpuCsmPush;
+        gpuCsmDesc.vertexShader = "gpu_driven_csm.vert.spv";
+        result = gpuDrivenCsmPipeline.createGraphics(device, gpuCsmDesc);
+        if (!result) return result;
         const auto indirectAbi = indirectBuildAbi();
         ComputePipelineDesc indirectDesc{};
         indirectDesc.shader = "build_indirect_commands.comp.spv";

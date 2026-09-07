@@ -101,6 +101,22 @@ public:
     {
         return phase2Grouping_;
     }
+    [[nodiscard]] FrustumCullBuffers& shadowFrustum() noexcept
+    {
+        return shadowFrustum_;
+    }
+    [[nodiscard]] const FrustumCullBuffers& shadowFrustum() const noexcept
+    {
+        return shadowFrustum_;
+    }
+    [[nodiscard]] MeshGroupedIndirectBuffers& shadowGrouping() noexcept
+    {
+        return shadowGrouping_;
+    }
+    [[nodiscard]] const MeshGroupedIndirectBuffers& shadowGrouping() const noexcept
+    {
+        return shadowGrouping_;
+    }
 
     [[nodiscard]] VkBuffer transformBuffer() const noexcept
     {
@@ -191,6 +207,38 @@ public:
     {
         return phase2Grouping_.groupedVisibleCountBuffer();
     }
+    [[nodiscard]] VkBuffer shadowVisibleIndicesBuffer() const noexcept
+    {
+        return shadowFrustum_.visibleIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowVisibleCountBuffer() const noexcept
+    {
+        return shadowFrustum_.visibleCountBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowIndirectCommandsBuffer() const noexcept
+    {
+        return shadowFrustum_.indirectCommandsBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowIndirectDrawCountBuffer() const noexcept
+    {
+        return shadowFrustum_.indirectDrawCountBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowMeshHeadsBuffer() const noexcept
+    {
+        return shadowGrouping_.meshHeadsBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowMeshNextBuffer() const noexcept
+    {
+        return shadowGrouping_.meshNextBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowGroupedVisibleIndicesBuffer() const noexcept
+    {
+        return shadowGrouping_.groupedVisibleIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer shadowGroupedVisibleCountBuffer() const noexcept
+    {
+        return shadowGrouping_.groupedVisibleCountBuffer();
+    }
     [[nodiscard]] std::uint32_t capacity() const noexcept
     {
         return capacity_;
@@ -203,6 +251,8 @@ private:
     OcclusionPhaseBuffers phase2_;
     MeshGroupedIndirectBuffers grouping_;
     MeshGroupedIndirectBuffers phase2Grouping_;
+    FrustumCullBuffers shadowFrustum_;
+    MeshGroupedIndirectBuffers shadowGrouping_;
     VkDevice device_ = VK_NULL_HANDLE;
     GpuAllocator* allocator_ = nullptr;
     std::uint32_t capacity_ = 0;

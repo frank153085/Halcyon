@@ -78,7 +78,16 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::initialize(
         false,
         "phase2 grouped visible indices",
         "phase2 grouped visible count");
-    if (!storage || !frustum || !phase1 || !phase2 || !grouping || !phase2Grouping)
+    auto shadowFrustum = shadowFrustum_.initialize(allocator, capacity_, frameCount_);
+    auto shadowGrouping = shadowGrouping_.initialize(
+        allocator,
+        capacity_,
+        frameCount_,
+        true,
+        "shadow grouped visible indices",
+        "shadow grouped visible count");
+    if (!storage || !frustum || !phase1 || !phase2 || !grouping || !phase2Grouping ||
+        !shadowFrustum || !shadowGrouping)
     {
         cleanup();
         return Halcyon::Result<void>::failure(
@@ -97,6 +106,8 @@ void VulkanGpuSceneBuffers::setFrameIndex(std::uint32_t frameIndex) noexcept
     phase2_.setFrameIndex(activeFrame_);
     grouping_.setFrameIndex(activeFrame_);
     phase2Grouping_.setFrameIndex(activeFrame_);
+    shadowFrustum_.setFrameIndex(activeFrame_);
+    shadowGrouping_.setFrameIndex(activeFrame_);
 }
 
 void VulkanGpuSceneBuffers::cleanup() noexcept
@@ -107,6 +118,8 @@ void VulkanGpuSceneBuffers::cleanup() noexcept
     phase2_.cleanup();
     grouping_.cleanup();
     phase2Grouping_.cleanup();
+    shadowFrustum_.cleanup();
+    shadowGrouping_.cleanup();
     device_ = VK_NULL_HANDLE;
     allocator_ = nullptr;
     capacity_ = 0;
@@ -159,6 +172,8 @@ Halcyon::Result<void> VulkanGpuSceneBuffers::ensureCapacity(std::uint32_t requir
     phase2_ = std::move(replacement.phase2_);
     grouping_ = std::move(replacement.grouping_);
     phase2Grouping_ = std::move(replacement.phase2Grouping_);
+    shadowFrustum_ = std::move(replacement.shadowFrustum_);
+    shadowGrouping_ = std::move(replacement.shadowGrouping_);
     replacement.device_ = VK_NULL_HANDLE;
     replacement.allocator_ = nullptr;
     replacement.capacity_ = 0;
@@ -258,6 +273,21 @@ void VulkanGpuSceneBuffers::writeIndirectBuildDescriptors(
             buffers.groupedVisibleSize = indexBytes;
             buffers.groupedCount = phase2GroupedVisibleCountBuffer();
             buffers.visibleCount = phase2VisibleCountBuffer();
+            break;
+        case IndirectBuildPass::Shadow:
+            buffers.visibleIndices = shadowVisibleIndicesBuffer();
+            buffers.visibleIndicesSize = indexBytes;
+            buffers.indirectCommands = shadowIndirectCommandsBuffer();
+            buffers.indirectCommandsSize = commandBytes;
+            buffers.indirectCount = shadowIndirectDrawCountBuffer();
+            buffers.groupedVisible = shadowGroupedVisibleIndicesBuffer();
+            buffers.groupedVisibleSize = indexBytes;
+            buffers.groupedCount = shadowGroupedVisibleCountBuffer();
+            buffers.visibleCount = shadowVisibleCountBuffer();
+            buffers.meshHeads = shadowMeshHeadsBuffer();
+            buffers.meshHeadsSize = indexBytes;
+            buffers.meshNext = shadowMeshNextBuffer();
+            buffers.meshNextSize = indexBytes;
             break;
     }
 

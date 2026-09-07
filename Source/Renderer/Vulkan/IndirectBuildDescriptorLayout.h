@@ -71,6 +71,7 @@ enum class IndirectBuildPass : std::uint8_t
     Main,
     Phase1,
     Phase2,
+    Shadow,
 };
 
 struct IndirectBuildBuffers
