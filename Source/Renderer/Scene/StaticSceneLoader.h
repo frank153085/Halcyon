@@ -75,7 +75,9 @@ struct StaticSceneLoadOptions
 {
     bool generateMissingNormals = true;
     bool generateMissingTangents = true;
-    bool flipV = true;
+    // glTF and Vulkan both treat image (0, 0) as the top-left texel. Leave
+    // this false unless the caller is feeding an API with a bottom-left origin.
+    bool flipV = false;
     bool rejectUnsupportedPrimitives = true;
 };
 

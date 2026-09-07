@@ -17,6 +17,16 @@
 #include <unordered_map>
 #include <vector>
 #include <stb_image.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <io.h>
+#include <windows.h>
+#endif
 
 #ifndef HALCYON_ENABLE_VALIDATION
 #define HALCYON_ENABLE_VALIDATION 1
@@ -61,6 +71,112 @@ namespace
     if (errno != 0 || end == copy.c_str() || *end != '\0' || !std::isfinite(parsed)) return false;
     value = parsed;
     return true;
+}
+
+void waitForEnterIfConsole() noexcept;
+
+std::FILE* gLogFile = nullptr;
+
+void writeLogLine(const char* text) noexcept
+{
+    if (text == nullptr)
+    {
+        return;
+    }
+    std::fputs(text, stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+    if (gLogFile != nullptr)
+    {
+        std::fputs(text, gLogFile);
+        std::fputc('\n', gLogFile);
+        std::fflush(gLogFile);
+    }
+}
+
+void openStartupLog() noexcept
+{
+    if (gLogFile != nullptr)
+    {
+        return;
+    }
+#ifdef _WIN32
+    if (GetConsoleWindow() == nullptr)
+    {
+        if (AllocConsole() != 0)
+        {
+            FILE* unused = nullptr;
+            (void)freopen_s(&unused, "CONOUT$", "w", stdout);
+            (void)freopen_s(&unused, "CONOUT$", "w", stderr);
+            (void)freopen_s(&unused, "CONIN$", "r", stdin);
+        }
+    }
+    char exePath[MAX_PATH]{};
+    std::string logPath = "halcyon.log";
+    if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) > 0)
+    {
+        std::string directory(exePath);
+        const auto slash = directory.find_last_of("\\/");
+        if (slash != std::string::npos)
+        {
+            logPath = directory.substr(0, slash + 1) + "halcyon.log";
+        }
+    }
+    (void)fopen_s(&gLogFile, logPath.c_str(), "w");
+#else
+    gLogFile = std::fopen("halcyon.log", "w");
+#endif
+    writeLogLine("Halcyon starting");
+}
+
+#ifdef _WIN32
+LONG WINAPI onUnhandledException(EXCEPTION_POINTERS* info) noexcept
+{
+    char buffer[256]{};
+    const DWORD code = info != nullptr && info->ExceptionRecord != nullptr
+        ? info->ExceptionRecord->ExceptionCode
+        : 0;
+    const void* address = info != nullptr && info->ExceptionRecord != nullptr
+        ? info->ExceptionRecord->ExceptionAddress
+        : nullptr;
+    std::snprintf(buffer, sizeof(buffer),
+        "Unhandled exception 0x%08lX at %p. See halcyon.log next to the executable.",
+        static_cast<unsigned long>(code), address);
+    writeLogLine(buffer);
+    waitForEnterIfConsole();
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+void installCrashHandlers() noexcept
+{
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(onUnhandledException);
+#endif
+    std::set_terminate([]() noexcept
+    {
+        writeLogLine("std::terminate called (uncaught C++ exception or fatal runtime error)");
+        waitForEnterIfConsole();
+        std::abort();
+    });
+}
+
+void waitForEnterIfConsole() noexcept
+{
+    if (std::getenv("HALCYON_NO_PAUSE") != nullptr)
+    {
+        return;
+    }
+#ifdef _WIN32
+    if (GetConsoleWindow() == nullptr)
+    {
+        return;
+    }
+#endif
+    std::fputs("Press Enter to exit...\n", stderr);
+    std::fflush(stderr);
+    std::fflush(stdout);
+    (void)std::getchar();
 }
 
 void printUsage() noexcept
@@ -312,6 +428,17 @@ void appendPerformanceSummary(const ApplicationConfig& config,
 int Application::run(
     int argc, char** argv, ApplicationConfig config, ApplicationCallbacks callbacks)
 {
+    openStartupLog();
+    installCrashHandlers();
+    Halcyon::Core::Logger::instance().setSink([](Halcyon::Core::LogLevel level, std::string_view message)
+    {
+        char line[2048]{};
+        std::snprintf(line, sizeof(line), "[%s] %.*s",
+            Halcyon::Core::toString(level).data(),
+            static_cast<int>(message.size()), message.data());
+        writeLogLine(line);
+    });
+    HALCYON_LOG_INFO("Application::run begin");
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument = argv[index] != nullptr ? argv[index] : "";
@@ -324,6 +451,7 @@ int Application::run(
     bool frameLimitSpecified = false;
     if (!parseCommandLine(argc, argv, config, frameLimitSpecified))
     {
+        waitForEnterIfConsole();
         return EXIT_FAILURE;
     }
     config.engine.instanceIdReportPath = config.instanceIdReportPath;
@@ -356,25 +484,33 @@ int Application::run(
         config.engine.framesInFlight = 1;
     }
 
+    HALCYON_LOG_INFO("Creating window ", config.window.initialExtent.width, "x",
+        config.window.initialExtent.height);
     auto windowResult = Platform::Window::create(config.window);
     if (!windowResult)
     {
         HALCYON_LOG_CRITICAL("Window creation failed: ", windowResult.error().describe());
+        waitForEnterIfConsole();
         return EXIT_FAILURE;
     }
     auto window = std::move(windowResult.value());
+    HALCYON_LOG_INFO("Window created");
 
+    HALCYON_LOG_INFO("Creating engine");
     auto engineResult = Engine::create(*window, config.engine);
     if (!engineResult)
     {
         HALCYON_LOG_CRITICAL("Engine creation failed: ", engineResult.error().describe());
+        waitForEnterIfConsole();
         return EXIT_FAILURE;
     }
+    HALCYON_LOG_INFO("Engine created");
     auto engine = std::move(engineResult.value());
 
     ApplicationInternal::DiagnosticsOverlay diagnostics;
     if (config.enableDiagnostics)
     {
+        HALCYON_LOG_INFO("Initializing diagnostics overlay");
         const auto diagnosticsResult = diagnostics.initialize(*window, *engine);
         if (!diagnosticsResult)
         {
@@ -389,6 +525,7 @@ int Application::run(
     {
         try
         {
+            HALCYON_LOG_INFO("Running onInitialize callback");
             const auto initialize = callbacks.onInitialize(*engine);
             if (!initialize)
             {
@@ -426,9 +563,14 @@ int Application::run(
     const std::uint64_t performanceWarmup =
         config.frameLimit > performanceWarmupFrameCount ? performanceWarmupFrameCount : 0u;
 
+    HALCYON_LOG_INFO("Entering render loop");
     while (exitCode == EXIT_SUCCESS && !window->shouldClose() &&
            (config.frameLimit == 0 || frameIndex < config.frameLimit))
     {
+        if (frameIndex == 0)
+        {
+            HALCYON_LOG_INFO("Rendering first frame");
+        }
         window->pollEvents();
         const Extent2D extent = window->framebufferExtent();
         const bool minimized = extent.empty();
@@ -522,7 +664,15 @@ int Application::run(
                     break;
                 }
             }
+            if (frameIndex == 0)
+            {
+                HALCYON_LOG_INFO("Calling engine->render(0)");
+            }
             const auto renderResult = engine->render(frameIndex);
+            if (frameIndex == 0)
+            {
+                HALCYON_LOG_INFO("engine->render(0) returned");
+            }
             if (!renderResult)
             {
                 HALCYON_LOG_CRITICAL("Engine render failed: ", renderResult.error().describe());
@@ -755,6 +905,10 @@ int Application::run(
     }
     diagnostics.shutdown();
     engine->shutdown();
+    if (exitCode != EXIT_SUCCESS)
+    {
+        waitForEnterIfConsole();
+    }
     return exitCode;
 }
 

@@ -11,8 +11,8 @@
 int main()
 {
     const std::filesystem::path root = HALCYON_SOURCE_DIR;
-    const auto helmet = root / "assets/m3/DamagedHelmet.glb";
-    const auto sponza = root / "assets/m3/Sponza/Sponza.gltf";
+    const auto helmet = root / "assets/models/damaged_helmet/DamagedHelmet.glb";
+    const auto sponza = root / "assets/models/sponza/Sponza.gltf";
     for (const auto& path : {helmet, sponza})
     {
         if (!std::filesystem::exists(path)) continue;

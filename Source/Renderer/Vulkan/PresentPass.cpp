@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addPresentPass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -169,9 +170,10 @@ void addPresentPass(Graph::FrameGraph& graph, FramePassContext& ctx)
                 builder.read(presentInstanceId, Graph::ResourceUsage::TransferSource);
             builder.sideEffect();
         },
-        [&, presentInstanceId](const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&,
+        [passCtx, presentInstanceId](const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&,
             Graph::CommandContext&)
         {
+            HALCYON_BIND_PASS_EXECUTE(passCtx);
             if (config.enableGpuDrivenScene && currentFrame < instanceIdReadbacks.size() &&
                 instanceIdReadbacks[currentFrame].buffer != VK_NULL_HANDLE)
             {

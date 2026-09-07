@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addGBufferPass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -182,9 +183,10 @@ void addGBufferPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             builder.declareRenderPass("G-buffer", descriptor);
             builder.sideEffect();
         },
-        [&, hizPhase1Input](const Graph::FrameGraphResources& resources,
+        [passCtx, hizPhase1Input](const Graph::FrameGraphResources& resources,
             const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
+            HALCYON_BIND_PASS_EXECUTE(passCtx);
             const auto info = resources.getRenderPassInfo(0);
              const auto* target = static_cast<const VulkanFrameGraphRenderTarget*>(info.target.token);
              if (target == nullptr) return;

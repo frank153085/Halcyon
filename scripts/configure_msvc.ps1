@@ -33,7 +33,7 @@ if (-not $vsDevCmd) { throw "VsDevCmd.bat was not found; install the MSVC C++ wo
 
 if ($FetchAssets) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts/fetch_assets.ps1") `
-        -Destination (Join-Path $repo "assets/m3")
+        -Destination (Join-Path $repo "assets/models")
 }
 
 $source = $repo.TrimEnd('\')

@@ -69,7 +69,7 @@ struct TraditionalPathResources
     resources.gbufferAlbedo = graph.createTexture(TextureDesc{.name = "GBuffer albedo",
         .width = width,
         .height = height,
-        .format = TextureFormat::RGBA8Srgb,
+        .format = TextureFormat::RGBA8Unorm,
         .transient = true});
     resources.gbufferNormalRoughness = graph.createTexture(TextureDesc{.name = "GBuffer normal",
         .width = width,

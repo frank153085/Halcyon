@@ -66,15 +66,15 @@ namespace
 {
     const float skyAmount = glm::smoothstep(-0.08f, 0.18f, direction.y);
     const float zenith = std::pow(std::max(direction.y, 0.0f), 0.35f);
-    const glm::vec3 ground{0.018f, 0.014f, 0.012f};
-    const glm::vec3 horizon{0.22f, 0.30f, 0.48f};
-    const glm::vec3 top{0.025f, 0.075f, 0.19f};
+    const glm::vec3 ground{0.04f, 0.037f, 0.032f};
+    const glm::vec3 horizon{0.28f, 0.26f, 0.23f};
+    const glm::vec3 top{0.14f, 0.15f, 0.17f};
     glm::vec3 radiance = glm::mix(ground, glm::mix(horizon, top, zenith), skyAmount);
     const glm::vec3 sunDirection = glm::normalize(glm::vec3{0.32f, 0.88f, 0.24f});
     const float sunExponent = glm::mix(768.0f, 4.0f, roughness);
     const float sun = std::pow(std::max(glm::dot(direction, sunDirection), 0.0f), sunExponent);
-    radiance += glm::vec3{8.0f, 6.2f, 4.2f} * sun * (1.0f - roughness);
-    const glm::vec3 average{0.085f, 0.105f, 0.15f};
+    radiance += glm::vec3{6.5f, 5.6f, 4.6f} * sun * (1.0f - roughness);
+    const glm::vec3 average{0.12f, 0.11f, 0.10f};
     return glm::mix(radiance, average, roughness * roughness * 0.82f);
 }
 

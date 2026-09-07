@@ -1,5 +1,5 @@
 param(
-    [string]$Destination = "assets/m3"
+    [string]$Destination = "assets/models"
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,15 +40,16 @@ function Add-Manifest([string]$relativePath, [string]$localPath) {
     $script:manifest += [ordered]@{ path = $relativePath; sha256 = $hash }
 }
 
+$helmetRoot = Join-Path $destinationRoot "damaged_helmet"
 $helmetRelative = "Models/DamagedHelmet/glTF-Binary/DamagedHelmet.glb"
-$helmetLocal = Join-Path $destinationRoot "DamagedHelmet.glb"
+$helmetLocal = Join-Path $helmetRoot "DamagedHelmet.glb"
 Get-Asset $helmetRelative $helmetLocal
 Add-Manifest $helmetRelative $helmetLocal
-$helmetLicense = Join-Path $destinationRoot "DamagedHelmet-LICENSE.md"
+$helmetLicense = Join-Path $helmetRoot "LICENSE.md"
 Get-Asset "Models/DamagedHelmet/LICENSE.md" $helmetLicense
 Add-Manifest "Models/DamagedHelmet/LICENSE.md" $helmetLicense
 
-$sponzaRoot = Join-Path $destinationRoot "Sponza"
+$sponzaRoot = Join-Path $destinationRoot "sponza"
 $sponzaRelative = "Models/Sponza/glTF/Sponza.gltf"
 $sponzaLocal = Join-Path $sponzaRoot "Sponza.gltf"
 Get-Asset $sponzaRelative $sponzaLocal
@@ -67,7 +68,7 @@ foreach ($uri in $uris) {
     if (-not (Test-Path -LiteralPath $local)) { Get-Asset $relative $local }
     Add-Manifest $relative $local
 }
-$sponzaLicense = Join-Path $destinationRoot "Sponza-LICENSE.md"
+$sponzaLicense = Join-Path $sponzaRoot "LICENSE.md"
 Get-Asset "Models/Sponza/LICENSE.md" $sponzaLicense
 Add-Manifest "Models/Sponza/LICENSE.md" $sponzaLicense
 

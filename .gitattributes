@@ -21,4 +21,6 @@ CMakeLists.txt text eol=lf
 *.dds binary
 *.ktx binary
 *.ktx2 binary
+*.glb binary
+*.bin binary
 

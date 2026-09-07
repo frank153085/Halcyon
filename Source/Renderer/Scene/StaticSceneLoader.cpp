@@ -339,7 +339,17 @@ Halcyon::Result<StaticScene> loadStaticScene(
                 const auto& tangents = asset.accessors[it->accessorIndex];
                 hasTangents = tangents.type == fastgltf::AccessorType::Vec4 && tangents.count == positions.count;
                 if (hasTangents) fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(asset, tangents,
-                    [&](const auto& value, std::size_t index) { primitive.vertices[index].tangent = {static_cast<float>(value[0]), static_cast<float>(value[1]), static_cast<float>(value[2]), static_cast<float>(value[3])}; });
+                    [&](const auto& value, std::size_t index)
+                    {
+                        // Flipping V reverses the bitangent, which glTF stores in
+                        // tangent.w. Keep authored tangents consistent with UVs.
+                        const float handedness = options.flipV
+                            ? -static_cast<float>(value[3])
+                            : static_cast<float>(value[3]);
+                        primitive.vertices[index].tangent = {
+                            static_cast<float>(value[0]), static_cast<float>(value[1]),
+                            static_cast<float>(value[2]), handedness};
+                    });
             }
             if (source.indicesAccessor.has_value())
             {

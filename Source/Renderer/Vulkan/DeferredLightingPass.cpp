@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addDeferredLightingPass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -199,12 +200,13 @@ void addDeferredLightingPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             builder.declareRenderPass("Clustered deferred lighting", descriptor);
             builder.sideEffect();
         },
-        [&, hdr, deferredGbuffer0, deferredGbuffer1, deferredGbuffer2, deferredDepth, deferredShadow,
+        [passCtx, hdr, deferredGbuffer0, deferredGbuffer1, deferredGbuffer2, deferredDepth, deferredShadow,
             deferredIrradiance, deferredPrefiltered, deferredBrdf, deferredClusterRanges,
             deferredClusterIndices, deferredLightBuffer, deferredShadowConstants](
             const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&,
             Graph::CommandContext&)
         {
+            HALCYON_BIND_PASS_EXECUTE(passCtx);
             const auto info = resources.getRenderPassInfo(0);
             const auto* target = static_cast<const VulkanFrameGraphRenderTarget*>(info.target.token);
             if (target == nullptr) return;

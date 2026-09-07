@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -172,8 +173,9 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             builder.declareRenderPass("ACES tonemap", descriptor);
             builder.sideEffect();
         },
-        [&, tonemapInput](const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&, Graph::CommandContext&)
+        [passCtx, tonemapInput](const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
+            HALCYON_BIND_PASS_EXECUTE(passCtx);
             VkRenderingAttachmentInfo color{};
             color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             color.imageView = importedTarget.view;

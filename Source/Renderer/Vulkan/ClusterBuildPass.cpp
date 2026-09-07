@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addClusterBuildPass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -173,10 +174,11 @@ void addClusterBuildPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             builder.read(clusterCamera, Graph::ResourceUsage::Uniform);
             builder.sideEffect();
         },
-        [&, clusterRangesInput, clusterIndicesInput, clusterOverflowInput, lightBufferInput,
+        [passCtx, clusterRangesInput, clusterIndicesInput, clusterOverflowInput, lightBufferInput,
             clusterCameraInput](
             const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
+            HALCYON_BIND_PASS_EXECUTE(passCtx);
             vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                 clusterBuildPipeline.computePipeline());
             const VkDescriptorSet descriptor = allocateSet(clusterLayout);

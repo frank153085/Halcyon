@@ -50,7 +50,7 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     result.csm = graph.createTexture({"CSM", CsmResolution, CsmResolution, 1, 1, 4,
         Graph::TextureFormat::D32Float, true});
     result.gbuffer0 = graph.createTexture({"GBuffer0", extent_.width, extent_.height, 1, 1, 1,
-        Graph::TextureFormat::RGBA8Srgb, true});
+        Graph::TextureFormat::RGBA8Unorm, true});
     result.gbuffer1 = graph.createTexture({"GBuffer1", extent_.width, extent_.height, 1, 1, 1,
         Graph::TextureFormat::RGBA16Float, true});
     result.gbuffer2 = graph.createTexture({"GBuffer2", extent_.width, extent_.height, 1, 1, 1,

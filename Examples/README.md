@@ -40,7 +40,8 @@ and `--help`. Example 03 also accepts `--scene damaged-helmet|sponza|stress`,
 
 Example 01 supplies an in-memory `StaticScene`, Example 02 references
 `models/monkey/monkey.gltf` relative to the shared asset root, and Example 03
-loads the Damaged Helmet / Sponza glTF assets or a procedural stress scene.
+loads `models/damaged_helmet/DamagedHelmet.glb`, `models/sponza/Sponza.gltf`,
+or a procedural stress scene.
 All three use the same SceneDatabase registration, instancing, and GPU upload
 path.
 

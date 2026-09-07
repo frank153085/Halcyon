@@ -47,8 +47,8 @@ lib/
 ### Third-party libraries downloaded through FetchContent or submodules ###
 # ThirdParty/*/build/
 
-# M3 sample scenes are fetched reproducibly by scripts/fetch_m3_assets.ps1.
-assets/m3/
+# Runtime cache written when unpacking embedded glTF images.
+*.embedded_*.bin
 
 ### Operating-system files ###
 .DS_Store

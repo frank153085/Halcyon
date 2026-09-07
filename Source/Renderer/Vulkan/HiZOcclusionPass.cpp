@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addHiZOcclusionPass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -207,9 +208,10 @@ void addHiZOcclusionPass(Graph::FrameGraph& graph, FramePassContext& ctx)
                 builder.dependsOn(ctx.gbufferPassHandle);
                 builder.sideEffect();
             },
-            [&](const Graph::FrameGraphResources& resources, const HiZPassData& data,
+            [passCtx](const Graph::FrameGraphResources& resources, const HiZPassData& data,
                 Graph::CommandContext&)
             {
+                HALCYON_BIND_PASS_EXECUTE(passCtx);
                 const auto& depthResource = resources.getTexture(data.depth);
                 const auto& hizResource = resources.getTexture(data.hiz);
                 const VkImage depthImage = frameGraphProvider.image(depthResource.native);

@@ -42,6 +42,8 @@ int main(int argc, char** argv)
         std::fprintf(stderr,
             "Unsupported scene '%s'. Expected 'damaged-helmet', 'sponza', or 'stress'.\n",
             scene.c_str());
+        std::fprintf(stderr, "Press Enter to exit...\n");
+        (void)std::getchar();
         return EXIT_FAILURE;
     }
 
@@ -49,14 +51,16 @@ int main(int argc, char** argv)
 #define HALCYON_ASSET_ROOT "assets"
 #endif
     const std::filesystem::path root = HALCYON_ASSET_ROOT;
-    const std::filesystem::path helmet = "m3/DamagedHelmet.glb";
-    const std::filesystem::path sponza = "m3/Sponza/Sponza.gltf";
+    const std::filesystem::path helmet = "models/damaged_helmet/DamagedHelmet.glb";
+    const std::filesystem::path sponza = "models/sponza/Sponza.gltf";
     const std::filesystem::path selected = scene == "sponza" ? sponza : helmet;
     if (scene != "stress" && !std::filesystem::exists(root / selected))
     {
         std::fprintf(stderr,
             "Scene asset '%s' is missing. Run: cmake --build <build-dir> --target HalcyonFetchAssets\n",
             (root / selected).string().c_str());
+        std::fprintf(stderr, "Press Enter to exit...\n");
+        (void)std::getchar();
         return EXIT_FAILURE;
     }
 
@@ -109,20 +113,22 @@ int main(int argc, char** argv)
             return Halcyon::Result<void>::failure(Halcyon::MakeError(
                 Halcyon::ErrorCode::NotFound, "configured scene instance is unavailable", "Example"));
         }
+        const bool sponza = *state == "sponza";
         const Halcyon::Entity sun = engine.scene().createEntity();
         Halcyon::LightComponent sunLight{};
         sunLight.type = Halcyon::LightType::Directional;
-        sunLight.color = {1.0f, 0.93f, 0.82f};
-        sunLight.intensity = *state == "sponza" ? 0.65f : 2.0f;
+        sunLight.direction = {0.35f, -0.85f, -0.35f};
+        sunLight.color = {1.0f, 0.96f, 0.90f};
+        sunLight.intensity = sponza ? 0.65f : 3.5f;
         sunLight.range = 1000.0f;
         (void)engine.scene().lights().add(sun, sunLight);
         const Halcyon::Entity fill = engine.scene().createEntity();
         Halcyon::LightComponent fillLight{};
         fillLight.type = Halcyon::LightType::Point;
-        fillLight.position = {2.0f, 2.5f, 2.0f};
-        fillLight.color = {0.35f, 0.45f, 1.0f};
-        fillLight.intensity = *state == "sponza" ? 1.5f : 8.0f;
-        fillLight.range = 8.0f;
+        fillLight.position = sponza ? glm::vec3{2.0f, 2.5f, 2.0f} : glm::vec3{-1.6f, 1.2f, 2.2f};
+        fillLight.color = sponza ? glm::vec3{0.55f, 0.65f, 0.90f} : glm::vec3{1.0f, 0.97f, 0.93f};
+        fillLight.intensity = sponza ? 1.5f : 1.8f;
+        fillLight.range = sponza ? 8.0f : 6.0f;
         (void)engine.scene().lights().add(fill, fillLight);
         return Halcyon::Result<void>::success();
     };

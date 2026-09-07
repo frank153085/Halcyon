@@ -6,14 +6,12 @@ struct VertexOut
 
 VertexOut main(uint vertexId : SV_VertexID)
 {
-    // A single fullscreen triangle avoids vertex/index buffers for post and
-    // deferred passes and is stable for every viewport size.
-    const float2 positions[3] = {
-        float2(-1.0, -1.0), float2(-1.0, 3.0), float2(3.0, -1.0)};
-    const float2 uvs[3] = {
-        float2(0.0, 1.0), float2(0.0, -1.0), float2(2.0, 1.0)};
+    // Vulkan NDC y=-1 is the top of a positive-height viewport, and texture
+    // (0, 0) is the top-left texel. Map them directly so deferred lighting,
+    // TAA, and tonemap sample the G-buffer pixel they are shading.
+    const float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
     VertexOut output;
-    output.position = float4(positions[vertexId], 0.0, 1.0);
-    output.uv = uvs[vertexId];
+    output.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
+    output.uv = uv;
     return output;
 }

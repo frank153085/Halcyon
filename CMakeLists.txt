@@ -506,7 +506,7 @@ halcyon_enable_warnings(HalcyonGoldenCompare)
 add_custom_target(HalcyonFetchAssets
     COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_assets.ps1"
-            -Destination "${CMAKE_CURRENT_SOURCE_DIR}/assets/m3"
+            -Destination "${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_assets.ps1"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL)

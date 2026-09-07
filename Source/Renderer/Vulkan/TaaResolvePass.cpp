@@ -22,6 +22,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 
 void addTaaResolvePass(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
+    FramePassContext* const passCtx = &ctx;
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
@@ -172,9 +173,12 @@ void addTaaResolvePass(Graph::FrameGraph& graph, FramePassContext& ctx)
             historyWrite = builder.write(historyWrite, Graph::ResourceUsage::Storage);
             builder.sideEffect();
         },
-        [&, taaHdr, taaMotion, taaHistoryRead](const Graph::FrameGraphResources& resources,
+        [passCtx, taaHdr, taaMotion, taaHistoryRead](const Graph::FrameGraphResources& resources,
             const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
+            HALCYON_BIND_PASS_EXECUTE(passCtx);
+            auto& historyWrite = taaHistoryFlip ? historyA : historyB;
+            const bool frameHistoryFlip = taaHistoryFlip;
             transitionImage(frameGraphProvider.image(resources.getTexture(taaHdr).native),
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
