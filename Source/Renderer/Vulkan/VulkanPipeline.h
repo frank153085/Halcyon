@@ -46,16 +46,16 @@ struct ComputePipelineDesc
     std::span<const DescriptorBindingDesc> descriptorBindings{};
     std::span<const VkPushConstantRange> pushConstants{};
 };
-struct alignas(16) M3PushConstants
+struct alignas(16) OpaquePushConstants
 {
     glm::mat4 viewProjection{1.0f};
     glm::mat4 previousViewProjection{1.0f};
     glm::mat4 model{1.0f};
     glm::mat4 previousModel{1.0f};
 };
-static_assert(sizeof(M3PushConstants) == 256);
+static_assert(sizeof(OpaquePushConstants) == 256);
 
-struct alignas(16) M3TransparentPushConstants
+struct alignas(16) TransparentPushConstants
 {
     glm::mat4 viewProjection{1.0f};
     glm::vec4 cameraPosition{0.0f, 0.0f, 0.0f, 1.0f};
@@ -65,7 +65,7 @@ struct alignas(16) M3TransparentPushConstants
     glm::mat4 model{1.0f};
     glm::mat4 unusedPreviousModel{0.0f};
 };
-static_assert(sizeof(M3TransparentPushConstants) == 256);
+static_assert(sizeof(TransparentPushConstants) == 256);
 
 class VulkanPipeline final
 {

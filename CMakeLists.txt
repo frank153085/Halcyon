@@ -10,8 +10,8 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 option(HALCYON_BUILD_TESTS "Build Halcyon CPU-side tests" ON)
 option(HALCYON_ENABLE_VALIDATION "Enable Vulkan validation by default" ON)
-option(HALCYON_BUILD_EXPERIMENTAL_M2
-    "Build M2 FrameGraph, bindless, budget and shader validation infrastructure" ON)
+option(HALCYON_BUILD_FRAMEGRAPH
+    "Build FrameGraph, bindless, budget and shader validation infrastructure" ON)
 option(HALCYON_BUILD_EXAMPLES
     "Build standalone examples with isolated output directories" ON)
 
@@ -44,7 +44,7 @@ set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(ThirdParty/glm)
 add_subdirectory(ThirdParty)
 
-# fastgltf is the canonical M3 scene parser.  Keep the source pinned in the
+# fastgltf is the canonical scene parser.  Keep the source pinned in the
 # repository so a clean checkout does not depend on a system installation.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/fastgltf/CMakeLists.txt")
     set(FASTGLTF_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
@@ -144,13 +144,44 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/VulkanSceneResources.h
     Source/Renderer/Vulkan/VulkanFrameGraphProvider.cpp
     Source/Renderer/Vulkan/VulkanFrameGraphProvider.h
-    Source/Renderer/Vulkan/VulkanM3FrameResources.cpp
-    Source/Renderer/Vulkan/VulkanM3FrameResources.h
+    Source/Renderer/Vulkan/VulkanFrameResources.cpp
+    Source/Renderer/Vulkan/VulkanFrameResources.h
     Source/Renderer/Vulkan/GpuAllocator.cpp
     Source/Renderer/Vulkan/GpuAllocator.h
     Source/Renderer/Vulkan/GpuUploader.cpp
     Source/Renderer/Vulkan/VulkanGpuSceneBuffers.cpp
     Source/Renderer/Vulkan/VulkanGpuSceneBuffers.h
+    Source/Renderer/Vulkan/GpuSceneBufferUtil.h
+    Source/Renderer/Vulkan/GpuSceneStorage.cpp
+    Source/Renderer/Vulkan/GpuSceneStorage.h
+    Source/Renderer/Vulkan/FrustumCullBuffers.cpp
+    Source/Renderer/Vulkan/FrustumCullBuffers.h
+    Source/Renderer/Vulkan/OcclusionPhaseBuffers.cpp
+    Source/Renderer/Vulkan/OcclusionPhaseBuffers.h
+    Source/Renderer/Vulkan/MeshGroupedIndirectBuffers.cpp
+    Source/Renderer/Vulkan/MeshGroupedIndirectBuffers.h
+    Source/Renderer/Vulkan/IndirectBuildDescriptorLayout.h
+    Source/Renderer/Vulkan/RendererNativeHandles.h
+    Source/Renderer/Vulkan/PipelineRegistry.cpp
+    Source/Renderer/Vulkan/PipelineRegistry.h
+    Source/Renderer/Vulkan/DebugReadbackManager.cpp
+    Source/Renderer/Vulkan/DebugReadbackManager.h
+    Source/Renderer/Vulkan/FrameRecorder.cpp
+    Source/Renderer/Vulkan/FrameRecorder.h
+    Source/Renderer/Vulkan/FramePassContext.cpp
+    Source/Renderer/Vulkan/FramePassContext.h
+    Source/Renderer/Vulkan/ProceduralIbl.cpp
+    Source/Renderer/Vulkan/GpuDrivenCullPass.cpp
+    Source/Renderer/Vulkan/CsmShadowPass.cpp
+    Source/Renderer/Vulkan/GBufferPass.cpp
+    Source/Renderer/Vulkan/HiZOcclusionPass.cpp
+    Source/Renderer/Vulkan/ClusterBuildPass.cpp
+    Source/Renderer/Vulkan/DeferredLightingPass.cpp
+    Source/Renderer/Vulkan/TransparencyPass.cpp
+    Source/Renderer/Vulkan/TaaResolvePass.cpp
+    Source/Renderer/Vulkan/TonemapPass.cpp
+    Source/Renderer/Vulkan/PresentPass.cpp
+    Source/Renderer/Vulkan/VisibilityReadbackPass.cpp
     Source/Renderer/Vulkan/GpuUploader.h
     Source/Renderer/Vulkan/GpuResourceManager.cpp
     Source/Renderer/Vulkan/StbImage.cpp
@@ -183,7 +214,7 @@ if(TARGET Halcyon::FastGltf)
 endif()
 target_compile_definitions(HalcyonRenderer PRIVATE
     GLFW_INCLUDE_NONE
-    HALCYON_BUILD_EXPERIMENTAL_M2=$<BOOL:${HALCYON_BUILD_EXPERIMENTAL_M2}>
+    HALCYON_BUILD_FRAMEGRAPH=$<BOOL:${HALCYON_BUILD_FRAMEGRAPH}>
     HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
 halcyon_enable_warnings(HalcyonRenderer)
 target_compile_definitions(HalcyonRenderer PRIVATE HALCYON_SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/Shaders")
@@ -199,9 +230,9 @@ elseif(HALCYON_ENABLE_TRACY)
     message(WARNING "HALCYON_ENABLE_TRACY is ON but the Tracy target is unavailable")
 endif()
 
-# M2 infrastructure remains a separate target so its graph, barrier, bindless,
+# FrameGraph infrastructure remains a separate target so its graph, barrier, bindless,
 # and quality code can evolve independently of the Vulkan frame loop.
-if(HALCYON_BUILD_EXPERIMENTAL_M2)
+if(HALCYON_BUILD_FRAMEGRAPH)
     add_library(HalcyonFrameGraph STATIC
         # Keep this list in the same order and at the same granularity as
         # filament/src/fg.  The graph itself is backend-neutral; the source
@@ -270,7 +301,7 @@ if(HALCYON_DXC_EXECUTABLE)
     find_program(HALCYON_SPIRV_VAL_EXECUTABLE
         NAMES spirv-val
         HINTS "$ENV{VULKAN_SDK}/Bin"
-        DOC "SPIR-V validator used for generated M3 shader modules"
+        DOC "SPIR-V validator used for generated shader modules"
     )
     set(HALCYON_SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/Shaders")
     set(HALCYON_PBR_VERTEX_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/pbr.vert.spv")
@@ -404,7 +435,7 @@ if(HALCYON_DXC_EXECUTABLE)
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE1_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
             DEPENDS HalcyonShaders
-            COMMENT "Validating generated M3 SPIR-V modules"
+            COMMENT "Validating generated SPIR-V modules"
             VERBATIM
         )
         add_dependencies(HalcyonRenderer HalcyonShaderValidation)
@@ -412,7 +443,7 @@ if(HALCYON_DXC_EXECUTABLE)
         add_dependencies(HalcyonRenderer HalcyonShaders)
     endif()
 else()
-    message(FATAL_ERROR "DXC is required to build the Vulkan M3 renderer. Set VULKAN_SDK or HALCYON_DXC_EXECUTABLE.")
+    message(FATAL_ERROR "DXC is required to build the Vulkan renderer. Set VULKAN_SDK or HALCYON_DXC_EXECUTABLE.")
 endif()
 
 # Backend-neutral orchestration layer.  Engine owns scene extraction and the
@@ -477,31 +508,31 @@ target_compile_definitions(HalcyonSandbox PRIVATE
 halcyon_configure_asset_root(HalcyonSandbox)
 halcyon_enable_warnings(HalcyonSandbox)
 
-# M3 showcase executable.  It intentionally has its own entry point so the
-# original sandbox remains a stable M1/M2 regression target.
-add_executable(HalcyonM3Demo
-    Source/M3Demo/Main.cpp
-    Source/M3Demo/M3Demo.cpp
-    Source/M3Demo/M3Demo.h)
-target_link_libraries(HalcyonM3Demo PRIVATE HalcyonApplication)
-target_compile_definitions(HalcyonM3Demo PRIVATE
+# Showcase executable. It has its own entry point so the original sandbox
+# remains a stable regression target.
+add_executable(HalcyonDemo
+    Source/Demo/Main.cpp
+    Source/Demo/Demo.cpp
+    Source/Demo/Demo.h)
+target_link_libraries(HalcyonDemo PRIVATE HalcyonApplication)
+target_compile_definitions(HalcyonDemo PRIVATE
     HALCYON_ENABLE_TRACY=$<BOOL:${HALCYON_TRACY_ACTIVE}>)
-halcyon_configure_asset_root(HalcyonM3Demo)
-halcyon_enable_warnings(HalcyonM3Demo)
+halcyon_configure_asset_root(HalcyonDemo)
+halcyon_enable_warnings(HalcyonDemo)
 
 # Standalone image gate used by CI and local capture workflows.  It is kept
 # independent from the renderer so it can decode PNGs on machines without a
 # Vulkan device.
-add_executable(HalcyonGoldenCompare Source/M3Demo/GoldenCompare.cpp)
+add_executable(HalcyonGoldenCompare Source/Demo/GoldenCompare.cpp)
 target_link_libraries(HalcyonGoldenCompare PRIVATE HalcyonCore Halcyon::Stb)
 halcyon_configure_asset_root(HalcyonGoldenCompare)
 halcyon_enable_warnings(HalcyonGoldenCompare)
 
-add_custom_target(HalcyonFetchM3Assets
+add_custom_target(HalcyonFetchAssets
     COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
-            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_m3_assets.ps1"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_assets.ps1"
             -Destination "${CMAKE_CURRENT_SOURCE_DIR}/assets/m3"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_m3_assets.ps1"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_assets.ps1"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL)
 
@@ -534,7 +565,7 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonMemoryAllocatorTests)
     add_test(NAME Halcyon.MemoryAllocator COMMAND HalcyonMemoryAllocatorTests)
 
-    if(HALCYON_BUILD_EXPERIMENTAL_M2)
+    if(HALCYON_BUILD_FRAMEGRAPH)
         add_executable(HalcyonRendererCoreTests Tests/RendererCoreTests.cpp)
         target_link_libraries(HalcyonRendererCoreTests
             PRIVATE HalcyonRendererExperimental)
@@ -551,11 +582,11 @@ if(HALCYON_BUILD_TESTS)
         add_test(NAME Halcyon.ShaderReflection COMMAND HalcyonShaderReflectionTests)
 
         if(HALCYON_ENABLE_GOOGLETEST)
-            add_executable(HalcyonM2GoogleTests Tests/M2GoogleTests.cpp)
-            target_link_libraries(HalcyonM2GoogleTests
+            add_executable(HalcyonFrameGraphTests Tests/FrameGraphGoogleTests.cpp)
+            target_link_libraries(HalcyonFrameGraphTests
                 PRIVATE HalcyonRendererExperimental Halcyon::GoogleTest)
-            halcyon_enable_warnings(HalcyonM2GoogleTests)
-            add_test(NAME Halcyon.M2Google COMMAND HalcyonM2GoogleTests)
+            halcyon_enable_warnings(HalcyonFrameGraphTests)
+            add_test(NAME Halcyon.FrameGraph COMMAND HalcyonFrameGraphTests)
         endif()
     endif()
 
@@ -567,12 +598,12 @@ if(HALCYON_BUILD_TESTS)
     halcyon_enable_warnings(HalcyonCameraTests)
     add_test(NAME Halcyon.Camera COMMAND HalcyonCameraTests)
 
-    add_executable(HalcyonM3QualityTests Tests/M3QualityTests.cpp)
-    target_link_libraries(HalcyonM3QualityTests PRIVATE HalcyonCore glm::glm)
-    target_include_directories(HalcyonM3QualityTests PRIVATE
+    add_executable(HalcyonQualityTests Tests/QualityTests.cpp)
+    target_link_libraries(HalcyonQualityTests PRIVATE HalcyonCore glm::glm)
+    target_include_directories(HalcyonQualityTests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/Source")
-    halcyon_enable_warnings(HalcyonM3QualityTests)
-    add_test(NAME Halcyon.M3Quality COMMAND HalcyonM3QualityTests)
+    halcyon_enable_warnings(HalcyonQualityTests)
+    add_test(NAME Halcyon.Quality COMMAND HalcyonQualityTests)
 
     add_executable(HalcyonStaticSceneLoaderTests Tests/StaticSceneLoaderTests.cpp)
     target_link_libraries(HalcyonStaticSceneLoaderTests PRIVATE HalcyonRenderer)
@@ -603,8 +634,8 @@ if(HALCYON_BUILD_TESTS)
     target_link_libraries(HalcyonInfrastructureTests PRIVATE HalcyonCore)
     target_include_directories(HalcyonInfrastructureTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
     target_compile_definitions(HalcyonInfrastructureTests PRIVATE
-        HALCYON_BUILD_EXPERIMENTAL_M2=$<BOOL:${HALCYON_BUILD_EXPERIMENTAL_M2}>)
-    if(HALCYON_BUILD_EXPERIMENTAL_M2)
+        HALCYON_BUILD_FRAMEGRAPH=$<BOOL:${HALCYON_BUILD_FRAMEGRAPH}>)
+    if(HALCYON_BUILD_FRAMEGRAPH)
         target_link_libraries(HalcyonInfrastructureTests
             PRIVATE HalcyonRendererExperimental)
     endif()
@@ -659,17 +690,17 @@ if(HALCYON_BUILD_TESTS)
     # Convenience aggregate target used by IDEs and CI jobs that only need to
     # build the complete CPU test suite.  CTest remains the runner of record.
     add_custom_target(HalcyonTests)
-    add_custom_target(HalcyonM4Tests)
-    add_dependencies(HalcyonM4Tests
+    add_custom_target(HalcyonGpuDrivenTests)
+    add_dependencies(HalcyonGpuDrivenTests
         HalcyonGpuSceneTests
         HalcyonFrustumCullingTests
         HalcyonHiZReductionTests)
-    add_dependencies(HalcyonM4Tests HalcyonStressSceneTests)
+    add_dependencies(HalcyonGpuDrivenTests HalcyonStressSceneTests)
     add_dependencies(HalcyonTests
         HalcyonCoreTests
         HalcyonMemoryAllocatorTests
         HalcyonCameraTests
-        HalcyonM3QualityTests
+        HalcyonQualityTests
         HalcyonStaticSceneLoaderTests
         HalcyonEcsTests
         HalcyonSceneManagerTests
@@ -679,10 +710,10 @@ if(HALCYON_BUILD_TESTS)
         HalcyonRenderExtractorDeltaTests
         HalcyonFrustumCullingTests
         HalcyonHiZReductionTests)
-    if(HALCYON_BUILD_EXPERIMENTAL_M2)
+    if(HALCYON_BUILD_FRAMEGRAPH)
         add_dependencies(HalcyonTests HalcyonRendererCoreTests HalcyonShaderReflectionTests)
         if(HALCYON_ENABLE_GOOGLETEST)
-            add_dependencies(HalcyonTests HalcyonM2GoogleTests)
+            add_dependencies(HalcyonTests HalcyonFrameGraphTests)
         endif()
     endif()
 endif()

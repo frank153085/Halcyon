@@ -77,4 +77,4 @@ $manifestPath = Join-Path $destinationRoot "manifest.json"
     commit = $commit
     files = @($manifest)
 } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath $manifestPath
-Write-Host "M3 assets are ready under $destinationRoot"
+Write-Host "Scene assets are ready under $destinationRoot"

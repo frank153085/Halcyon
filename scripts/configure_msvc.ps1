@@ -1,5 +1,5 @@
 param(
-    [string]$BuildDir = "out/build/m3-msvc-debug",
+    [string]$BuildDir = "out/build/demo-msvc-debug",
     [ValidateSet("Debug", "RelWithDebInfo")]
     [string]$BuildType = "Debug",
     [switch]$Build,
@@ -32,7 +32,7 @@ $vsDevCmd = @(
 if (-not $vsDevCmd) { throw "VsDevCmd.bat was not found; install the MSVC C++ workload." }
 
 if ($FetchAssets) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts/fetch_m3_assets.ps1") `
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts/fetch_assets.ps1") `
         -Destination (Join-Path $repo "assets/m3")
 }
 
@@ -42,7 +42,7 @@ $type = $BuildType
 # The repository paths are intentionally kept free of spaces in the supported
 # layout.  Avoid nested quotes here because cmd.exe consumes the first quoted
 # argument after /c as the complete command string.
-$cmakeCommand = "cmake -S $source -B $binary -G Ninja -DCMAKE_BUILD_TYPE=$type -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_EXPERIMENTAL_M2=ON"
+$cmakeCommand = "cmake -S $source -B $binary -G Ninja -DCMAKE_BUILD_TYPE=$type -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_FRAMEGRAPH=ON"
 Write-Host $cmakeCommand
 $commandLine = "/c call `"$vsDevCmd`" -arch=x64 && set VSLANG=1033&& $cmakeCommand"
 & cmd.exe $commandLine

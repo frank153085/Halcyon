@@ -1,4 +1,4 @@
-#include "M3Demo.h"
+#include "Demo.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -20,7 +20,7 @@ int main(int argc, char** argv)
         if (argument == "--help" || argument == "-h")
         {
             // Let the common runner print the complete option list without
-            // requiring downloaded M3 assets or a Vulkan device.
+            // requiring downloaded scene assets or a Vulkan device.
             return Halcyon::Application::run(argc, argv, {}, {});
         }
         if (argument == "--scene" && i + 1 < argc)
@@ -52,7 +52,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
     Halcyon::ApplicationConfig config;
-    config.window.title = "Halcyon M3 - " + scene;
+    config.window.title = "Halcyon - " + scene;
     config.sceneName = scene;
     const std::filesystem::path root = HALCYON_ASSET_ROOT;
     const std::filesystem::path helmet = "m3/DamagedHelmet.glb";
@@ -61,8 +61,8 @@ int main(int argc, char** argv)
     if (scene != "stress" && !std::filesystem::exists(root / selected))
     {
         std::fprintf(stderr,
-            "M3 asset '%s' is missing. Run: cmake --build out/build/m3-msvc-debug "
-            "--target HalcyonFetchM3Assets\n",
+            "Scene asset '%s' is missing. Run: cmake --build out/build/demo-msvc-debug "
+            "--target HalcyonFetchAssets\n",
             (root / selected).string().c_str());
         return EXIT_FAILURE;
     }
@@ -84,5 +84,5 @@ int main(int argc, char** argv)
     config.engine.scene.instances.push_back({"main", scene});
     config.enableDiagnostics = true;
     return Halcyon::Application::run(
-        argc, argv, std::move(config), Halcyon::M3Demo::makeCallbacks(scene));
+        argc, argv, std::move(config), Halcyon::Demo::makeCallbacks(scene));
 }

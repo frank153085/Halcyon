@@ -44,7 +44,7 @@ struct TraditionalPathResources
     Graph::BufferHandle shadowConstants{};
 };
 
-// Build the canonical M3 pass sequence.  Backend code supplies callbacks for
+// Build the canonical deferred pass sequence. Backend code supplies callbacks for
 // the actual Vulkan work; this helper centralises resource declarations and
 // ordering so the CPU reference path and GPU path cannot silently diverge.
 [[nodiscard]] inline TraditionalPathResources buildTraditionalRenderPath(
@@ -54,7 +54,7 @@ struct TraditionalPathResources
     const std::uint32_t width = config.width == 0 ? 1u : config.width;
     const std::uint32_t height = config.height == 0 ? 1u : config.height;
     TraditionalPathResources resources;
-    // M3 always uses four stable cascades.  Keep the legacy configuration
+    // The deferred path always uses four stable cascades. Keep the legacy configuration
     // field source-compatible, but do not let a caller create an array whose
     // layer count disagrees with the fixed pass topology below.
     constexpr std::uint32_t kCascadeCount = 4u;
@@ -188,7 +188,7 @@ struct TraditionalPathResources
     resources.motionVectors = gbuffer;
     gbuffer.write(resources.sceneDepth, ResourceUsage::DepthAttachment);
     resources.sceneDepth = gbuffer;
-    // Cluster construction is a mandatory GPU pass in M3.  The quality flag
+    // Cluster construction is a mandatory GPU pass. The quality flag
     // controls the light-list policy in the pass implementation, never the
     // existence of the pass (and never a CPU fallback path).
     auto cluster = graph.addPass("Cluster Build");

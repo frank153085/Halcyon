@@ -57,7 +57,7 @@ public:
     [[nodiscard]] Halcyon::Result<TextureResource> loadTexture2D(
         const std::string& path, bool srgb = true);
     // Create a deterministic 1x1 default texture without touching the
-    // filesystem.  M3 materials use white for base color/AO, a flat normal,
+    // filesystem.  Default materials use white for base color/AO, a flat normal,
     // and black for metallic/emissive channels when an image is absent.
     [[nodiscard]] Halcyon::Result<TextureResource> loadSolidColorTexture(
         std::array<std::uint8_t, 4> rgba, bool srgb = false);

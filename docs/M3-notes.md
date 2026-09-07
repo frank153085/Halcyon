@@ -38,7 +38,7 @@ before changing the frame submission path for M4.
 ## Capture and regression workflow
 
 1. Build the debug or RelWithDebInfo preset and fetch M3 assets.
-2. Run `HalcyonM3Demo.exe` with deterministic scene, frame count, screenshot,
+2. Run `HalcyonDemo.exe` with deterministic scene, frame count, screenshot,
    and `--perf-csv` arguments (see the README examples).
 3. For GPU inspection, launch with `--no-validation` and capture a frame in
    RenderDoc. Inspect the CSM, G-buffer, clustered deferred lighting, TAA, and

@@ -1,4 +1,4 @@
-#include "VulkanM3FrameResources.h"
+#include "VulkanFrameResources.h"
 
 #include "Renderer/Scene/FramePacket.h"
 
@@ -9,41 +9,41 @@ namespace Halcyon::Vulkan
 {
 namespace Graph = Halcyon::Renderer::Graph;
 
-Halcyon::Result<void> VulkanM3FrameResources::recreate(VkExtent2D extent) noexcept
+Halcyon::Result<void> VulkanFrameResources::recreate(VkExtent2D extent) noexcept
 {
     if (extent.width == 0 || extent.height == 0)
     {
         return Halcyon::Result<void>::failure(
             {Halcyon::ErrorCode::InvalidArgument,
-                "Vulkan M3 frame resources require a non-zero swapchain extent"});
+                "Vulkan frame resources require a non-zero swapchain extent"});
     }
     extent_ = extent;
     return Halcyon::Result<void>::success();
 }
 
-std::uint32_t VulkanM3FrameResources::tilesX() const noexcept
+std::uint32_t VulkanFrameResources::tilesX() const noexcept
 {
     return std::max(1u, (extent_.width + ClusterTileSize - 1u) / ClusterTileSize);
 }
 
-std::uint32_t VulkanM3FrameResources::tilesY() const noexcept
+std::uint32_t VulkanFrameResources::tilesY() const noexcept
 {
     return std::max(1u, (extent_.height + ClusterTileSize - 1u) / ClusterTileSize);
 }
 
-std::uint32_t VulkanM3FrameResources::clusterCount() const noexcept
+std::uint32_t VulkanFrameResources::clusterCount() const noexcept
 {
     return tilesX() * tilesY() * ClusterSlices;
 }
 
-Halcyon::Result<VulkanM3FrameResources::Handles> VulkanM3FrameResources::declare(
+Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     Graph::FrameGraph& graph, std::uint32_t lightCount) const
 {
     if (extent_.width == 0 || extent_.height == 0)
     {
         return Halcyon::Result<Handles>::failure(
             {Halcyon::ErrorCode::InvalidState,
-                "Vulkan M3 frame resources were not recreated for the current swapchain"});
+                "Vulkan frame resources were not recreated for the current swapchain"});
     }
 
     Handles result{};

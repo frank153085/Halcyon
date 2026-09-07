@@ -82,7 +82,7 @@ struct StaticSceneLoadOptions
 // Loads a static glTF/GLB scene through the vendored reader.  The
 // resulting data is backend-neutral and suitable for either a Vulkan upload or
 // deterministic CPU image tests.  Skeletal animation and morph targets are
-// intentionally rejected because M3 covers rigid scenes only.
+// intentionally rejected because this path covers rigid scenes only.
 [[nodiscard]] Halcyon::Result<StaticScene> loadStaticScene(
     const std::filesystem::path& path, const StaticSceneLoadOptions& options = {});
 

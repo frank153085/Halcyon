@@ -17,7 +17,7 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "HALCYON_BUILD_TESTS": "ON",
         "HALCYON_ENABLE_VALIDATION": "ON",
-        "HALCYON_BUILD_EXPERIMENTAL_M2": "ON"
+        "HALCYON_BUILD_FRAMEGRAPH": "ON"
       }
     },
     {
@@ -38,19 +38,19 @@
       }
     },
     {
-      "name": "m3-msvc-debug",
-      "displayName": "M3 Windows MSVC Debug",
+      "name": "demo-msvc-debug",
+      "displayName": "Demo Windows MSVC Debug",
       "inherits": "windows-msvc-base",
-      "binaryDir": "${sourceDir}/out/build/m3-msvc-debug",
+      "binaryDir": "${sourceDir}/out/build/demo-msvc-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
     {
-      "name": "m3-msvc-relwithdebinfo",
-      "displayName": "M3 Windows MSVC RelWithDebInfo",
+      "name": "demo-msvc-relwithdebinfo",
+      "displayName": "Demo Windows MSVC RelWithDebInfo",
       "inherits": "windows-msvc-base",
-      "binaryDir": "${sourceDir}/out/build/m3-msvc-relwithdebinfo",
+      "binaryDir": "${sourceDir}/out/build/demo-msvc-relwithdebinfo",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "HALCYON_ENABLE_VALIDATION": "OFF"
@@ -67,12 +67,12 @@
       "configurePreset": "windows-msvc-relwithdebinfo"
     },
     {
-      "name": "m3-msvc-debug",
-      "configurePreset": "m3-msvc-debug"
+      "name": "demo-msvc-debug",
+      "configurePreset": "demo-msvc-debug"
     },
     {
-      "name": "m3-msvc-relwithdebinfo",
-      "configurePreset": "m3-msvc-relwithdebinfo"
+      "name": "demo-msvc-relwithdebinfo",
+      "configurePreset": "demo-msvc-relwithdebinfo"
     }
   ],
   "testPresets": [
@@ -91,15 +91,15 @@
       }
     },
     {
-      "name": "m3-msvc-debug",
-      "configurePreset": "m3-msvc-debug",
+      "name": "demo-msvc-debug",
+      "configurePreset": "demo-msvc-debug",
       "output": {
         "outputOnFailure": true
       }
     },
     {
-      "name": "m3-msvc-relwithdebinfo",
-      "configurePreset": "m3-msvc-relwithdebinfo",
+      "name": "demo-msvc-relwithdebinfo",
+      "configurePreset": "demo-msvc-relwithdebinfo",
       "output": {
         "outputOnFailure": true
       }

@@ -12,6 +12,7 @@
 #include "../Scene/GpuScene.h"
 #include "../Scene/Ecs/RenderExtractor.h"
 #include "Halcyon/RenderTypes.h"
+#include "RendererNativeHandles.h"
 
 #include <array>
 #include <cstdint>
@@ -120,17 +121,8 @@ public:
     // renderer waits that frame's fence before writing the PNG.
     [[nodiscard]] Halcyon::Result<void> captureScreenshot(const std::filesystem::path& path);
 
-    // Read-only escape hatches for tools that need to attach a profiler or
-    // RenderDoc marker.  They may return VK_NULL_HANDLE before initialization.
-    [[nodiscard]] VkInstance instance() const noexcept;
-    [[nodiscard]] VkPhysicalDevice physicalDevice() const noexcept;
-    [[nodiscard]] VkDevice device() const noexcept;
-    [[nodiscard]] VkQueue graphicsQueue() const noexcept;
-    [[nodiscard]] VkQueue presentQueue() const noexcept;
-    [[nodiscard]] VkFormat swapchainFormat() const noexcept;
-    [[nodiscard]] VkFormat depthFormat() const noexcept;
-    [[nodiscard]] VkExtent2D swapchainExtent() const noexcept;
-    [[nodiscard]] std::uint32_t swapchainImageCount() const noexcept;
+    // Read-only Vulkan handles for diagnostics overlays and capture tools.
+    [[nodiscard]] RendererNativeHandles nativeHandles() const noexcept;
 
     void setOverlayCallback(OverlayCallback callback) noexcept;
 

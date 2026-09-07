@@ -1,11 +1,11 @@
 #include "Renderer/Resources/DeferredDeletionQueue.h"
 #include "Renderer/Resources/UploadRing.h"
 
-#ifndef HALCYON_BUILD_EXPERIMENTAL_M2
-#define HALCYON_BUILD_EXPERIMENTAL_M2 0
+#ifndef HALCYON_BUILD_FRAMEGRAPH
+#define HALCYON_BUILD_FRAMEGRAPH 0
 #endif
 
-#if HALCYON_BUILD_EXPERIMENTAL_M2
+#if HALCYON_BUILD_FRAMEGRAPH
 #include "Renderer/Graph/BarrierPlanner.h"
 #include "Renderer/Resources/BindlessTable.h"
 #endif
@@ -94,7 +94,7 @@ void deletionQueueTests(TestContext& context)
     HALCYON_EXPECT(context, destroyed == 11);
 }
 
-#if HALCYON_BUILD_EXPERIMENTAL_M2
+#if HALCYON_BUILD_FRAMEGRAPH
 void barrierPlannerTests(TestContext& context)
 {
     namespace Graph = Halcyon::Renderer::Graph;
@@ -177,7 +177,7 @@ int main()
     TestContext context;
     uploadRingTests(context);
     deletionQueueTests(context);
-#if HALCYON_BUILD_EXPERIMENTAL_M2
+#if HALCYON_BUILD_FRAMEGRAPH
     barrierPlannerTests(context);
     bindlessTests(context);
 #endif

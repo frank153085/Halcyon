@@ -1,6 +1,6 @@
 param(
-    [string]$Demo = "out/build/m3-msvc-debug/HalcyonM3Demo.exe",
-    [string]$GoldenCompare = "out/build/m3-msvc-debug/HalcyonGoldenCompare.exe",
+    [string]$Demo = "out/build/demo-msvc-debug/HalcyonDemo.exe",
+    [string]$GoldenCompare = "out/build/demo-msvc-debug/HalcyonGoldenCompare.exe",
     [string]$GoldenDirectory = "Tests/GoldenImages",
     [string]$CaptureDirectory = "out/captures/regression"
 )
@@ -15,7 +15,7 @@ foreach ($scene in @("damaged-helmet", "sponza")) {
     & $Demo --scene $scene --golden $golden --frames 120 --fixed-dt 0.016666 `
         --no-taa --screenshot $actual --perf-csv $csv --no-validation
     if ($LASTEXITCODE -ne 0) {
-        throw "M3 demo failed for scene '$scene' (exit code $LASTEXITCODE)"
+        throw "Demo failed for scene '$scene' (exit code $LASTEXITCODE)"
     }
     if (Test-Path $GoldenCompare) {
         & $GoldenCompare --actual $actual --golden $golden
@@ -25,4 +25,4 @@ foreach ($scene in @("damaged-helmet", "sponza")) {
     }
 }
 
-Write-Host "M3 regression completed for damaged-helmet and sponza."
+Write-Host "Regression completed for damaged-helmet and sponza."

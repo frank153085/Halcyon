@@ -63,6 +63,6 @@ int main()
     {
         return 1;
     }
-    std::cout << "All M3 quality tests passed\n";
+    std::cout << "All quality tests passed\n";
     return 0;
 }

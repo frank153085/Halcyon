@@ -9,7 +9,7 @@ int main(int argc, char** argv)
     return RUN_ALL_TESTS();
 }
 
-TEST(M2FrameGraph, ExecutesDependenciesInTopologicalOrder)
+TEST(FrameGraph, ExecutesDependenciesInTopologicalOrder)
 {
     using namespace Halcyon::Renderer::Graph;
     FrameGraph graph;
@@ -26,7 +26,7 @@ TEST(M2FrameGraph, ExecutesDependenciesInTopologicalOrder)
     EXPECT_EQ(compiled.executionOrder[1], consumer.handle());
 }
 
-TEST(M2FrameBudget, DowngradesAfterSustainedOverBudget)
+TEST(FrameBudget, DowngradesAfterSustainedOverBudget)
 {
     using namespace Halcyon::Renderer::Quality;
     FrameBudgetController controller;

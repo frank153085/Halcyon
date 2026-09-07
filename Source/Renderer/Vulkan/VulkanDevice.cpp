@@ -321,7 +321,7 @@ VoidResult VulkanDevice::createInstance()
         if (VK_VERSION_MAJOR(loaderVersion) < 1 ||
             (VK_VERSION_MAJOR(loaderVersion) == 1 && VK_VERSION_MINOR(loaderVersion) < 3))
         {
-            return fail("A Vulkan 1.3 loader is required by the Halcyon M1 renderer");
+            return fail("A Vulkan 1.3 loader is required by the Halcyon renderer");
         }
 
         std::uint32_t extensionCount = 0;
@@ -622,7 +622,7 @@ VoidResult VulkanDevice::pickPhysicalDevice()
             if ((depthProperties.optimalTilingFeatures &
                     VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
             {
-                // M1 intentionally has one well-defined depth format.  A
+                // The renderer uses one well-defined depth format. A
                 // later capability tier can add D24/D32S8 fallbacks without
                 // silently changing reversed-Z precision here.
                 lastUnsupportedReason = "VK_FORMAT_D32_SFLOAT depth attachments are unavailable";

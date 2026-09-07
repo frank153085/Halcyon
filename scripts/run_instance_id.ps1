@@ -1,9 +1,9 @@
 param(
-    [string]$Exe = "out\build\m3-msvc-debug\HalcyonM3Demo.exe",
+    [string]$Exe = "out\build\demo-msvc-debug\HalcyonDemo.exe",
     [int]$InstanceCount = 100000,
     [int]$Frames = 4,
     [int]$FramesInFlight = 3,
-    [string]$OutputDirectory = "out\captures\m4-instance-id",
+    [string]$OutputDirectory = "out\captures\instance-id",
     [double]$MinimumReductionFraction = 0.05
 )
 
@@ -129,4 +129,4 @@ if ($occlusionTotal -ge $requiredTotal -or $reducedFrames -eq 0) {
     throw "Two-phase occlusion did not reduce indirect work: reference=$referenceTotal, two_phase=$occlusionTotal, reduced_frames=$reducedFrames."
 }
 
-Write-Host "M4 InstanceId comparison passed for $comparedFrames completed frame(s); two-phase reduced indirect work on $reducedFrames/$comparedPerfFrames frames."
+Write-Host "InstanceId comparison passed for $comparedFrames completed frame(s); two-phase reduced indirect work on $reducedFrames/$comparedPerfFrames frames."

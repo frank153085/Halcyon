@@ -1,11 +1,11 @@
-#include "M3Demo.h"
+#include "Demo.h"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <memory>
 
-namespace Halcyon::M3Demo
+namespace Halcyon::Demo
 {
 namespace
 {
@@ -54,7 +54,7 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
         if (!state->model.isValid())
         {
             return Result<void>::failure(MakeError(
-                ErrorCode::NotFound, "configured M3 scene instance is unavailable", "M3Demo"));
+                ErrorCode::NotFound, "configured scene instance is unavailable", "Demo"));
         }
         // A deterministic sun and fill light keep downloaded scenes visibly
         // lit even when no environment file is present.
@@ -83,7 +83,7 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
         }
         if (state->scene == "stress")
         {
-            // Deterministic camera trajectory used by the M4 visibility audit:
+            // Deterministic camera trajectory used by the visibility audit:
             // a slow orbit crosses occluder boundaries without introducing
             // input-dependent results in scripted runs.
             const float angle = static_cast<float>(frame.elapsedSeconds) * glm::radians(9.0f);
@@ -100,7 +100,7 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
         if (transform == nullptr)
         {
             return Result<void>::failure(
-                MakeError(ErrorCode::InvalidState, "M3 model transform is unavailable", "M3Demo"));
+                MakeError(ErrorCode::InvalidState, "model transform is unavailable", "Demo"));
         }
         // Keep the camera and exposure deterministic by default.  A very slow
         // rigid rotation still exercises motion vectors and TAA when enabled.
@@ -116,4 +116,4 @@ ApplicationCallbacks makeCallbacks(const std::string& sceneName)
     return callbacks;
 }
 
-} // namespace Halcyon::M3Demo
+} // namespace Halcyon::Demo

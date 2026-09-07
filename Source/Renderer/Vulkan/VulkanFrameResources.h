@@ -9,10 +9,10 @@
 namespace Halcyon::Vulkan
 {
 
-// Central declaration of every image and buffer used by the Vulkan M3 path.
+// Central declaration of every image and buffer used by the deferred frame path.
 // FrameGraph owns transient lifetimes and VulkanFrameGraphProvider owns native
 // allocations; this object owns the extent-dependent resource specification.
-class VulkanM3FrameResources final
+class VulkanFrameResources final
 {
 public:
     static constexpr std::uint32_t CsmResolution = 2048;

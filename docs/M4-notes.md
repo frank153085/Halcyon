@@ -67,7 +67,7 @@ reported through the regular performance CSV fields when timestamp queries are
 available.
 
 Descriptor allocation is frame-slot scoped. The renderer waits for the slot
-fence before selecting `m3DescriptorPools[currentFrame]` and calling
+fence before selecting `frameDescriptorPools[currentFrame]` and calling
 `vkResetDescriptorPool`; all descriptor sets recorded for that slot have
 finished before they are recycled, so per-frame allocations remain bounded.
 
@@ -102,9 +102,9 @@ GPU-driven mode the G-buffer also carries a debug `R32Uint InstanceId` MRT
 (encoded as `slot + 1`, with zero reserved for clear/background). That image
 is copied asynchronously into a frame-slot readback buffer and scanned after
 the slot fence completes; out-of-range IDs are reported as
-`gpu_instance_id_invalid_pixels`. The `scripts/run_m4_visibility.ps1` audit
+`gpu_instance_id_invalid_pixels`. The `scripts/run_visibility.ps1` audit
 requires both visibility checks to pass. For the strict reference-vs-occlusion
-set comparison, `scripts/run_m4_instance_id.ps1` runs a frustum-only reference
+set comparison, `scripts/run_instance_id.ps1` runs a frustum-only reference
 and a two-phase pass with fixed timestep, then compares the per-frame ID report
 files and emits a compact summary CSV.
 

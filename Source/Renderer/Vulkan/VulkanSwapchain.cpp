@@ -191,7 +191,7 @@ VoidResult VulkanSwapchain::create()
     }
 
     const VkSurfaceFormatKHR surfaceFormat = chooseSurfaceFormat(formats);
-    // Readback is part of the M3 contract.  Surface usage flags alone do not
+    // Readback is part of the renderer contract. Surface usage flags alone do not
     // guarantee that the selected format supports transfer-source copies, so
     // reject the device/format combination before creating a swapchain that
     // could never satisfy screenshot capture.
@@ -327,7 +327,7 @@ VoidResult VulkanSwapchain::create()
     std::vector<bool> newImageInitialized(newImages.size(), false);
 
     // Commit the new swapchain only after all image views and synchronization
-    // objects have been created successfully. M3 pipelines are rebuilt by the
+    // objects have been created successfully. Graphics pipelines are rebuilt by the
     // renderer immediately after this state transition.
     const VkSwapchainKHR oldSwapchain = std::exchange(swapchain, newSwapchain);
     std::vector<VkImageView> oldViews;

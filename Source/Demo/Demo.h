@@ -2,9 +2,9 @@
 
 #include "Halcyon/Application.h"
 
-namespace Halcyon::M3Demo
+namespace Halcyon::Demo
 {
 
 ApplicationCallbacks makeCallbacks(const std::string& sceneName);
 
-} // namespace Halcyon::M3Demo
+} // namespace Halcyon::Demo

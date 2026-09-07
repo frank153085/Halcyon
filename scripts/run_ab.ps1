@@ -1,6 +1,6 @@
 param(
-    [string]$Demo = "out\build\m3-msvc-debug\HalcyonM3Demo.exe",
-    [string]$CaptureDirectory = "out\captures\m4-ab",
+    [string]$Demo = "out\build\demo-msvc-debug\HalcyonDemo.exe",
+    [string]$CaptureDirectory = "out\captures\ab-compare",
     [int]$Frames = 120
 )
 
@@ -55,4 +55,4 @@ foreach ($scene in @("damaged-helmet", "sponza")) {
     }
 }
 
-Write-Host "M4 A/B comparison passed for damaged-helmet and sponza."
+Write-Host "A/B comparison passed for damaged-helmet and sponza."

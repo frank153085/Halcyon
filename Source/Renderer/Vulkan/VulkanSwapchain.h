@@ -17,7 +17,7 @@ public:
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
     VkColorSpaceKHR swapchainColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkExtent2D swapchainExtent{};
-    // M3 scene depth is a FrameGraph resource. The swapchain only owns
+    // Scene depth is a FrameGraph resource. The swapchain only owns
     // presentation images; keeping a second depth target here would bypass
     // VulkanFrameGraphProvider's VMA ownership and resize lifecycle.
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;

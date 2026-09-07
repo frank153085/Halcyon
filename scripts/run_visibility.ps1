@@ -1,9 +1,9 @@
 param(
-    [string]$Exe = "out\build\m3-msvc-debug\HalcyonM3Demo.exe",
+    [string]$Exe = "out\build\demo-msvc-debug\HalcyonDemo.exe",
     [int]$InstanceCount = 100000,
     [int]$Frames = 12,
     [int]$FramesInFlight = 3,
-    [string]$Output = "out\captures\m4-visibility.csv"
+    [string]$Output = "out\captures\visibility.csv"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,11 +24,11 @@ if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 Remove-Item -LiteralPath $Output -ErrorAction SilentlyContinue
 
 # The stress entry point enables this mode by default, but keep the switch
-# explicit so this audit cannot silently regress to the legacy M3 path.
+# explicit so this audit cannot silently regress to the CPU fallback path.
 & $Exe --scene stress --instance-count $InstanceCount --frames $Frames `
     --gpu-driven --two-phase-occlusion --no-validation --perf-csv $Output
 if ($LASTEXITCODE -ne 0) {
-    throw "M4 visibility run failed with exit code $LASTEXITCODE"
+    throw "Visibility run failed with exit code $LASTEXITCODE"
 }
 
 $rows = @(Import-Csv -LiteralPath $Output |
@@ -58,4 +58,4 @@ if ($materialBinds.Count -ne 0) {
     throw "GPU-driven path recorded per-material descriptor binds in $($materialBinds.Count) frame(s)."
 }
 
-Write-Host "M4 visibility audit passed for $($rows.Count) completed frame(s)."
+Write-Host "Visibility audit passed for $($rows.Count) completed frame(s)."

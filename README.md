@@ -3,12 +3,10 @@
 [Project Roadmap](./ROADMAP.md)
 
 Halcyon is a real-time renderer built for individual study. The repository
-now provides the first, intentionally small M2 infrastructure increment and a
-runnable M3 traditional-quality scene demonstration. The
-M0/M1 Vulkan vertical slice remains the correctness baseline while render
-graph, bindless, shader, and profiling foundations stay independently usable.
+includes Vulkan device/swapchain infrastructure, a FrameGraph, bindless
+descriptors, and a runnable traditional-quality scene demonstration.
 
-## Current Milestone: M3 traditional quality baseline
+## Current capabilities
 
 - Reproducible Debug and RelWithDebInfo presets for MSVC v143 and Ninja.
 - Separate `HalcyonCore`, `HalcyonRenderer`, `HalcyonEngine`,
@@ -18,7 +16,7 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Three frame contexts, swapchain recreation, and safe minimize, resize, and
   out-of-date handling.
 - A reversed-Z camera convention with D32 depth and `GREATER_OR_EQUAL`.
-- Build-time HLSL-to-SPIR-V compilation through DXC. All M3 pipelines require
+- Build-time HLSL-to-SPIR-V compilation through DXC. All graphics pipelines require
   generated SPIR-V at runtime; missing shader binaries fail initialization.
 - CPU-side tests for generation handles, deferred deletion, and the upload
   ring foundation.
@@ -49,7 +47,7 @@ graph, bindless, shader, and profiling foundations stay independently usable.
 - Optional GoogleTest coverage; enable it with
   `-DHALCYON_ENABLE_GOOGLETEST=ON`.
 
-The Vulkan backend executes the complete multi-pass M3 graph: four CSM depth
+The Vulkan backend executes the complete multi-pass graph: four CSM depth
 passes, G-buffer MRT, GPU cluster build, deferred PBR/IBL, forward transparency,
 TAA compute, ACES tonemap, and present/readback. Each pass has its own dynamic
 rendering scope and descriptor layout, while the FrameGraph provider owns VMA
@@ -57,8 +55,8 @@ materialization and transient/persistent lifetimes. Device, format, descriptor,
 and shader requirements are checked during initialization; unsupported devices
 fail with a diagnostic instead of selecting a reduced path.
 Advanced GPU-driven rendering, the Visibility Buffer, and ray-tracing
-extensions remain assigned to later milestones. M2 infrastructure is enabled by default; pass
-`-DHALCYON_BUILD_EXPERIMENTAL_M2=OFF` to build only the M0/M1 baseline.
+extensions remain optional. FrameGraph infrastructure is enabled by default; pass
+`-DHALCYON_BUILD_FRAMEGRAPH=OFF` to omit it.
 
 ## Language Policy
 
@@ -84,12 +82,12 @@ reproducible helper. It imports `VsDevCmd`, detects a stale MinGW `ld.exe`
 entry in `CMakeCache.txt`, and configures an isolated build directory:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/configure_m3_msvc.ps1 `
-  -BuildDir out/build/m3-msvc-debug -Build -FetchAssets
+powershell -ExecutionPolicy Bypass -File scripts/configure_msvc.ps1 `
+  -BuildDir out/build/demo-msvc-debug -Build -FetchAssets
 ```
 
-The large M3 sample assets are intentionally ignored by Git. The equivalent explicit download is
-`cmake --build out/build/m3-msvc-debug --target HalcyonFetchM3Assets`.
+The large sample assets are intentionally ignored by Git. The equivalent explicit download is
+`cmake --build out/build/demo-msvc-debug --target HalcyonFetchAssets`.
 
 Use the RelWithDebInfo preset for performance measurements:
 
@@ -99,7 +97,7 @@ cmake --build --preset windows-msvc-relwithdebinfo
 ctest --preset windows-msvc-relwithdebinfo
 ```
 
-DXC is mandatory for the M3 renderer: configuration fails with a diagnostic if
+DXC is mandatory for the renderer: configuration fails with a diagnostic if
 it cannot be found. When the Vulkan SDK also provides `spirv-val`, CMake adds a
 `HalcyonShaderValidation` target and validates every generated module before
 the renderer is linked. Install the Vulkan SDK and configure again after fixing
@@ -118,18 +116,18 @@ The Sandbox and standalone textured example both load the checked-in Monkey
 glTF through `SceneManager`; the Vulkan backend no longer contains an OBJ or
 startup-texture loader.
 
-## Run the M3 demo
+## Run the demo
 
-`HalcyonM3Demo` uses fixed cameras and a fixed 60 Hz timestep by default. The
+`HalcyonDemo` uses fixed cameras and a fixed 60 Hz timestep by default. The
 downloaded Damaged Helmet and Sponza assets are selected with `--scene`:
 
 ```powershell
-out\build\m3-msvc-debug\HalcyonM3Demo.exe `
+out\build\demo-msvc-debug\HalcyonDemo.exe `
   --scene damaged-helmet --frames 300 --width 1280 --height 720 `
   --screenshot out\captures\helmet.png `
   --perf-csv out\captures\helmet.csv --no-validation
 
-out\build\m3-msvc-debug\HalcyonM3Demo.exe `
+out\build\demo-msvc-debug\HalcyonDemo.exe `
   --scene sponza --frames 300 --screenshot out\captures\sponza.png `
   --perf-csv out\captures\sponza.csv --no-validation
 ```
@@ -138,21 +136,21 @@ The deterministic stress scene exercises large instance counts without
 downloading additional assets:
 
 ```powershell
-out\build\m3-msvc-debug\HalcyonM3Demo.exe `
+out\build\demo-msvc-debug\HalcyonDemo.exe `
   --scene stress --instance-count 100000 --frames 1 --no-validation
 ```
 
 For a GPU-driven versus traditional CPU-path stress comparison, run
-`scripts\\run_m4_stress.bat`. It writes `out\\captures\\m4-stress.csv` for
-the GPU-driven two-phase run and `out\\captures\\m4-stress-legacy.csv` for
+`scripts\\run_stress.bat`. It writes `out\\captures\\stress-gpu.csv` for
+the GPU-driven two-phase run and `out\\captures\\stress-cpu.csv` for
 the CPU baseline. The `--no-gpu-driven` switch selects the traditional path.
 
-On a machine with the M3 assets and a Vulkan device, the two-scene regression
+On a machine with the sample assets and a Vulkan device, the two-scene regression
 wrapper is `powershell -ExecutionPolicy Bypass -File scripts/run_regression.ps1`.
 It writes screenshots and performance CSV files under `out/captures/regression`
 and fails on a non-zero demo or golden-image comparison result.
-The M4 submission-path A/B gate is
-`powershell -ExecutionPolicy Bypass -File scripts/run_m4_ab.ps1`; it renders
+The submission-path A/B gate is
+`powershell -ExecutionPolicy Bypass -File scripts/run_ab.ps1`; it renders
 both scenes with fixed timestep and TAA disabled, then compares the
 GPU-driven capture against the legacy baseline at SSIM 0.995.
 
@@ -167,13 +165,13 @@ performance CSV exposes `gpu_visibility_missing_count` (CPU-reference slots
 absent from the GPU result) and `gpu_visibility_validation_passed`; the audit
 consumes a completed frame-slot readback without blocking command recording.
 For a deterministic stress-scene orbit and an automated pass/fail check, run
-`powershell -ExecutionPolicy Bypass -File scripts/run_m4_visibility.ps1`.
+`powershell -ExecutionPolicy Bypass -File scripts/run_visibility.ps1`.
 The literal R32Uint attachment set comparison (frustum-only reference versus
 two-phase occlusion) is available through
-`powershell -ExecutionPolicy Bypass -File scripts/run_m4_instance_id.ps1`.
+`powershell -ExecutionPolicy Bypass -File scripts/run_instance_id.ps1`.
 
 ```powershell
-out\build\m3-msvc-debug\HalcyonGoldenCompare.exe `
+out\build\demo-msvc-debug\HalcyonGoldenCompare.exe `
   --actual out\captures\helmet.png --golden path\to\helmet-golden.png
 ```
 
@@ -182,7 +180,7 @@ When `--golden` is supplied without an explicit `--frames`, the runner uses a
 final image (SSIM threshold 0.995). Explicit frame counts remain available for
 fast smoke tests and self-comparisons.
 
-The demo submits stable SceneManager instances through the complete Vulkan M3
+The demo submits stable SceneManager instances through the complete Vulkan
 graph. Damaged Helmet and Sponza resolve their external or embedded textures
 through the same material upload path, with deterministic default textures for
 missing material channels. Cluster ranges/indices and overflow counters are
@@ -207,7 +205,7 @@ replacing previous binaries.
 ```text
 Source/Core                 Backend-neutral results, logging, and stable handles
 Source/Renderer/Scene       Camera and FramePacket data contracts
-Source/Renderer/Graph       M2 FrameGraph and barrier planning
+Source/Renderer/Graph       FrameGraph and barrier planning
 Source/Renderer/Resources   Upload/deletion and bindless slot infrastructure
 Source/Renderer/Vulkan      Vulkan 1.3 backend
 Source/Engine                Engine, View, and SceneManager orchestration
