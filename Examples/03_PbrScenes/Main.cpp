@@ -1,5 +1,6 @@
 #include "ExampleRunner.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -101,7 +102,7 @@ int main(int argc, char** argv)
             return result;
         }
         result = *state == "sponza"
-                     ? engine.defaultView().lookAt({0.0f, 2.5f, 0.0f}, {0.0f, 2.5f, -1.0f})
+                     ? engine.defaultView().lookAt({-9.5f, 1.8f, 0.0f}, {6.0f, 2.4f, 0.0f})
                      : engine.defaultView().lookAt({0.0f, 0.1f, 2.6f}, {0.0f, 0.0f, 0.0f});
         if (!result)
         {
@@ -119,17 +120,41 @@ int main(int argc, char** argv)
         sunLight.type = Halcyon::LightType::Directional;
         sunLight.direction = {0.35f, -0.85f, -0.35f};
         sunLight.color = {1.0f, 0.96f, 0.90f};
-        sunLight.intensity = sponza ? 0.65f : 3.5f;
+        sunLight.intensity = sponza ? 1.4f : 3.5f;
         sunLight.range = 1000.0f;
         (void)engine.scene().lights().add(sun, sunLight);
-        const Halcyon::Entity fill = engine.scene().createEntity();
-        Halcyon::LightComponent fillLight{};
-        fillLight.type = Halcyon::LightType::Point;
-        fillLight.position = sponza ? glm::vec3{2.0f, 2.5f, 2.0f} : glm::vec3{-1.6f, 1.2f, 2.2f};
-        fillLight.color = sponza ? glm::vec3{0.55f, 0.65f, 0.90f} : glm::vec3{1.0f, 0.97f, 0.93f};
-        fillLight.intensity = sponza ? 1.5f : 1.8f;
-        fillLight.range = sponza ? 8.0f : 6.0f;
-        (void)engine.scene().lights().add(fill, fillLight);
+        if (sponza)
+        {
+            // Approximate bounced skylight along the atrium. A single short-range
+            // fill cannot light the ~30 m courtyard from the current camera.
+            const glm::vec3 warm{1.0f, 0.94f, 0.86f};
+            const std::array<glm::vec3, 3> fillPositions = {
+                glm::vec3{-8.0f, 4.5f, 0.0f},
+                glm::vec3{0.0f, 6.0f, 0.0f},
+                glm::vec3{7.0f, 4.5f, 0.0f}};
+            for (const glm::vec3& position : fillPositions)
+            {
+                const Halcyon::Entity fill = engine.scene().createEntity();
+                Halcyon::LightComponent fillLight{};
+                fillLight.type = Halcyon::LightType::Point;
+                fillLight.position = position;
+                fillLight.color = warm;
+                fillLight.intensity = 3.5f;
+                fillLight.range = 16.0f;
+                (void)engine.scene().lights().add(fill, fillLight);
+            }
+        }
+        else
+        {
+            const Halcyon::Entity fill = engine.scene().createEntity();
+            Halcyon::LightComponent fillLight{};
+            fillLight.type = Halcyon::LightType::Point;
+            fillLight.position = {-1.6f, 1.2f, 2.2f};
+            fillLight.color = {1.0f, 0.97f, 0.93f};
+            fillLight.intensity = 1.8f;
+            fillLight.range = 6.0f;
+            (void)engine.scene().lights().add(fill, fillLight);
+        }
         return Halcyon::Result<void>::success();
     };
     definition.onFrame = [state](Halcyon::Engine& engine, const Halcyon::FrameInfo& frame)

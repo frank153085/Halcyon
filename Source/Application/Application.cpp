@@ -75,6 +75,7 @@ namespace
 
 void waitForEnterIfConsole() noexcept;
 
+bool gDebugLog = false;
 std::FILE* gLogFile = nullptr;
 
 void writeLogLine(const char* text) noexcept
@@ -163,7 +164,7 @@ void installCrashHandlers() noexcept
 
 void waitForEnterIfConsole() noexcept
 {
-    if (std::getenv("HALCYON_NO_PAUSE") != nullptr)
+    if (!gDebugLog || std::getenv("HALCYON_NO_PAUSE") != nullptr)
     {
         return;
     }
@@ -177,6 +178,24 @@ void waitForEnterIfConsole() noexcept
     std::fflush(stderr);
     std::fflush(stdout);
     (void)std::getchar();
+}
+
+[[nodiscard]] bool debugLoggingRequested(int argc, char** argv) noexcept
+{
+    if (const char* value = std::getenv("HALCYON_LOG"); value != nullptr && value[0] != '\0' &&
+        std::string_view(value) != "0")
+    {
+        return true;
+    }
+    for (int index = 1; index < argc; ++index)
+    {
+        const std::string_view argument = argv[index] != nullptr ? argv[index] : "";
+        if (argument == "--log")
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void printUsage() noexcept
@@ -201,6 +220,7 @@ void printUsage() noexcept
                 "  --two-phase-occlusion    enable previous/current Hi-Z re-test\n"
                 "  --no-validation  disable Vulkan validation layers\n"
                 "  --validation     enable Vulkan validation layers\n"
+                "  --log            enable console and file logging (or set HALCYON_LOG=1)\n"
                 "  --help           show this message\n");
 }
 
@@ -367,7 +387,12 @@ void printUsage() noexcept
             config.engine.enableTwoPhaseOcclusion = true;
             continue;
         }
+        if (argument == "--log")
+        {
+            continue;
+        }
         HALCYON_LOG_ERROR("Unknown or malformed command-line option: ", argument);
+        std::fprintf(stderr, "Unknown or malformed command-line option: %s\n", argument.data());
         return false;
     }
     if (!config.goldenPath.empty() && !widthSpecified && !heightSpecified)
@@ -428,17 +453,22 @@ void appendPerformanceSummary(const ApplicationConfig& config,
 int Application::run(
     int argc, char** argv, ApplicationConfig config, ApplicationCallbacks callbacks)
 {
-    openStartupLog();
-    installCrashHandlers();
-    Halcyon::Core::Logger::instance().setSink([](Halcyon::Core::LogLevel level, std::string_view message)
+    gDebugLog = debugLoggingRequested(argc, argv);
+    if (gDebugLog)
     {
-        char line[2048]{};
-        std::snprintf(line, sizeof(line), "[%s] %.*s",
-            Halcyon::Core::toString(level).data(),
-            static_cast<int>(message.size()), message.data());
-        writeLogLine(line);
-    });
-    HALCYON_LOG_INFO("Application::run begin");
+        openStartupLog();
+        installCrashHandlers();
+        Halcyon::Core::Logger::instance().setLevel(Halcyon::Core::LogLevel::Info);
+        Halcyon::Core::Logger::instance().setSink(
+            [](Halcyon::Core::LogLevel level, std::string_view message)
+            {
+                char line[2048]{};
+                std::snprintf(line, sizeof(line), "[%s] %.*s",
+                    Halcyon::Core::toString(level).data(),
+                    static_cast<int>(message.size()), message.data());
+                writeLogLine(line);
+            });
+    }
     for (int index = 1; index < argc; ++index)
     {
         const std::string_view argument = argv[index] != nullptr ? argv[index] : "";
@@ -484,8 +514,6 @@ int Application::run(
         config.engine.framesInFlight = 1;
     }
 
-    HALCYON_LOG_INFO("Creating window ", config.window.initialExtent.width, "x",
-        config.window.initialExtent.height);
     auto windowResult = Platform::Window::create(config.window);
     if (!windowResult)
     {
@@ -494,9 +522,7 @@ int Application::run(
         return EXIT_FAILURE;
     }
     auto window = std::move(windowResult.value());
-    HALCYON_LOG_INFO("Window created");
 
-    HALCYON_LOG_INFO("Creating engine");
     auto engineResult = Engine::create(*window, config.engine);
     if (!engineResult)
     {
@@ -504,13 +530,11 @@ int Application::run(
         waitForEnterIfConsole();
         return EXIT_FAILURE;
     }
-    HALCYON_LOG_INFO("Engine created");
     auto engine = std::move(engineResult.value());
 
     ApplicationInternal::DiagnosticsOverlay diagnostics;
     if (config.enableDiagnostics)
     {
-        HALCYON_LOG_INFO("Initializing diagnostics overlay");
         const auto diagnosticsResult = diagnostics.initialize(*window, *engine);
         if (!diagnosticsResult)
         {
@@ -525,7 +549,6 @@ int Application::run(
     {
         try
         {
-            HALCYON_LOG_INFO("Running onInitialize callback");
             const auto initialize = callbacks.onInitialize(*engine);
             if (!initialize)
             {
@@ -563,14 +586,9 @@ int Application::run(
     const std::uint64_t performanceWarmup =
         config.frameLimit > performanceWarmupFrameCount ? performanceWarmupFrameCount : 0u;
 
-    HALCYON_LOG_INFO("Entering render loop");
     while (exitCode == EXIT_SUCCESS && !window->shouldClose() &&
            (config.frameLimit == 0 || frameIndex < config.frameLimit))
     {
-        if (frameIndex == 0)
-        {
-            HALCYON_LOG_INFO("Rendering first frame");
-        }
         window->pollEvents();
         const Extent2D extent = window->framebufferExtent();
         const bool minimized = extent.empty();
@@ -664,15 +682,7 @@ int Application::run(
                     break;
                 }
             }
-            if (frameIndex == 0)
-            {
-                HALCYON_LOG_INFO("Calling engine->render(0)");
-            }
             const auto renderResult = engine->render(frameIndex);
-            if (frameIndex == 0)
-            {
-                HALCYON_LOG_INFO("engine->render(0) returned");
-            }
             if (!renderResult)
             {
                 HALCYON_LOG_CRITICAL("Engine render failed: ", renderResult.error().describe());

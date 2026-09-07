@@ -231,7 +231,7 @@ private:
     }
 
     mutable std::mutex mutex_;
-    LogLevel level_{LogLevel::Info};
+    LogLevel level_{LogLevel::Off};
     Sink sink_;
 };
 

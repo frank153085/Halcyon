@@ -1,7 +1,6 @@
 #include "HalcyonVulkanRenderer.h"
 
 #include "Core/Profiler.h"
-#include "Core/Log.h"
 #include "DebugReadbackManager.h"
 #include "FrameRecorder.h"
 #include "FramePassContext.h"
@@ -1206,7 +1205,6 @@ struct Renderer::Impl
     [[nodiscard]] FrameStats render(const FramePacket& packet)
     {
         HALCYON_PROFILE_SCOPE("Renderer::render");
-        HALCYON_LOG_INFO("Renderer::Impl::render begin");
         FrameStats stats{};
         stats.quality.rayQueryEnabled = rayQueryEnabled;
         stats.quality.exposure = config.exposure;
@@ -1649,7 +1647,6 @@ struct Renderer::Impl
             instanceIdReadbackValid[currentFrame] = false;
         }
 
-        HALCYON_LOG_INFO("Renderer::Impl::render recordFrame");
         const VoidResult recordResult = recordFrame(frame, stats.swapchainImageIndex, packet,
             screenshotReadback.buffer);
         if (!recordResult)
@@ -1807,7 +1804,6 @@ VoidResult Renderer::Impl::recordFrame(
     VkBuffer screenshotReadback)
 {
     HALCYON_PROFILE_SCOPE("Renderer::recordFrame");
-    HALCYON_LOG_INFO("recordFrame begin");
     materialDescriptorBindCount = 0;
     if (imageIndex >= swapchainImages.size() || imageIndex >= swapchainImageViews.size())
     {
@@ -2050,7 +2046,6 @@ VoidResult Renderer::Impl::recordFrame(
     swapchainBeginDependency.pImageMemoryBarriers = &swapchainBeginBarrier;
     vkCmdPipelineBarrier2(frame.commandBuffer, &swapchainBeginDependency);
 
-    HALCYON_LOG_INFO("recordFrame add passes");
     addCsmShadowPasses(graph, ctx);
     addGBufferPass(graph, ctx);
     addHiZOcclusionPass(graph, ctx);
@@ -2061,7 +2056,6 @@ VoidResult Renderer::Impl::recordFrame(
     addTonemapPass(graph, ctx);
     addPresentPass(graph, ctx);
 
-    HALCYON_LOG_INFO("recordFrame compile");
     graph.compile(Graph::CompileOptions{false});
     if (!graph.compileResult())
     {
@@ -2074,13 +2068,11 @@ VoidResult Renderer::Impl::recordFrame(
             frame.passNames.push_back(pass->name);
     }
     Graph::CommandContext commands;
-    HALCYON_LOG_INFO("recordFrame execute");
     graph.execute(commands,
         Graph::ExecuteOptions{
             &frame,
             [this, &frame](const Graph::PassExecutionContext& context)
             {
-                HALCYON_LOG_INFO("pass begin ", context.name);
                 (void)frameContext.writePassTimestamp(frame.commandBuffer, frame,
                     context.executionIndex, true);
             },

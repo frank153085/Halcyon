@@ -5,7 +5,6 @@
 #include "Halcyon/Window.h"
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.h"
 #include "Core/Profiler.h"
-#include "Core/Log.h"
 
 #include <chrono>
 #include <exception>
@@ -279,7 +278,6 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         impl_->sceneManager.scene().updateTransforms();
         if (impl_->renderer.gpuDrivenSceneEnabled())
         {
-            HALCYON_LOG_INFO("Engine::render GPU scene delta");
             auto delta = impl_->sceneManager.extractDelta(impl_->view.camera().data(), frameIndex);
             if (!delta)
                 return Result<FrameStats>::failure(delta.error().withContext(
@@ -291,13 +289,11 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         }
         const double cpuVisibilityMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - visibilityBegin).count();
-        HALCYON_LOG_INFO("Engine::render extract packet");
         auto packet = impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
         if (!packet)
         {
             return Result<FrameStats>::failure(packet.error().withContext("Engine::render"));
         }
-        HALCYON_LOG_INFO("Engine::render backend render");
         const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.value().view());
         FrameStats stats = translateStats(backendStats);
         stats.cpuVisibilityMs = cpuVisibilityMs;

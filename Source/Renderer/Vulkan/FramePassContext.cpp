@@ -221,9 +221,12 @@ void computeCascadeMatrices(
     glm::vec4& cascadeSplits)
 {
     const float nearPlane = std::max(1.0e-3f, packet.camera.positionAndNear.w);
-    const float farPlane = packet.camera.forwardAndFar.w > nearPlane
-                               ? packet.camera.forwardAndFar.w
-                               : 1000.0f;
+    const float cameraFar = packet.camera.forwardAndFar.w > nearPlane
+                                ? packet.camera.forwardAndFar.w
+                                : 1000.0f;
+    // Cascades covering hundreds of metres starve Sponza-scale interiors of
+    // shadow resolution. Keep the shadow distance in a useful courtyard range.
+    const float farPlane = std::min(cameraFar, 48.0f);
     const glm::mat4 invViewProjection = packet.camera.inverseViewProjection;
     std::array<glm::vec3, 8> frustumCorners{};
     std::size_t corner = 0;
