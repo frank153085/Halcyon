@@ -187,6 +187,151 @@ void addCsmShadowPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                  if (view == VK_NULL_HANDLE) return;
                  const VkImage shadowImage = frameGraphProvider.image(
                      target->resources[Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS]);
+                 const bool gpuCsm = config.enableGpuDrivenScene && gpuIndirectCompatible &&
+                     pipelines.gpuDrivenCsmPipeline.pipeline() != VK_NULL_HANDLE &&
+                     gpuVertexBuffer != VK_NULL_HANDLE && gpuIndexBuffer != VK_NULL_HANDLE &&
+                     gpuMeshDrawBuffer != VK_NULL_HANDLE &&
+                     pipelines.frustumCullPipeline.computePipeline() != VK_NULL_HANDLE &&
+                     pipelines.indirectBuildPipeline.computePipeline() != VK_NULL_HANDLE;
+                 bool gpuCsmReady = false;
+                 if (gpuCsm)
+                 {
+                     if (cascade == 0)
+                     {
+                         VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                         alloc.descriptorPool = ctx.descriptorPool;
+                         alloc.descriptorSetCount = 1;
+                         alloc.pSetLayouts = &pipelines.gpuSceneCullLayout;
+                         if (vkAllocateDescriptorSets(device, &alloc, &ctx.gpuCsmCullSet) != VK_SUCCESS)
+                             ctx.gpuCsmCullSet = VK_NULL_HANDLE;
+                         alloc.pSetLayouts = &pipelines.gpuSceneIndirectLayout;
+                         if (vkAllocateDescriptorSets(device, &alloc, &ctx.gpuCsmIndirectSet) != VK_SUCCESS)
+                             ctx.gpuCsmIndirectSet = VK_NULL_HANDLE;
+                         alloc.pSetLayouts = &pipelines.gpuCsmGraphicsLayout;
+                         if (vkAllocateDescriptorSets(device, &alloc, &ctx.gpuCsmGraphicsSet) != VK_SUCCESS)
+                             ctx.gpuCsmGraphicsSet = VK_NULL_HANDLE;
+                         if (ctx.gpuCsmCullSet != VK_NULL_HANDLE)
+                         {
+                             const VkDeviceSize sceneBytes = std::max<VkDeviceSize>(4,
+                                 static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                             writeStorageBuffer(ctx.gpuCsmCullSet, 0, gpuSceneBuffers.boundsBuffer(),
+                                 std::max<VkDeviceSize>(4, static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
+                                     sizeof(Halcyon::Renderer::Scene::BoundsRow)));
+                             writeStorageBuffer(ctx.gpuCsmCullSet, 1, gpuSceneBuffers.shadowVisibleIndicesBuffer(), sceneBytes);
+                             writeStorageBuffer(ctx.gpuCsmCullSet, 2, gpuSceneBuffers.shadowVisibleCountBuffer(), sizeof(std::uint32_t));
+                             writeStorageBuffer(ctx.gpuCsmCullSet, 3, gpuSceneBuffers.meshMaterialBuffer(),
+                                 static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
+                                     sizeof(Halcyon::Renderer::Scene::MeshMaterialRow));
+                             writeStorageBuffer(ctx.gpuCsmCullSet, 4, gpuSceneBuffers.shadowFrustum().occludedIndicesBuffer(), sceneBytes);
+                         }
+                         if (ctx.gpuCsmIndirectSet != VK_NULL_HANDLE)
+                         {
+                             gpuSceneBuffers.writeIndirectBuildDescriptors(device, ctx.gpuCsmIndirectSet,
+                                 IndirectBuildPass::Shadow, gpuMeshDrawBuffer,
+                                 static_cast<VkDeviceSize>(sceneResources.meshDrawCount()) *
+                                     sizeof(Halcyon::Renderer::Scene::MeshDrawRow));
+                         }
+                         if (ctx.gpuCsmGraphicsSet != VK_NULL_HANDLE)
+                         {
+                             const VkDeviceSize sceneBytes = std::max<VkDeviceSize>(4,
+                                 static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(std::uint32_t));
+                             writeStorageBuffer(ctx.gpuCsmGraphicsSet, 0, gpuSceneBuffers.transformBuffer(),
+                                 static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
+                                     sizeof(Halcyon::Renderer::Scene::TransformRow));
+                             const VkBuffer visible = sceneResources.meshDrawCount() <= 1u
+                                 ? gpuSceneBuffers.shadowVisibleIndicesBuffer()
+                                 : gpuSceneBuffers.shadowGroupedVisibleIndicesBuffer();
+                             writeStorageBuffer(ctx.gpuCsmGraphicsSet, 1, visible, sceneBytes);
+                         }
+                     }
+                     gpuCsmReady = ctx.gpuCsmCullSet != VK_NULL_HANDLE &&
+                         ctx.gpuCsmIndirectSet != VK_NULL_HANDLE &&
+                         ctx.gpuCsmGraphicsSet != VK_NULL_HANDLE;
+                     if (gpuCsmReady)
+                     {
+                         vkCmdFillBuffer(frame.commandBuffer, gpuSceneBuffers.shadowVisibleCountBuffer(),
+                             0, sizeof(std::uint32_t), 0);
+                         VkBufferMemoryBarrier2 reset{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                         reset.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                         reset.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                         reset.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                         reset.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                         reset.buffer = gpuSceneBuffers.shadowVisibleCountBuffer();
+                         reset.size = sizeof(std::uint32_t);
+                         VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                         dependency.bufferMemoryBarrierCount = 1;
+                         dependency.pBufferMemoryBarriers = &reset;
+                         vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
+
+                         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                             pipelines.frustumCullPipeline.computePipeline());
+                         vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                             pipelines.frustumCullPipeline.layout(), 0, 1, &ctx.gpuCsmCullSet, 0, nullptr);
+                         struct FrustumConstants
+                         {
+                             glm::vec4 planes[6];
+                             std::uint32_t instanceCount;
+                             std::uint32_t excludedFlags;
+                             std::uint32_t materialFilter;
+                             std::uint32_t reserved;
+                         } cullConstants{};
+                         const glm::mat4& vp = cascadeMatrices[cascade];
+                         const glm::vec4 rows[4] = {
+                             {vp[0][0], vp[1][0], vp[2][0], vp[3][0]},
+                             {vp[0][1], vp[1][1], vp[2][1], vp[3][1]},
+                             {vp[0][2], vp[1][2], vp[2][2], vp[3][2]},
+                             {vp[0][3], vp[1][3], vp[2][3], vp[3][3]}};
+                         cullConstants.planes[0] = rows[3] + rows[0];
+                         cullConstants.planes[1] = rows[3] - rows[0];
+                         cullConstants.planes[2] = rows[3] + rows[1];
+                         cullConstants.planes[3] = rows[3] - rows[1];
+                         cullConstants.planes[4] = rows[3] + rows[2];
+                         cullConstants.planes[5] = rows[3] - rows[2];
+                         for (auto& plane : cullConstants.planes)
+                         {
+                             const float length = glm::length(glm::vec3(plane));
+                             if (length > 1.0e-6f) plane /= length;
+                         }
+                         cullConstants.instanceCount = gpuSceneInstanceCount != 0 ? gpuSceneInstanceCount
+                             : static_cast<std::uint32_t>(packet.instances.size());
+                         cullConstants.excludedFlags = static_cast<std::uint32_t>(
+                             Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent);
+                         cullConstants.materialFilter = std::numeric_limits<std::uint32_t>::max();
+                         vkCmdPushConstants(frame.commandBuffer, pipelines.frustumCullPipeline.layout(),
+                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cullConstants), &cullConstants);
+                         vkCmdDispatch(frame.commandBuffer, (cullConstants.instanceCount + 63u) / 64u, 1, 1);
+
+                         VkBufferMemoryBarrier2 cullBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                         cullBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                         cullBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                         cullBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                         cullBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                         std::array<VkBufferMemoryBarrier2, 2> cullBarriers{cullBarrier, cullBarrier};
+                         cullBarriers[0].buffer = gpuSceneBuffers.shadowVisibleCountBuffer();
+                         cullBarriers[0].size = sizeof(std::uint32_t);
+                         cullBarriers[1].buffer = gpuSceneBuffers.shadowVisibleIndicesBuffer();
+                         cullBarriers[1].size = VK_WHOLE_SIZE;
+                         dependency.bufferMemoryBarrierCount = 2;
+                         dependency.pBufferMemoryBarriers = cullBarriers.data();
+                         vkCmdPipelineBarrier2(frame.commandBuffer, &dependency);
+
+                         MeshGroupedIndirectBuildDesc build{};
+                         build.set = ctx.gpuCsmIndirectSet;
+                         build.instanceCount = cullConstants.instanceCount;
+                         build.meshCount = sceneResources.meshDrawCount();
+                         build.meshHeads = gpuSceneBuffers.shadowMeshHeadsBuffer();
+                         build.meshNext = gpuSceneBuffers.shadowMeshNextBuffer();
+                         build.groupedVisible = gpuSceneBuffers.shadowGroupedVisibleIndicesBuffer();
+                         build.groupedCount = gpuSceneBuffers.shadowGroupedVisibleCountBuffer();
+                         build.indirectCommands = gpuSceneBuffers.shadowIndirectCommandsBuffer();
+                         build.indirectCount = gpuSceneBuffers.shadowIndirectDrawCountBuffer();
+                         build.resetMeshHeads = true;
+                         build.meshHeadsBytes = static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) *
+                             sizeof(std::uint32_t);
+                         frameRecorder.recordMeshGroupedIndirectBuild(
+                             frame.commandBuffer, pipelines.indirectBuildPipeline, build);
+                     }
+                 }
                  transitionImage(shadowImage, VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                      VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
@@ -213,7 +358,28 @@ void addCsmShadowPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 VkRect2D scissor{{0, 0}, {csmResolution, csmResolution}};
                  vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
                  vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-                 frameRecorder.drawShadowInstances(frame.commandBuffer, packet, cascadeMatrices[cascade], ctx.cpuDraw);
+                 if (gpuCsmReady)
+                 {
+                     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                         pipelines.gpuDrivenCsmPipeline.pipeline());
+                     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                         pipelines.gpuDrivenCsmPipeline.layout(), 0, 1, &ctx.gpuCsmGraphicsSet, 0, nullptr);
+                     vkCmdPushConstants(frame.commandBuffer, pipelines.gpuDrivenCsmPipeline.layout(),
+                         VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &cascadeMatrices[cascade]);
+                     const VkDeviceSize vertexOffset = 0;
+                     vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &gpuVertexBuffer, &vertexOffset);
+                     vkCmdBindIndexBuffer(frame.commandBuffer, gpuIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                     vkCmdDrawIndexedIndirectCount(frame.commandBuffer,
+                         gpuSceneBuffers.shadowIndirectCommandsBuffer(), 0,
+                         gpuSceneBuffers.shadowIndirectDrawCountBuffer(), 0,
+                         std::max<std::uint32_t>(1u, sceneResources.meshDrawCount()),
+                         sizeof(VkDrawIndexedIndirectCommand));
+                 }
+                 else
+                 {
+                     frameRecorder.drawShadowInstances(frame.commandBuffer, packet,
+                         cascadeMatrices[cascade], ctx.cpuDraw);
+                 }
                  vkCmdEndRendering(frame.commandBuffer);
                  if (cascade == 3)
                  {

@@ -114,6 +114,7 @@ public:
     [[nodiscard]] Halcyon::Result<void> updateGpuSceneDelta(
         const Halcyon::Renderer::Scene::Ecs::RenderExtractor::Delta& delta);
     [[nodiscard]] bool gpuDrivenSceneEnabled() const noexcept;
+    [[nodiscard]] bool gpuDrivenBindlessEnabled() const noexcept;
     // Scene topology or material changes invalidate temporal history before
     // the next frame is submitted.
     void invalidateTaaHistory() noexcept;

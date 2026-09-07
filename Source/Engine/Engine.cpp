@@ -289,7 +289,10 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         }
         const double cpuVisibilityMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - visibilityBegin).count();
-        auto packet = impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
+        auto packet = impl_->renderer.gpuDrivenSceneEnabled() &&
+                impl_->renderer.gpuDrivenBindlessEnabled()
+            ? impl_->sceneManager.extractGpuDrivenCpu(impl_->view.camera().data(), frameIndex)
+            : impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
         if (!packet)
         {
             return Result<FrameStats>::failure(packet.error().withContext("Engine::render"));

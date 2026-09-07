@@ -167,4 +167,58 @@ OwnedFramePacket RenderExtractor::extract(
     return packet;
 }
 
+OwnedFramePacket RenderExtractor::extractGpuDrivenCpu(
+    const Scene& scene, const CameraData& camera, std::uint64_t frameIndex)
+{
+    OwnedFramePacket packet;
+    packet.frameIndex = frameIndex;
+    packet.camera = camera;
+    packet.lights.reserve(scene.lights().size());
+    constexpr std::uint32_t transparentFlag =
+        static_cast<std::uint32_t>(RenderableFlags::Transparent);
+    for (const Entity entity : scene.renderables().entities())
+    {
+        if (!scene.entities().isAlive(entity))
+        {
+            continue;
+        }
+        const RenderableComponent* renderable = scene.renderables().get(entity);
+        const TransformComponent* transform = scene.transforms().get(entity);
+        if (renderable == nullptr || transform == nullptr)
+        {
+            continue;
+        }
+        if ((renderable->flags & transparentFlag) == 0u)
+        {
+            continue;
+        }
+        packet.instances.push_back(instanceData(*transform, *renderable));
+    }
+    for (const Entity entity : scene.lights().entities())
+    {
+        if (!scene.entities().isAlive(entity))
+        {
+            continue;
+        }
+        const LightComponent* light = scene.lights().get(entity);
+        if (light == nullptr)
+        {
+            continue;
+        }
+        glm::vec3 position = light->position;
+        if (const TransformComponent* transform = scene.transforms().get(entity);
+            transform != nullptr)
+        {
+            position = glm::vec3{transform->worldTransform[3]};
+        }
+        const float type = static_cast<float>(light->type == LightType::Directional ? 1u
+                                  : (light->type == LightType::Spot ? 2u : 0u));
+        packet.lights.push_back(LightData{{position.x, position.y, position.z, light->range},
+            {light->color.r, light->color.g, light->color.b, light->intensity},
+            {light->direction.x, light->direction.y, light->direction.z, type},
+            {light->innerConeCos, light->outerConeCos, 0.0f, 0.0f}});
+    }
+    return packet;
+}
+
 } // namespace Halcyon::Renderer::Scene::Ecs

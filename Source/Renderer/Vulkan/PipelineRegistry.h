@@ -32,6 +32,7 @@ public:
     VulkanPipeline frustumCullPipeline;
     VulkanPipeline indirectBuildPipeline;
     VulkanPipeline gpuDrivenGbufferPipeline;
+    VulkanPipeline gpuDrivenCsmPipeline;
     VulkanPipeline hizBuildPipeline;
     VulkanPipeline occlusionPhase1Pipeline;
     VulkanPipeline occlusionPhase2Pipeline;
@@ -39,6 +40,7 @@ public:
     VkDescriptorSetLayout gpuSceneCullLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout gpuSceneIndirectLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout gpuSceneGraphicsLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout gpuCsmGraphicsLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout hizLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout occlusionPhase1Layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout occlusionPhase2Layout = VK_NULL_HANDLE;

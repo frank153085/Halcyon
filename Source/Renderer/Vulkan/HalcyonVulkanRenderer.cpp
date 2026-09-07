@@ -303,12 +303,14 @@ struct Renderer::Impl
     VulkanPipeline& frustumCullPipeline = pipelines.frustumCullPipeline;
     VulkanPipeline& indirectBuildPipeline = pipelines.indirectBuildPipeline;
     VulkanPipeline& gpuDrivenGbufferPipeline = pipelines.gpuDrivenGbufferPipeline;
+    VulkanPipeline& gpuDrivenCsmPipeline = pipelines.gpuDrivenCsmPipeline;
     VulkanPipeline& hizBuildPipeline = pipelines.hizBuildPipeline;
     VulkanPipeline& occlusionPhase1Pipeline = pipelines.occlusionPhase1Pipeline;
     VulkanPipeline& occlusionPhase2Pipeline = pipelines.occlusionPhase2Pipeline;
     VkDescriptorSetLayout& gpuSceneCullLayout = pipelines.gpuSceneCullLayout;
     VkDescriptorSetLayout& gpuSceneIndirectLayout = pipelines.gpuSceneIndirectLayout;
     VkDescriptorSetLayout& gpuSceneGraphicsLayout = pipelines.gpuSceneGraphicsLayout;
+    VkDescriptorSetLayout& gpuCsmGraphicsLayout = pipelines.gpuCsmGraphicsLayout;
     VkDescriptorSetLayout& hizLayout = pipelines.hizLayout;
     VkDescriptorSetLayout& occlusionPhase1Layout = pipelines.occlusionPhase1Layout;
     VkDescriptorSetLayout& occlusionPhase2Layout = pipelines.occlusionPhase2Layout;
@@ -834,6 +836,13 @@ struct Renderer::Impl
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
         result = makeLayout(graphicsBindings, gpuSceneGraphicsLayout);
         if (!result) return result;
+        const std::array<VkDescriptorSetLayoutBinding, 2> csmGraphicsBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr}};
+        result = makeLayout(csmGraphicsBindings, gpuCsmGraphicsLayout);
+        if (!result) return result;
         const std::array<VkDescriptorPoolSize, 1> poolSizes = {
             VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16}};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -913,9 +922,33 @@ struct Renderer::Impl
         gpuGraphics.pushConstants = gpuPush;
         gpuGraphics.vertexShader = "gpu_driven.vert.spv";
         gpuGraphics.fragmentShader = useBindless ? "gpu_driven.frag.spv" : "gbuffer.frag.spv";
+        gpuGraphics.cullMode = useBindless ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
         result = gpuDrivenGbufferPipeline.createGraphics(device, gpuGraphics);
         if (!result) return result;
         gpuDrivenBindless = useBindless;
+        GraphicsPipelineDesc gpuCsmDesc{};
+        gpuCsmDesc.depthOnly = true;
+        gpuCsmDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
+        gpuCsmDesc.depthTest = true;
+        gpuCsmDesc.depthWrite = true;
+        gpuCsmDesc.depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+        gpuCsmDesc.cullMode = VK_CULL_MODE_BACK_BIT;
+        gpuCsmDesc.depthBiasEnable = true;
+        gpuCsmDesc.depthBiasConstant = -1.25f;
+        gpuCsmDesc.depthBiasSlope = -1.75f;
+        gpuCsmDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&gpuCsmGraphicsLayout, 1};
+        const std::array<DescriptorBindingDesc, 2> gpuCsmAbi = {
+            DescriptorBindingDesc{0, {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr}},
+            DescriptorBindingDesc{0, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                VK_SHADER_STAGE_VERTEX_BIT, nullptr}}};
+        gpuCsmDesc.descriptorBindings = gpuCsmAbi;
+        const std::array<VkPushConstantRange, 1> gpuCsmPush = {{
+            {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4)}}};
+        gpuCsmDesc.pushConstants = gpuCsmPush;
+        gpuCsmDesc.vertexShader = "gpu_driven_csm.vert.spv";
+        result = gpuDrivenCsmPipeline.createGraphics(device, gpuCsmDesc);
+        if (!result) return result;
         const auto indirectAbi = indirectBuildAbi();
         ComputePipelineDesc indirectDesc{};
         indirectDesc.shader = "build_indirect_commands.comp.spv";
@@ -1845,10 +1878,14 @@ VoidResult Renderer::Impl::recordFrame(
         (void)vkResetDescriptorPool(device, frameDescriptorPool, 0);
     }
 
-    constexpr std::uint32_t gpuUnsupportedFlags =
+    std::uint32_t gpuUnsupportedFlags =
         static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
-        static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided) |
         Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
+    if (!gpuDrivenBindless)
+    {
+        gpuUnsupportedFlags |=
+            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided);
+    }
     VkDescriptorSet gpuCullSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuIndirectSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuGraphicsSet = VK_NULL_HANDLE;
@@ -1857,26 +1894,15 @@ VoidResult Renderer::Impl::recordFrame(
     const VkBuffer gpuVertexBuffer = sceneResources.gpuDrivenVertexBuffer();
     const VkBuffer gpuIndexBuffer = sceneResources.gpuDrivenIndexBuffer();
     const VkBuffer gpuMeshDrawBuffer = sceneResources.meshDrawBuffer();
-    bool gpuIndirectCompatible = config.enableGpuDrivenScene && !packet.instances.empty() &&
+    bool gpuIndirectCompatible = config.enableGpuDrivenScene && gpuSceneInstanceCount != 0 &&
         gpuVertexBuffer != VK_NULL_HANDLE && gpuIndexBuffer != VK_NULL_HANDLE &&
         gpuMeshDrawBuffer != VK_NULL_HANDLE;
-    std::uint32_t gpuDrivenInstanceCount = 0;
+    std::uint32_t gpuDrivenInstanceCount = gpuIndirectCompatible ? gpuSceneInstanceCount : 0;
     std::uint32_t cpuFallbackInstanceCount = 0;
-    if (gpuIndirectCompatible)
+    if (gpuIndirectCompatible && !packet.instances.empty())
     {
         gpuMaterialId = packet.instances.front().materialId;
-        for (const auto& instance : packet.instances)
-        {
-            const MeshResource* mesh = sceneResources.mesh(instance.meshId);
-            const bool unsupportedFlags = (instance.flags & gpuUnsupportedFlags) != 0u;
-            const bool materialMismatch = !gpuDrivenBindless &&
-                instance.materialId != gpuMaterialId;
-            const bool eligible = mesh != nullptr && mesh->indexCount != 0 &&
-                !unsupportedFlags && !materialMismatch;
-            if (eligible) ++gpuDrivenInstanceCount;
-            else ++cpuFallbackInstanceCount;
-        }
-        gpuIndirectCompatible = gpuDrivenInstanceCount != 0;
+        cpuFallbackInstanceCount = static_cast<std::uint32_t>(packet.instances.size());
     }
     gpuDrivenActive = gpuIndirectCompatible;
     gpuFallbackInstanceCount = cpuFallbackInstanceCount;
@@ -2567,6 +2593,11 @@ Halcyon::Result<void> Renderer::updateGpuSceneDelta(
 bool Renderer::gpuDrivenSceneEnabled() const noexcept
 {
     return impl_ != nullptr && impl_->initialized && impl_->config.enableGpuDrivenScene;
+}
+
+bool Renderer::gpuDrivenBindlessEnabled() const noexcept
+{
+    return impl_ != nullptr && impl_->initialized && impl_->gpuDrivenBindless;
 }
 
 void Renderer::invalidateTaaHistory() noexcept

@@ -59,6 +59,11 @@ public:
     [[nodiscard]] static OwnedFramePacket extract(
         const Scene& scene, const CameraData& camera, std::uint64_t frameIndex = 0);
 
+    // GPU-driven frames keep opaque instances in GPU scene memory. The CPU
+    // packet only needs the camera, lights, and transparent fallback draws.
+    [[nodiscard]] static OwnedFramePacket extractGpuDrivenCpu(
+        const Scene& scene, const CameraData& camera, std::uint64_t frameIndex = 0);
+
 private:
     std::unordered_map<Entity, InstanceData, Entity::Hasher> previousInstances_;
     std::uint64_t lastRenderableRevision_ = 0;

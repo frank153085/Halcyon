@@ -100,6 +100,8 @@ private:
         const SceneManagerConfig& config, Vulkan::Renderer& renderer);
     [[nodiscard]] Result<OwnedSceneFramePacket> extract(
         const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const;
+    [[nodiscard]] Result<OwnedSceneFramePacket> extractGpuDrivenCpu(
+        const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const;
 
     std::unique_ptr<Impl> impl_;
 };

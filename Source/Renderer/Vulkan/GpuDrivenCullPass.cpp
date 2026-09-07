@@ -25,10 +25,14 @@ Halcyon::Result<void> recordGpuDrivenCulling(FramePassContext& ctx)
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
-    constexpr std::uint32_t gpuUnsupportedFlags =
+    std::uint32_t gpuUnsupportedFlags =
         static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
-        static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided) |
         Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
+    if (!ctx.gpuDrivenBindless)
+    {
+        gpuUnsupportedFlags |=
+            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided);
+    }
     auto& frame = *ctx.frame;
     const auto& packet = *ctx.packet;
     const auto& config = *ctx.config;
