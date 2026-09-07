@@ -48,6 +48,53 @@ void FrameRecorder::recordMeshGroupedIndirectBuild(
         vkCmdPipelineBarrier2(commandBuffer, &dependency);
     }
 
+    if (desc.meshCount == 1u)
+    {
+        vkCmdFillBuffer(commandBuffer, desc.indirectCount, 0, sizeof(std::uint32_t), 0);
+        VkBufferMemoryBarrier2 fillBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        fillBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        fillBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        fillBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        fillBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        fillBarrier.buffer = desc.indirectCount;
+        fillBarrier.size = sizeof(std::uint32_t);
+        dependency.bufferMemoryBarrierCount = 1;
+        dependency.pBufferMemoryBarriers = &fillBarrier;
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+            indirectBuildPipeline.computePipeline());
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+            indirectBuildPipeline.layout(), 0, 1, &desc.set, 0, nullptr);
+        struct IndirectConstants
+        {
+            std::uint32_t instanceCount;
+            std::uint32_t meshCount;
+            std::uint32_t mode;
+            std::uint32_t reserved;
+        } indirect{desc.instanceCount, desc.meshCount, 2u, 0u};
+        vkCmdPushConstants(commandBuffer, indirectBuildPipeline.layout(),
+            VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(indirect), &indirect);
+        vkCmdDispatch(commandBuffer, 1, 1, 1);
+
+        VkBufferMemoryBarrier2 drawBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        drawBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        drawBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        drawBarrier.dstStageMask =
+            VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+        drawBarrier.dstAccessMask =
+            VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT;
+        std::array<VkBufferMemoryBarrier2, 2> drawBarriers{drawBarrier, drawBarrier};
+        drawBarriers[0].buffer = desc.indirectCommands;
+        drawBarriers[0].size = VK_WHOLE_SIZE;
+        drawBarriers[1].buffer = desc.indirectCount;
+        drawBarriers[1].size = sizeof(std::uint32_t);
+        dependency.bufferMemoryBarrierCount = 2;
+        dependency.pBufferMemoryBarriers = drawBarriers.data();
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        return;
+    }
+
     vkCmdBindPipeline(
         commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, indirectBuildPipeline.computePipeline());
     vkCmdBindDescriptorSets(

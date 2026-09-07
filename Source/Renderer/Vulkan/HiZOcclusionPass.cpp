@@ -158,7 +158,7 @@ void addHiZOcclusionPass(Graph::FrameGraph& graph, FramePassContext& ctx)
     };
     const auto setError = [&](std::string message) { ctx.setError(std::move(message)); };
 
-    if (config.enableGpuDrivenScene && hizBuildPipeline.computePipeline() != VK_NULL_HANDLE)
+    if (config.enableTwoPhaseOcclusion && hizBuildPipeline.computePipeline() != VK_NULL_HANDLE)
     {
         // Phase 2 performs a LOAD/STORE overlay into the G-buffer. Keep every
         // attachment in the pass data so FrameGraphResources can validate the

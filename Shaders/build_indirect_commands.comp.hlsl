@@ -33,6 +33,29 @@ static const uint kInvalid = 0xffffffffu;
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
+    if (constants.mode == 2u)
+    {
+        // One mesh: emit a single indirect command from the compacted frustum
+        // list. Avoids a single-thread linked-list walk of every visible slot.
+        if (id.x != 0u || constants.meshCount == 0u) return;
+        const uint count = min(visibleCount[0], constants.instanceCount);
+        if (count == 0u)
+        {
+            drawCount[0] = 0u;
+            return;
+        }
+        drawCount[0] = 1u;
+        const MeshDrawRow draw = meshDraws[0];
+        DrawIndexedCommand command;
+        command.indexCount = draw.indexCount;
+        command.instanceCount = count;
+        command.firstIndex = draw.firstIndex;
+        command.vertexOffset = draw.vertexOffset;
+        command.firstInstance = 0u;
+        commands[0] = command;
+        return;
+    }
+
     if (constants.mode == 0u)
     {
         const uint candidateCount = min(visibleCount[0], constants.instanceCount);

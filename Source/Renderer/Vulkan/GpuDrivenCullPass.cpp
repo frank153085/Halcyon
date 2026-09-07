@@ -192,7 +192,10 @@ Halcyon::Result<void> recordGpuDrivenCulling(FramePassContext& ctx)
         static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(Halcyon::Renderer::Scene::TransformRow));
     writeStorageBuffer(gpuGraphicsSet, 1, gpuSceneBuffers.meshMaterialBuffer(),
         static_cast<VkDeviceSize>(gpuSceneBuffers.capacity()) * sizeof(Halcyon::Renderer::Scene::MeshMaterialRow));
-    writeStorageBuffer(gpuGraphicsSet, 2, gpuSceneBuffers.groupedVisibleIndicesBuffer(), sceneBytes);
+    const VkBuffer graphicsVisibleIndices = sceneResources.meshDrawCount() <= 1u
+        ? gpuSceneBuffers.visibleIndicesBuffer()
+        : gpuSceneBuffers.groupedVisibleIndicesBuffer();
+    writeStorageBuffer(gpuGraphicsSet, 2, graphicsVisibleIndices, sceneBytes);
     if (gpuDrivenBindless && gpuMaterialCount != 0)
         writeStorageBuffer(gpuGraphicsSet, 3, gpuSceneBuffers.materialBuffer(),
             static_cast<VkDeviceSize>(gpuMaterialCount) *
