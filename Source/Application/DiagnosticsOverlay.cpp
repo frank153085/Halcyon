@@ -76,9 +76,10 @@ Result<void> DiagnosticsOverlay::initialize(Platform::Window& window, Engine& en
     }
     auto* renderer = Internal::EngineAccess::renderer(engine);
     GLFWwindow* nativeWindow = Platform::Internal::WindowAccess::nativeHandle(window);
-    if (renderer == nullptr || nativeWindow == nullptr || renderer->instance() == VK_NULL_HANDLE ||
-        renderer->physicalDevice() == VK_NULL_HANDLE || renderer->device() == VK_NULL_HANDLE ||
-        renderer->graphicsQueue() == VK_NULL_HANDLE)
+    const auto handles = renderer != nullptr ? renderer->nativeHandles() : Halcyon::Vulkan::RendererNativeHandles{};
+    if (renderer == nullptr || nativeWindow == nullptr || handles.instance == VK_NULL_HANDLE ||
+        handles.physicalDevice == VK_NULL_HANDLE || handles.device == VK_NULL_HANDLE ||
+        handles.graphicsQueue == VK_NULL_HANDLE)
     {
         return Result<void>::failure(
             MakeError(ErrorCode::InvalidState, "Vulkan renderer is unavailable", "Diagnostics"));
@@ -94,15 +95,15 @@ Result<void> DiagnosticsOverlay::initialize(Platform::Window& window, Engine& en
             ErrorCode::Backend, "ImGui GLFW backend initialization failed", "Diagnostics"));
     }
 
-    const std::uint32_t imageCount = std::max(2u, renderer->swapchainImageCount());
-    VkFormat colorFormat = renderer->swapchainFormat();
+    const std::uint32_t imageCount = std::max(2u, handles.swapchainImageCount);
+    VkFormat colorFormat = handles.swapchainFormat;
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.ApiVersion = VK_API_VERSION_1_3;
-    initInfo.Instance = renderer->instance();
-    initInfo.PhysicalDevice = renderer->physicalDevice();
-    initInfo.Device = renderer->device();
+    initInfo.Instance = handles.instance;
+    initInfo.PhysicalDevice = handles.physicalDevice;
+    initInfo.Device = handles.device;
     initInfo.QueueFamily = renderer->capabilities().graphicsQueueFamily;
-    initInfo.Queue = renderer->graphicsQueue();
+    initInfo.Queue = handles.graphicsQueue;
     initInfo.DescriptorPoolSize = 1000;
     initInfo.MinImageCount = imageCount;
     initInfo.ImageCount = imageCount;
@@ -114,7 +115,7 @@ Result<void> DiagnosticsOverlay::initialize(Platform::Window& window, Engine& en
     initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
     initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
     initInfo.PipelineInfoMain.PipelineRenderingCreateInfo.depthAttachmentFormat =
-        renderer->depthFormat();
+        handles.depthFormat;
     if (!ImGui_ImplVulkan_Init(&initInfo))
     {
         ImGui_ImplGlfw_Shutdown();
@@ -198,9 +199,10 @@ void DiagnosticsOverlay::shutdown() noexcept
     if (renderer != nullptr)
     {
         renderer->setOverlayCallback(nullptr);
-        if (renderer->device() != VK_NULL_HANDLE)
+        const auto handles = renderer->nativeHandles();
+        if (handles.device != VK_NULL_HANDLE)
         {
-            (void)vkDeviceWaitIdle(renderer->device());
+            (void)vkDeviceWaitIdle(handles.device);
         }
     }
     ImGui_ImplVulkan_Shutdown();

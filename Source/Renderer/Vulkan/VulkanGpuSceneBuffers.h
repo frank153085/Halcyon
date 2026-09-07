@@ -1,20 +1,24 @@
 #pragma once
 
 #include "../Scene/GpuScene.h"
+#include "FrustumCullBuffers.h"
 #include "GpuAllocator.h"
-#include "GpuUploader.h"
+#include "GpuSceneStorage.h"
+#include "IndirectBuildDescriptorLayout.h"
+#include "MeshGroupedIndirectBuffers.h"
+#include "OcclusionPhaseBuffers.h"
 
-#include <vulkan/vulkan.h>
-#include <algorithm>
-#include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
+#include <vulkan/vulkan.h>
 
 namespace Halcyon::Vulkan
 {
 
-// Persistent device-local SoA buffers used by the GPU-driven path. Uploads
-// are deliberately explicit so callers can batch dirty ranges per frame.
+// Composition root for GPU-driven scene buffers. Persistent SoA, frustum
+// outputs, occlusion phases, and mesh grouping are separate objects; this
+// facade still exposes the aggregate getters used by recording code.
 class VulkanGpuSceneBuffers final
 {
 public:
@@ -22,94 +26,185 @@ public:
     VulkanGpuSceneBuffers(const VulkanGpuSceneBuffers&) = delete;
     VulkanGpuSceneBuffers& operator=(const VulkanGpuSceneBuffers&) = delete;
 
-    [[nodiscard]] Halcyon::Result<void> initialize(VkDevice device, GpuAllocator& allocator,
-        std::uint32_t capacity = 1024, std::uint32_t frameCount = 3);
-    void setFrameIndex(std::uint32_t frameIndex) noexcept
-    {
-        activeFrame_ = frameCount_ == 0 ? 0 : frameIndex % frameCount_;
-    }
+    [[nodiscard]] Halcyon::Result<void> initialize(
+        VkDevice device,
+        GpuAllocator& allocator,
+        std::uint32_t capacity = 1024,
+        std::uint32_t frameCount = 3);
+    void setFrameIndex(std::uint32_t frameIndex) noexcept;
     void cleanup() noexcept;
     [[nodiscard]] Halcyon::Result<void> ensureCapacity(std::uint32_t required);
-    [[nodiscard]] Halcyon::Result<void> upload(VkCommandPool commandPool, VkQueue queue,
-        GpuUploader& uploader, const Halcyon::Renderer::Scene::GpuSceneSoA& scene);
-    [[nodiscard]] Halcyon::Result<void> uploadDirty(VkCommandPool commandPool, VkQueue queue,
-        GpuUploader& uploader, const Halcyon::Renderer::Scene::GpuSceneSoA& scene,
+    [[nodiscard]] Halcyon::Result<void> upload(
+        const Halcyon::Renderer::Scene::GpuSceneSoA& scene);
+    [[nodiscard]] Halcyon::Result<void> uploadDirty(
+        const Halcyon::Renderer::Scene::GpuSceneSoA& scene,
         std::span<const Halcyon::Renderer::Scene::GpuSceneDirtyRange> ranges);
-    [[nodiscard]] Halcyon::Result<void> uploadMaterials(VkCommandPool commandPool, VkQueue queue,
-        GpuUploader& uploader,
+    [[nodiscard]] Halcyon::Result<void> uploadMaterials(
         std::span<const Halcyon::Renderer::Scene::MaterialGpuData> materials);
-
-    // Queue scene writes on the current render command buffer.  The old
-    // one-shot uploader submitted and waited for every copy independently;
-    // recording all pending copies into the frame keeps the graphics queue
-    // ordered without a CPU-side queue-idle stall.
     [[nodiscard]] Halcyon::Result<void> recordPendingUploads(
         VkCommandBuffer commandBuffer,
         GpuAllocator& allocator,
         std::vector<BufferAllocation>& stagingKeepAlive);
 
-    [[nodiscard]] VkBuffer transformBuffer() const noexcept { return transforms_.buffer; }
-    [[nodiscard]] VkBuffer boundsBuffer() const noexcept { return bounds_.buffer; }
-    [[nodiscard]] VkBuffer meshMaterialBuffer() const noexcept { return meshMaterials_.buffer; }
-    [[nodiscard]] VkBuffer visibleIndicesBuffer() const noexcept { return active(visibleIndices_).buffer; }
-    [[nodiscard]] VkBuffer indirectCommandsBuffer() const noexcept { return active(indirectCommands_).buffer; }
-    [[nodiscard]] VkBuffer visibleCountBuffer() const noexcept { return active(visibleCount_).buffer; }
-    [[nodiscard]] VkBuffer phase1VisibleIndicesBuffer() const noexcept { return active(phase1Visible_).buffer; }
-    [[nodiscard]] VkBuffer phase1VisibleCountBuffer() const noexcept { return active(phase1VisibleCount_).buffer; }
-    [[nodiscard]] VkBuffer occludedIndicesBuffer() const noexcept { return active(occluded_).buffer; }
-    [[nodiscard]] VkBuffer occludedCountBuffer() const noexcept { return active(occludedCount_).buffer; }
-    [[nodiscard]] VkBuffer phase2VisibleIndicesBuffer() const noexcept { return active(phase2Visible_).buffer; }
-    [[nodiscard]] VkBuffer phase2VisibleCountBuffer() const noexcept { return active(phase2VisibleCount_).buffer; }
-    [[nodiscard]] VkBuffer phase2IndirectCommandsBuffer() const noexcept { return active(phase2Indirect_).buffer; }
-    [[nodiscard]] VkBuffer meshHeadsBuffer() const noexcept { return active(meshHeads_).buffer; }
-    [[nodiscard]] VkBuffer meshNextBuffer() const noexcept { return active(meshNext_).buffer; }
-    [[nodiscard]] VkBuffer groupedVisibleIndicesBuffer() const noexcept { return active(groupedVisible_).buffer; }
-    [[nodiscard]] VkBuffer groupedVisibleCountBuffer() const noexcept { return active(groupedCount_).buffer; }
-    // Phase 1 and phase 2 are consumed by different draws and may be
-    // produced in the same command buffer. Keep their compacted slot streams
-    // independent so phase 2 cannot overwrite phase 1's firstInstance data.
+    void writeIndirectBuildDescriptors(
+        VkDevice device,
+        VkDescriptorSet set,
+        IndirectBuildPass pass,
+        VkBuffer meshDrawBuffer,
+        VkDeviceSize meshDrawSize) const;
+
+    [[nodiscard]] GpuSceneStorage& storage() noexcept
+    {
+        return storage_;
+    }
+    [[nodiscard]] const GpuSceneStorage& storage() const noexcept
+    {
+        return storage_;
+    }
+    [[nodiscard]] FrustumCullBuffers& frustum() noexcept
+    {
+        return frustum_;
+    }
+    [[nodiscard]] const FrustumCullBuffers& frustum() const noexcept
+    {
+        return frustum_;
+    }
+    [[nodiscard]] OcclusionPhaseBuffers& phase1() noexcept
+    {
+        return phase1_;
+    }
+    [[nodiscard]] const OcclusionPhaseBuffers& phase1() const noexcept
+    {
+        return phase1_;
+    }
+    [[nodiscard]] OcclusionPhaseBuffers& phase2() noexcept
+    {
+        return phase2_;
+    }
+    [[nodiscard]] const OcclusionPhaseBuffers& phase2() const noexcept
+    {
+        return phase2_;
+    }
+    [[nodiscard]] MeshGroupedIndirectBuffers& grouping() noexcept
+    {
+        return grouping_;
+    }
+    [[nodiscard]] const MeshGroupedIndirectBuffers& grouping() const noexcept
+    {
+        return grouping_;
+    }
+    [[nodiscard]] MeshGroupedIndirectBuffers& phase2Grouping() noexcept
+    {
+        return phase2Grouping_;
+    }
+    [[nodiscard]] const MeshGroupedIndirectBuffers& phase2Grouping() const noexcept
+    {
+        return phase2Grouping_;
+    }
+
+    [[nodiscard]] VkBuffer transformBuffer() const noexcept
+    {
+        return storage_.transformBuffer();
+    }
+    [[nodiscard]] VkBuffer boundsBuffer() const noexcept
+    {
+        return storage_.boundsBuffer();
+    }
+    [[nodiscard]] VkBuffer meshMaterialBuffer() const noexcept
+    {
+        return storage_.meshMaterialBuffer();
+    }
+    [[nodiscard]] VkBuffer materialBuffer() const noexcept
+    {
+        return storage_.materialBuffer();
+    }
+    [[nodiscard]] VkBuffer visibleIndicesBuffer() const noexcept
+    {
+        return frustum_.visibleIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer visibleCountBuffer() const noexcept
+    {
+        return frustum_.visibleCountBuffer();
+    }
+    [[nodiscard]] VkBuffer occludedIndicesBuffer() const noexcept
+    {
+        return frustum_.occludedIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer occludedCountBuffer() const noexcept
+    {
+        return frustum_.occludedCountBuffer();
+    }
+    [[nodiscard]] VkBuffer indirectCommandsBuffer() const noexcept
+    {
+        return frustum_.indirectCommandsBuffer();
+    }
+    // Phase 1 reuses the main-path count buffer.
+    [[nodiscard]] VkBuffer indirectDrawCountBuffer() const noexcept
+    {
+        return frustum_.indirectDrawCountBuffer();
+    }
+    [[nodiscard]] VkBuffer phase1VisibleIndicesBuffer() const noexcept
+    {
+        return phase1_.visibleIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer phase1VisibleCountBuffer() const noexcept
+    {
+        return phase1_.visibleCountBuffer();
+    }
+    [[nodiscard]] VkBuffer phase2VisibleIndicesBuffer() const noexcept
+    {
+        return phase2_.visibleIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer phase2VisibleCountBuffer() const noexcept
+    {
+        return phase2_.visibleCountBuffer();
+    }
+    [[nodiscard]] VkBuffer phase2IndirectCommandsBuffer() const noexcept
+    {
+        return phase2_.indirectCommandsBuffer();
+    }
+    [[nodiscard]] VkBuffer phase2IndirectDrawCountBuffer() const noexcept
+    {
+        return phase2_.indirectDrawCountBuffer();
+    }
+    [[nodiscard]] VkBuffer meshHeadsBuffer() const noexcept
+    {
+        return grouping_.meshHeadsBuffer();
+    }
+    [[nodiscard]] VkBuffer meshNextBuffer() const noexcept
+    {
+        return grouping_.meshNextBuffer();
+    }
+    [[nodiscard]] VkBuffer groupedVisibleIndicesBuffer() const noexcept
+    {
+        return grouping_.groupedVisibleIndicesBuffer();
+    }
+    [[nodiscard]] VkBuffer groupedVisibleCountBuffer() const noexcept
+    {
+        return grouping_.groupedVisibleCountBuffer();
+    }
     [[nodiscard]] VkBuffer phase2GroupedVisibleIndicesBuffer() const noexcept
     {
-        return active(phase2GroupedVisible_).buffer;
+        return phase2Grouping_.groupedVisibleIndicesBuffer();
     }
     [[nodiscard]] VkBuffer phase2GroupedVisibleCountBuffer() const noexcept
     {
-        return active(phase2GroupedCount_).buffer;
+        return phase2Grouping_.groupedVisibleCountBuffer();
     }
-    [[nodiscard]] VkBuffer indirectDrawCountBuffer() const noexcept { return active(indirectCount_).buffer; }
-    [[nodiscard]] VkBuffer phase1IndirectDrawCountBuffer() const noexcept { return active(indirectCount_).buffer; }
-    [[nodiscard]] VkBuffer phase2IndirectDrawCountBuffer() const noexcept { return active(phase2IndirectCount_).buffer; }
-    [[nodiscard]] VkBuffer materialBuffer() const noexcept { return materials_.buffer; }
-    [[nodiscard]] std::uint32_t capacity() const noexcept { return capacity_; }
+    [[nodiscard]] std::uint32_t capacity() const noexcept
+    {
+        return capacity_;
+    }
 
 private:
-    [[nodiscard]] Halcyon::Result<void> queueUpload(
-        BufferAllocation destination,
-        std::span<const std::byte> bytes,
-        VkDeviceSize destinationOffset = 0);
-    [[nodiscard]] const BufferAllocation& active(const std::vector<BufferAllocation>& buffers) const noexcept
-    {
-        static const BufferAllocation empty{};
-        return buffers.empty() ? empty : buffers[std::min<std::size_t>(activeFrame_, buffers.size() - 1u)];
-    }
-    [[nodiscard]] Halcyon::Result<BufferAllocation> create(std::size_t stride, std::uint32_t count,
-        const char* name);
+    GpuSceneStorage storage_;
+    FrustumCullBuffers frustum_;
+    OcclusionPhaseBuffers phase1_;
+    OcclusionPhaseBuffers phase2_;
+    MeshGroupedIndirectBuffers grouping_;
+    MeshGroupedIndirectBuffers phase2Grouping_;
     VkDevice device_ = VK_NULL_HANDLE;
     GpuAllocator* allocator_ = nullptr;
-    BufferAllocation transforms_{}, bounds_{}, meshMaterials_{}, materials_{};
-    std::vector<BufferAllocation> visibleIndices_, indirectCommands_, visibleCount_;
-    std::vector<BufferAllocation> phase1Visible_, phase1VisibleCount_, occluded_, occludedCount_;
-    std::vector<BufferAllocation> phase2Visible_, phase2VisibleCount_, phase2Indirect_;
-    std::vector<BufferAllocation> meshHeads_, meshNext_, groupedVisible_, groupedCount_;
-    std::vector<BufferAllocation> phase2GroupedVisible_, phase2GroupedCount_;
-    std::vector<BufferAllocation> indirectCount_, phase2IndirectCount_;
-    struct PendingUpload
-    {
-        VkBuffer destination = VK_NULL_HANDLE;
-        VkDeviceSize destinationOffset = 0;
-        std::vector<std::byte> bytes;
-    };
-    std::vector<PendingUpload> pendingUploads_;
     std::uint32_t capacity_ = 0;
     std::uint32_t frameCount_ = 0;
     std::uint32_t activeFrame_ = 0;

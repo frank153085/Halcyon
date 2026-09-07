@@ -151,6 +151,37 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/GpuUploader.cpp
     Source/Renderer/Vulkan/VulkanGpuSceneBuffers.cpp
     Source/Renderer/Vulkan/VulkanGpuSceneBuffers.h
+    Source/Renderer/Vulkan/GpuSceneBufferUtil.h
+    Source/Renderer/Vulkan/GpuSceneStorage.cpp
+    Source/Renderer/Vulkan/GpuSceneStorage.h
+    Source/Renderer/Vulkan/FrustumCullBuffers.cpp
+    Source/Renderer/Vulkan/FrustumCullBuffers.h
+    Source/Renderer/Vulkan/OcclusionPhaseBuffers.cpp
+    Source/Renderer/Vulkan/OcclusionPhaseBuffers.h
+    Source/Renderer/Vulkan/MeshGroupedIndirectBuffers.cpp
+    Source/Renderer/Vulkan/MeshGroupedIndirectBuffers.h
+    Source/Renderer/Vulkan/IndirectBuildDescriptorLayout.h
+    Source/Renderer/Vulkan/RendererNativeHandles.h
+    Source/Renderer/Vulkan/PipelineRegistry.cpp
+    Source/Renderer/Vulkan/PipelineRegistry.h
+    Source/Renderer/Vulkan/DebugReadbackManager.cpp
+    Source/Renderer/Vulkan/DebugReadbackManager.h
+    Source/Renderer/Vulkan/FrameRecorder.cpp
+    Source/Renderer/Vulkan/FrameRecorder.h
+    Source/Renderer/Vulkan/M3PassContext.cpp
+    Source/Renderer/Vulkan/M3PassContext.h
+    Source/Renderer/Vulkan/ProceduralIbl.cpp
+    Source/Renderer/Vulkan/GpuDrivenCullPass.cpp
+    Source/Renderer/Vulkan/CsmShadowPass.cpp
+    Source/Renderer/Vulkan/GBufferPass.cpp
+    Source/Renderer/Vulkan/HiZOcclusionPass.cpp
+    Source/Renderer/Vulkan/ClusterBuildPass.cpp
+    Source/Renderer/Vulkan/DeferredLightingPass.cpp
+    Source/Renderer/Vulkan/TransparencyPass.cpp
+    Source/Renderer/Vulkan/TaaResolvePass.cpp
+    Source/Renderer/Vulkan/TonemapPass.cpp
+    Source/Renderer/Vulkan/PresentPass.cpp
+    Source/Renderer/Vulkan/VisibilityReadbackPass.cpp
     Source/Renderer/Vulkan/GpuUploader.h
     Source/Renderer/Vulkan/GpuResourceManager.cpp
     Source/Renderer/Vulkan/StbImage.cpp
