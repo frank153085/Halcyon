@@ -221,6 +221,7 @@ void printUsage() noexcept
                 "  --no-validation  disable Vulkan validation layers\n"
                 "  --validation     enable Vulkan validation layers\n"
                 "  --log            enable console and file logging (or set HALCYON_LOG=1)\n"
+                "  --no-vsync       present immediately (no FIFO/mailbox wait)\n"
                 "  --help           show this message\n");
 }
 
@@ -389,6 +390,11 @@ void printUsage() noexcept
         }
         if (argument == "--log")
         {
+            continue;
+        }
+        if (argument == "--no-vsync")
+        {
+            config.engine.enableVsync = false;
             continue;
         }
         HALCYON_LOG_ERROR("Unknown or malformed command-line option: ", argument);

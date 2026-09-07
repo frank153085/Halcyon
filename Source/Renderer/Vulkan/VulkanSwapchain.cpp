@@ -39,8 +39,18 @@ namespace
 }
 
 [[nodiscard]] VkPresentModeKHR choosePresentMode(
-    const std::vector<VkPresentModeKHR>& modes) noexcept
+    const std::vector<VkPresentModeKHR>& modes, bool vsync) noexcept
 {
+    if (!vsync)
+    {
+        for (VkPresentModeKHR mode : modes)
+        {
+            if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR)
+            {
+                return mode;
+            }
+        }
+    }
     for (VkPresentModeKHR mode : modes)
     {
         if (mode == VK_PRESENT_MODE_MAILBOX_KHR)
@@ -203,7 +213,7 @@ VoidResult VulkanSwapchain::create()
         return fail("The selected swapchain format does not support transfer-source readback",
             Halcyon::ErrorCode::Unsupported);
     }
-    const VkPresentModeKHR presentMode = choosePresentMode(presentModes);
+    const VkPresentModeKHR presentMode = choosePresentMode(presentModes, enableVsync);
     std::uint32_t imageCount = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
     {

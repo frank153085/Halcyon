@@ -303,6 +303,7 @@ struct Renderer::Impl
     VulkanPipeline& frustumCullPipeline = pipelines.frustumCullPipeline;
     VulkanPipeline& indirectBuildPipeline = pipelines.indirectBuildPipeline;
     VulkanPipeline& gpuDrivenGbufferPipeline = pipelines.gpuDrivenGbufferPipeline;
+    VulkanPipeline& gpuDrivenGbufferDoubleSidedPipeline = pipelines.gpuDrivenGbufferDoubleSidedPipeline;
     VulkanPipeline& gpuDrivenCsmPipeline = pipelines.gpuDrivenCsmPipeline;
     VulkanPipeline& hizBuildPipeline = pipelines.hizBuildPipeline;
     VulkanPipeline& occlusionPhase1Pipeline = pipelines.occlusionPhase1Pipeline;
@@ -922,8 +923,12 @@ struct Renderer::Impl
         gpuGraphics.pushConstants = gpuPush;
         gpuGraphics.vertexShader = "gpu_driven.vert.spv";
         gpuGraphics.fragmentShader = useBindless ? "gpu_driven.frag.spv" : "gbuffer.frag.spv";
-        gpuGraphics.cullMode = useBindless ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+        gpuGraphics.cullMode = VK_CULL_MODE_BACK_BIT;
         result = gpuDrivenGbufferPipeline.createGraphics(device, gpuGraphics);
+        if (!result) return result;
+        GraphicsPipelineDesc gpuGraphicsDouble = gpuGraphics;
+        gpuGraphicsDouble.cullMode = VK_CULL_MODE_NONE;
+        result = gpuDrivenGbufferDoubleSidedPipeline.createGraphics(device, gpuGraphicsDouble);
         if (!result) return result;
         gpuDrivenBindless = useBindless;
         GraphicsPipelineDesc gpuCsmDesc{};
@@ -1878,14 +1883,10 @@ VoidResult Renderer::Impl::recordFrame(
         (void)vkResetDescriptorPool(device, frameDescriptorPool, 0);
     }
 
-    std::uint32_t gpuUnsupportedFlags =
+    constexpr std::uint32_t gpuUnsupportedFlags =
         static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
+        static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided) |
         Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
-    if (!gpuDrivenBindless)
-    {
-        gpuUnsupportedFlags |=
-            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided);
-    }
     VkDescriptorSet gpuCullSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuIndirectSet = VK_NULL_HANDLE;
     VkDescriptorSet gpuGraphicsSet = VK_NULL_HANDLE;
@@ -2242,6 +2243,7 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->caps.bindlessTable = static_cast<bool>(bindlessResult);
         }
 #endif
+        impl_->swapchainState.enableVsync = impl_->config.enableVsync;
         result = impl_->swapchainState.initialize(impl_->physicalDevice,
             impl_->device,
             impl_->surface,
@@ -2557,7 +2559,8 @@ Halcyon::Result<void> Renderer::updateGpuSceneDelta(
         {
             mapped.value().flags |= Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
         }
-        if (!impl_->gpuSceneState.applyUpdated(item.entity, mapped.value(), bounds.value()))
+        if (!impl_->gpuSceneState.applyUpdated(item.entity, mapped.value(), bounds.value()) &&
+            !impl_->gpuSceneState.applyCreated(item.entity, mapped.value(), bounds.value()))
             return Halcyon::Result<void>::failure({Halcyon::ErrorCode::Backend,
                 "failed to apply GPU scene update delta"});
     }

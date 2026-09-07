@@ -32,6 +32,8 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
     delta.frameIndex = frameIndex;
     delta.camera = camera;
 
+    constexpr std::uint32_t transparentFlag =
+        static_cast<std::uint32_t>(RenderableFlags::Transparent);
     const auto makeInstance = [&](Entity entity) -> std::optional<InstanceData>
     {
         if (!scene.entities().isAlive(entity)) return std::nullopt;
@@ -41,6 +43,13 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
             ? std::optional<InstanceData>{instanceData(*transform, *renderable)}
             : std::nullopt;
     };
+    const auto noteTransparent = [&](const InstanceData& instance)
+    {
+        if ((instance.flags & transparentFlag) != 0u)
+        {
+            anyTransparent_ = true;
+        }
+    };
 
     const std::uint64_t renderableRevision = scene.renderables().revision();
     const bool periodicValidation = (++validationFrame_ % 300u) == 0u;
@@ -48,9 +57,6 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
         renderableRevision != lastRenderableRevision_;
     if (!fullScan)
     {
-        // TransformManager reports only entities whose world transform changed
-        // (including descendants of a changed parent). This is the hot path
-        // for large static scenes: no hash rebuild and no full renderable scan.
         for (const Entity entity : scene.transforms().updatedEntities())
         {
             const auto value = makeInstance(entity);
@@ -67,6 +73,7 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
             if (previous == previousInstances_.end())
             {
                 previousInstances_.emplace(entity, *value);
+                noteTransparent(*value);
                 delta.created.push_back({entity, *value});
             }
             else if (std::memcmp(previous->second.transform.data(), value->transform.data(),
@@ -82,6 +89,7 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
         return delta;
     }
 
+    anyTransparent_ = false;
     std::unordered_map<Entity, InstanceData, Entity::Hasher> current;
     current.reserve(scene.renderables().size());
     for (const Entity entity : scene.renderables().entities())
@@ -95,6 +103,7 @@ RenderExtractor::Delta RenderExtractor::extractDelta(
     for (const auto& [entity, instance] : current)
     {
         const auto previous = previousInstances_.find(entity);
+        noteTransparent(instance);
         if (previous == previousInstances_.end())
         {
             delta.created.push_back({entity, instance});
@@ -168,31 +177,35 @@ OwnedFramePacket RenderExtractor::extract(
 }
 
 OwnedFramePacket RenderExtractor::extractGpuDrivenCpu(
-    const Scene& scene, const CameraData& camera, std::uint64_t frameIndex)
+    const Scene& scene, const CameraData& camera, std::uint64_t frameIndex,
+    bool includeTransparentInstances)
 {
     OwnedFramePacket packet;
     packet.frameIndex = frameIndex;
     packet.camera = camera;
     packet.lights.reserve(scene.lights().size());
-    constexpr std::uint32_t transparentFlag =
-        static_cast<std::uint32_t>(RenderableFlags::Transparent);
-    for (const Entity entity : scene.renderables().entities())
+    if (includeTransparentInstances && anyTransparent_)
     {
-        if (!scene.entities().isAlive(entity))
+        constexpr std::uint32_t transparentFlag =
+            static_cast<std::uint32_t>(RenderableFlags::Transparent);
+        for (const Entity entity : scene.renderables().entities())
         {
-            continue;
+            if (!scene.entities().isAlive(entity))
+            {
+                continue;
+            }
+            const RenderableComponent* renderable = scene.renderables().get(entity);
+            const TransformComponent* transform = scene.transforms().get(entity);
+            if (renderable == nullptr || transform == nullptr)
+            {
+                continue;
+            }
+            if ((renderable->flags & transparentFlag) == 0u)
+            {
+                continue;
+            }
+            packet.instances.push_back(instanceData(*transform, *renderable));
         }
-        const RenderableComponent* renderable = scene.renderables().get(entity);
-        const TransformComponent* transform = scene.transforms().get(entity);
-        if (renderable == nullptr || transform == nullptr)
-        {
-            continue;
-        }
-        if ((renderable->flags & transparentFlag) == 0u)
-        {
-            continue;
-        }
-        packet.instances.push_back(instanceData(*transform, *renderable));
     }
     for (const Entity entity : scene.lights().entities())
     {

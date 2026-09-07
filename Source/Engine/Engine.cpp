@@ -22,6 +22,7 @@ struct Engine::Impl
     View view{};
     Capabilities capabilities{};
     bool initialized = false;
+    bool enableTransparency = true;
 };
 
 namespace
@@ -158,8 +159,10 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.enableGpuDrivenScene = config.enableGpuDrivenScene ||
         config.enableTwoPhaseOcclusion;
     backendConfig.enableTwoPhaseOcclusion = config.enableTwoPhaseOcclusion;
+    backendConfig.enableVsync = config.enableVsync;
     backendConfig.instanceIdReportPath = config.instanceIdReportPath;
 
+    impl->enableTransparency = config.enableTransparency;
     impl->window = &window;
     const auto initializeResult = impl->renderer.initialize(
         Platform::Internal::WindowAccess::nativeHandle(window), backendConfig);
@@ -291,7 +294,8 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
             std::chrono::steady_clock::now() - visibilityBegin).count();
         auto packet = impl_->renderer.gpuDrivenSceneEnabled() &&
                 impl_->renderer.gpuDrivenBindlessEnabled()
-            ? impl_->sceneManager.extractGpuDrivenCpu(impl_->view.camera().data(), frameIndex)
+            ? impl_->sceneManager.extractGpuDrivenCpu(impl_->view.camera().data(), frameIndex,
+                  impl_->enableTransparency)
             : impl_->sceneManager.extract(impl_->view.camera().data(), frameIndex);
         if (!packet)
         {

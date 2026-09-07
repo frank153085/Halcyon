@@ -464,7 +464,7 @@ void FrameRecorder::drawGpuDrivenCpuFallback(
     std::uint32_t gpuMaterialId,
     const CpuDrawState& draw) const
 {
-    if (draw.gpuDrivenBindless || draw.sceneResources == nullptr || draw.pipelines == nullptr ||
+    if (draw.sceneResources == nullptr || draw.pipelines == nullptr ||
         draw.materialDescriptorBindCount == nullptr)
     {
         return;

@@ -28,6 +28,7 @@ public:
     VkExtent2D requestedExtent{};
     bool framebufferResized = false;
     bool deviceLost = false;
+    bool enableVsync = true;
 
     [[nodiscard]] Halcyon::Result<void> initialize(VkPhysicalDevice physicalDevice,
         VkDevice device,

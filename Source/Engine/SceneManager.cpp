@@ -387,8 +387,9 @@ Result<SceneInstanceHandle> SceneManager::createInstance(const SceneInstanceConf
                 renderable.material = asset->imported.materials[materialIndex];
             else if (!asset->imported.materials.empty())
                 renderable.material = asset->imported.materials.front();
-            renderable.flags = static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow) |
-                static_cast<std::uint32_t>(RenderableFlags::CastShadow);
+            renderable.flags = static_cast<std::uint32_t>(RenderableFlags::ReceiveShadow);
+            if (!proceduralAsset)
+                renderable.flags |= static_cast<std::uint32_t>(RenderableFlags::CastShadow);
             if (materialIndex < asset->source.materials.size())
             {
                 const auto& material = asset->source.materials[materialIndex];
@@ -629,15 +630,16 @@ Result<OwnedSceneFramePacket> SceneManager::extract(
 }
 
 Result<OwnedSceneFramePacket> SceneManager::extractGpuDrivenCpu(
-    const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const
+    const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex,
+    bool includeTransparentInstances) const
 {
     if (impl_ == nullptr || impl_->renderer == nullptr)
     {
         return Result<OwnedSceneFramePacket>::failure(sceneManagerError(
             ErrorCode::InvalidState, "SceneManager is not connected to a renderer"));
     }
-    auto packet =
-        Renderer::Scene::Ecs::RenderExtractor::extractGpuDrivenCpu(scene(), camera, frameIndex);
+    auto packet = impl_->renderExtractor.extractGpuDrivenCpu(
+        scene(), camera, frameIndex, includeTransparentInstances);
     const auto remapped = impl_->renderer->remapFramePacket(packet);
     if (!remapped)
     {

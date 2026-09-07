@@ -101,7 +101,8 @@ private:
     [[nodiscard]] Result<OwnedSceneFramePacket> extract(
         const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const;
     [[nodiscard]] Result<OwnedSceneFramePacket> extractGpuDrivenCpu(
-        const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex) const;
+        const Renderer::Scene::CameraData& camera, std::uint64_t frameIndex,
+        bool includeTransparentInstances = true) const;
 
     std::unique_ptr<Impl> impl_;
 };

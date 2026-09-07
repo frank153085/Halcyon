@@ -17,6 +17,7 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     frustumCullPipeline.destroy();
     indirectBuildPipeline.destroy();
     gpuDrivenGbufferPipeline.destroy();
+    gpuDrivenGbufferDoubleSidedPipeline.destroy();
     gpuDrivenCsmPipeline.destroy();
     hizBuildPipeline.destroy();
     occlusionPhase1Pipeline.destroy();

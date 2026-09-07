@@ -15,7 +15,7 @@ struct FrustumConstants
     uint instanceCount;
     uint excludedFlags;
     uint materialFilter;
-    uint reserved0;
+    uint requiredFlags;
 };
 [[vk::push_constant]] ConstantBuffer<FrustumConstants> constants;
 
@@ -26,6 +26,8 @@ void main(uint3 id : SV_DispatchThreadID)
     if (index >= constants.instanceCount) return;
     const MeshMaterialRow material = meshMaterials[index];
     if ((material.flags & constants.excludedFlags) != 0u) return;
+    if (constants.requiredFlags != 0u &&
+        (material.flags & constants.requiredFlags) == 0u) return;
     if (constants.materialFilter != 0xffffffffu &&
         material.materialIndex != constants.materialFilter) return;
     const float4 sphere = bounds[index].sphereCenterRadius;

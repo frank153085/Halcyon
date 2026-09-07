@@ -46,6 +46,7 @@ struct RendererConfig
     bool enableTransparency = true;
     bool enableGpuDrivenScene = false;
     bool enableTwoPhaseOcclusion = false;
+    bool enableVsync = true;
     std::filesystem::path instanceIdReportPath{};
 };
 

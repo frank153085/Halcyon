@@ -16,6 +16,7 @@ struct ExampleDefinition
     bool enableDiagnostics = false;
     bool enableGpuDrivenScene = false;
     bool enableTwoPhaseOcclusion = false;
+    bool enableTransparency = true;
     std::function<Result<void>(Engine&)> onInitialize;
     std::function<Result<void>(Engine&, const FrameInfo&)> onFrame;
     std::function<void(Engine&)> onShutdown;

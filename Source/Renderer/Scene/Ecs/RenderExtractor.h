@@ -45,6 +45,7 @@ public:
         lastRenderableRevision_ = 0;
         validationFrame_ = 0;
         hasState_ = false;
+        anyTransparent_ = false;
     }
 
     // Convenience overload for callers that keep extractor state externally.
@@ -61,14 +62,16 @@ public:
 
     // GPU-driven frames keep opaque instances in GPU scene memory. The CPU
     // packet only needs the camera, lights, and transparent fallback draws.
-    [[nodiscard]] static OwnedFramePacket extractGpuDrivenCpu(
-        const Scene& scene, const CameraData& camera, std::uint64_t frameIndex = 0);
+    [[nodiscard]] OwnedFramePacket extractGpuDrivenCpu(
+        const Scene& scene, const CameraData& camera, std::uint64_t frameIndex = 0,
+        bool includeTransparentInstances = true);
 
 private:
     std::unordered_map<Entity, InstanceData, Entity::Hasher> previousInstances_;
     std::uint64_t lastRenderableRevision_ = 0;
     std::uint32_t validationFrame_ = 0;
     bool hasState_ = false;
+    bool anyTransparent_ = false;
 };
 
 } // namespace Halcyon::Renderer::Scene::Ecs

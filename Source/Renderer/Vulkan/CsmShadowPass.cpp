@@ -273,7 +273,7 @@ void addCsmShadowPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                              std::uint32_t instanceCount;
                              std::uint32_t excludedFlags;
                              std::uint32_t materialFilter;
-                             std::uint32_t reserved;
+                             std::uint32_t requiredFlags;
                          } cullConstants{};
                          const glm::mat4& vp = cascadeMatrices[cascade];
                          const glm::vec4 rows[4] = {
@@ -297,6 +297,8 @@ void addCsmShadowPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                          cullConstants.excludedFlags = static_cast<std::uint32_t>(
                              Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent);
                          cullConstants.materialFilter = std::numeric_limits<std::uint32_t>::max();
+                         cullConstants.requiredFlags = static_cast<std::uint32_t>(
+                             Halcyon::Renderer::Scene::Ecs::RenderableFlags::CastShadow);
                          vkCmdPushConstants(frame.commandBuffer, pipelines.frustumCullPipeline.layout(),
                              VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cullConstants), &cullConstants);
                          vkCmdDispatch(frame.commandBuffer, (cullConstants.instanceCount + 63u) / 64u, 1, 1);

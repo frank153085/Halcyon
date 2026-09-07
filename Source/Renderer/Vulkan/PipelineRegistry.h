@@ -32,6 +32,7 @@ public:
     VulkanPipeline frustumCullPipeline;
     VulkanPipeline indirectBuildPipeline;
     VulkanPipeline gpuDrivenGbufferPipeline;
+    VulkanPipeline gpuDrivenGbufferDoubleSidedPipeline;
     VulkanPipeline gpuDrivenCsmPipeline;
     VulkanPipeline hizBuildPipeline;
     VulkanPipeline occlusionPhase1Pipeline;

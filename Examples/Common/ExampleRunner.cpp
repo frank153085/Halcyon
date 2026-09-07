@@ -127,6 +127,7 @@ int run(const ExampleDefinition& definition, int argc, char** argv)
     config.engine.scene = definition.scene;
     config.engine.enableGpuDrivenScene = definition.enableGpuDrivenScene;
     config.engine.enableTwoPhaseOcclusion = definition.enableTwoPhaseOcclusion;
+    config.engine.enableTransparency = definition.enableTransparency;
 #ifdef HALCYON_ASSET_ROOT
     if (config.engine.scene.assetRoot.empty())
     {

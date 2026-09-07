@@ -25,14 +25,10 @@ Halcyon::Result<void> recordGpuDrivenCulling(FramePassContext& ctx)
     VkDevice device = ctx.device;
     VkDescriptorPool frameDescriptorPool = ctx.descriptorPool;
     constexpr std::uint32_t csmResolution = VulkanFrameResources::CsmResolution;
-    std::uint32_t gpuUnsupportedFlags =
+    constexpr std::uint32_t gpuUnsupportedFlags =
         static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
+        static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided) |
         Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
-    if (!ctx.gpuDrivenBindless)
-    {
-        gpuUnsupportedFlags |=
-            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided);
-    }
     auto& frame = *ctx.frame;
     const auto& packet = *ctx.packet;
     const auto& config = *ctx.config;
@@ -258,7 +254,7 @@ Halcyon::Result<void> recordGpuDrivenCulling(FramePassContext& ctx)
         std::uint32_t instanceCount;
         std::uint32_t excludedFlags;
         std::uint32_t materialFilter;
-        std::uint32_t reserved;
+        std::uint32_t requiredFlags;
     } constants{};
     const glm::mat4& vp = packet.camera.viewProjection;
     const glm::vec4 rows[4] = {
@@ -282,6 +278,7 @@ Halcyon::Result<void> recordGpuDrivenCulling(FramePassContext& ctx)
     constants.excludedFlags = gpuUnsupportedFlags;
     constants.materialFilter = gpuDrivenBindless
         ? std::numeric_limits<std::uint32_t>::max() : gpuMaterialId;
+    constants.requiredFlags = 0;
     vkCmdPushConstants(frame.commandBuffer, frustumCullPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
         0, sizeof(constants), &constants);
     vkCmdDispatch(frame.commandBuffer, (constants.instanceCount + 63u) / 64u, 1, 1);
