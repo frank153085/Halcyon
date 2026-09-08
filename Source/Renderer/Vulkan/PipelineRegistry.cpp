@@ -24,6 +24,9 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     occlusionPhase2Pipeline.destroy();
     meshletCullPipeline.destroy();
     meshletIndirectPipeline.destroy();
+    visibilityPipeline.destroy();
+    materialClassifyPipeline.destroy();
+    computeShadingPipeline.destroy();
     if (device != VK_NULL_HANDLE)
     {
         if (gpuSceneDescriptorPool != VK_NULL_HANDLE)
@@ -60,6 +63,9 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
         }
         if (meshletCullLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletCullLayout, nullptr);
         if (meshletIndirectLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletIndirectLayout, nullptr);
+        if (visibilityLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, visibilityLayout, nullptr);
+        if (materialClassifyLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, materialClassifyLayout, nullptr);
+        if (computeShadingLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, computeShadingLayout, nullptr);
     }
     gpuSceneDescriptorPool = VK_NULL_HANDLE;
     gpuSceneCullLayout = VK_NULL_HANDLE;
@@ -71,6 +77,9 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     occlusionPhase2Layout = VK_NULL_HANDLE;
     meshletCullLayout = VK_NULL_HANDLE;
     meshletIndirectLayout = VK_NULL_HANDLE;
+    visibilityLayout = VK_NULL_HANDLE;
+    materialClassifyLayout = VK_NULL_HANDLE;
+    computeShadingLayout = VK_NULL_HANDLE;
 }
 
 void PipelineRegistry::destroyFrameLayouts(VkDevice device) noexcept

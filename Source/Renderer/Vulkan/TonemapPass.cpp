@@ -159,7 +159,8 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
     const auto setError = [&](std::string message) { ctx.setError(std::move(message)); };
 
     auto& historyWrite = taaHistoryFlip ? historyA : historyB;
-    const auto tonemapInput = historyWrite;
+    const auto tonemapInput = config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed
+        ? ctx.hdr : historyWrite;
     graph.addPass<Graph::FrameGraph::Empty>("ACES tonemap",
         [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
         {
@@ -176,6 +177,14 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
         [passCtx, tonemapInput](const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
             HALCYON_BIND_PASS_EXECUTE(passCtx);
+            if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+            {
+                const VkImage inputImage = frameGraphProvider.image(resources.getTexture(tonemapInput).native);
+                transitionImage(inputImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            }
             VkRenderingAttachmentInfo color{};
             color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             color.imageView = importedTarget.view;

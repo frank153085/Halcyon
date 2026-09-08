@@ -38,10 +38,10 @@ int main(int argc, char** argv)
             instanceCount = static_cast<std::size_t>(std::strtoull(argument.c_str() + 17, nullptr, 10));
         }
     }
-    if (scene != "sponza" && scene != "damaged-helmet" && scene != "stress")
+    if (scene != "sponza" && scene != "damaged-helmet" && scene != "stress" && scene != "lucy")
     {
         std::fprintf(stderr,
-            "Unsupported scene '%s'. Expected 'damaged-helmet', 'sponza', or 'stress'.\n",
+            "Unsupported scene '%s'. Expected 'damaged-helmet', 'sponza', 'stress', or 'lucy'.\n",
             scene.c_str());
         std::fprintf(stderr, "Press Enter to exit...\n");
         (void)std::getchar();
@@ -54,7 +54,9 @@ int main(int argc, char** argv)
     const std::filesystem::path root = HALCYON_ASSET_ROOT;
     const std::filesystem::path helmet = "models/damaged_helmet/DamagedHelmet.glb";
     const std::filesystem::path sponza = "models/sponza/Sponza.gltf";
-    const std::filesystem::path selected = scene == "sponza" ? sponza : helmet;
+    const std::filesystem::path lucy = "models/lucy/lucy.ply";
+    const std::filesystem::path selected = scene == "sponza" ? sponza :
+        scene == "lucy" ? lucy : helmet;
     if (scene != "stress" && !std::filesystem::exists(root / selected))
     {
         std::fprintf(stderr,
@@ -90,7 +92,7 @@ int main(int argc, char** argv)
         Halcyon::Perspective perspective{};
         perspective.verticalFovRadians = glm::radians(*state == "sponza" ? 52.0f : 55.0f);
         perspective.nearPlane = 0.05f;
-        perspective.farPlane = *state == "sponza" ? 300.0f : 100.0f;
+        perspective.farPlane = *state == "sponza" ? 300.0f : *state == "lucy" ? 1000.0f : 100.0f;
         auto result = engine.defaultView().setPerspective(perspective);
         if (!result)
         {
@@ -103,7 +105,9 @@ int main(int argc, char** argv)
         }
         result = *state == "sponza"
                      ? engine.defaultView().lookAt({-9.5f, 1.8f, 0.0f}, {6.0f, 2.4f, 0.0f})
-                     : engine.defaultView().lookAt({0.0f, 0.1f, 2.6f}, {0.0f, 0.0f, 0.0f});
+                     : *state == "lucy"
+                         ? engine.defaultView().lookAt({0.0f, 0.0f, 4.0f}, {0.0f, 0.0f, 0.0f})
+                         : engine.defaultView().lookAt({0.0f, 0.1f, 2.6f}, {0.0f, 0.0f, 0.0f});
         if (!result)
         {
             return result;
@@ -162,6 +166,20 @@ int main(int argc, char** argv)
     {
         if (*state == "sponza")
         {
+            return Halcyon::Result<void>::success();
+        }
+        if (*state == "lucy")
+        {
+            const Halcyon::SceneInstanceHandle instance = engine.sceneManager().findInstance("main");
+            const Halcyon::Entity model = engine.sceneManager().rootEntity(instance);
+            auto* transform = engine.scene().transforms().get(model);
+            if (transform == nullptr)
+                return Halcyon::Result<void>::failure(Halcyon::MakeError(
+                    Halcyon::ErrorCode::InvalidState, "Lucy transform is unavailable", "Example"));
+            const glm::vec3 center{690.7556f, -121.5314f, 192.6266f};
+            transform->localTransform = glm::scale(glm::mat4{1.0f}, glm::vec3{0.0015f}) *
+                glm::translate(glm::mat4{1.0f}, -center);
+            transform->dirty = true;
             return Halcyon::Result<void>::success();
         }
         if (*state == "stress")

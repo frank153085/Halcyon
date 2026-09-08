@@ -218,6 +218,7 @@ void printUsage() noexcept
                 "  --gpu-driven              enable GPU scene/culling/indirect draws\n"
                 "  --no-gpu-driven           disable GPU-driven rendering (CPU baseline)\n"
                 "  --two-phase-occlusion    enable previous/current Hi-Z re-test\n"
+                "  --virtual-geometry       use the M5 visibility/compute-shading path\n"
                 "  --no-validation  disable Vulkan validation layers\n"
                 "  --validation     enable Vulkan validation layers\n"
                 "  --log            enable console and file logging (or set HALCYON_LOG=1)\n"
@@ -386,6 +387,12 @@ void printUsage() noexcept
         {
             config.engine.enableGpuDrivenScene = true;
             config.engine.enableTwoPhaseOcclusion = true;
+            continue;
+        }
+        if (argument == "--virtual-geometry" || argument == "--render-path=virtual")
+        {
+            config.engine.renderPath = RenderPathMode::VirtualGeometryIndexed;
+            config.engine.enableGpuDrivenScene = true;
             continue;
         }
         if (argument == "--log")

@@ -12,6 +12,9 @@ struct DrawIndexedCommand { uint indexCount; uint instanceCount; uint firstIndex
     command.instanceCount = 1;
     command.firstIndex = m.indexOffset;
     command.vertexOffset = 0;
-    command.firstInstance = m.primitiveIndex;
+    // firstInstance carries the meshlet index into the visibility vertex
+    // shader.  The primitive/material relationship is resolved there from
+    // the meshlet metadata and the fixed M5 material table.
+    command.firstInstance = visibleMeshlets[id.x];
     commands[id.x] = command;
 }

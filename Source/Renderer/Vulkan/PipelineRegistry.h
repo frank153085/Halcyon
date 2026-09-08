@@ -39,6 +39,9 @@ public:
     VulkanPipeline occlusionPhase2Pipeline;
     VulkanPipeline meshletCullPipeline;
     VulkanPipeline meshletIndirectPipeline;
+    VulkanPipeline visibilityPipeline;
+    VulkanPipeline materialClassifyPipeline;
+    VulkanPipeline computeShadingPipeline;
 
     VkDescriptorSetLayout gpuSceneCullLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout gpuSceneIndirectLayout = VK_NULL_HANDLE;
@@ -49,6 +52,9 @@ public:
     VkDescriptorSetLayout occlusionPhase2Layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout meshletCullLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout meshletIndirectLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout visibilityLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout materialClassifyLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout computeShadingLayout = VK_NULL_HANDLE;
     VkDescriptorPool gpuSceneDescriptorPool = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout materialLayout = VK_NULL_HANDLE;

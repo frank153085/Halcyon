@@ -311,6 +311,9 @@ struct Renderer::Impl
     VulkanPipeline& occlusionPhase2Pipeline = pipelines.occlusionPhase2Pipeline;
     VulkanPipeline& meshletCullPipeline = pipelines.meshletCullPipeline;
     VulkanPipeline& meshletIndirectPipeline = pipelines.meshletIndirectPipeline;
+    VulkanPipeline& visibilityPipeline = pipelines.visibilityPipeline;
+    VulkanPipeline& materialClassifyPipeline = pipelines.materialClassifyPipeline;
+    VulkanPipeline& computeShadingPipeline = pipelines.computeShadingPipeline;
     VkDescriptorSetLayout& gpuSceneCullLayout = pipelines.gpuSceneCullLayout;
     VkDescriptorSetLayout& gpuSceneIndirectLayout = pipelines.gpuSceneIndirectLayout;
     VkDescriptorSetLayout& gpuSceneGraphicsLayout = pipelines.gpuSceneGraphicsLayout;
@@ -320,6 +323,9 @@ struct Renderer::Impl
     VkDescriptorSetLayout& occlusionPhase2Layout = pipelines.occlusionPhase2Layout;
     VkDescriptorSetLayout& meshletCullLayout = pipelines.meshletCullLayout;
     VkDescriptorSetLayout& meshletIndirectLayout = pipelines.meshletIndirectLayout;
+    VkDescriptorSetLayout& visibilityLayout = pipelines.visibilityLayout;
+    VkDescriptorSetLayout& materialClassifyLayout = pipelines.materialClassifyLayout;
+    VkDescriptorSetLayout& computeShadingLayout = pipelines.computeShadingLayout;
     VkDescriptorPool& gpuSceneDescriptorPool = pipelines.gpuSceneDescriptorPool;
     VkDescriptorSetLayout& materialLayout = pipelines.materialLayout;
     VkDescriptorSetLayout& lightingLayout = pipelines.lightingLayout;
@@ -712,7 +718,7 @@ struct Renderer::Impl
         const auto gbufferDoubleResult = gbufferDoubleSidedPipeline.createGraphics(device, gbufferDoubleDesc);
         if (!gbufferDoubleResult) return gbufferDoubleResult;
 
-        const std::array<VkFormat, 1> hdrFormat = {VK_FORMAT_R16G16B16A16_SFLOAT};
+        const std::array<VkFormat, 1> hdrFormat = {VK_FORMAT_R32G32B32A32_SFLOAT};
         GraphicsPipelineDesc deferredDesc{};
         deferredDesc.colorFormats = hdrFormat;
         deferredDesc.depthFormat = VK_FORMAT_UNDEFINED;
@@ -1080,7 +1086,66 @@ struct Renderer::Impl
         meshletIndirectDesc.descriptorBindings = meshletIndirectAbi;
         const std::array<VkPushConstantRange, 1> meshletIndirectPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16}}};
         meshletIndirectDesc.pushConstants = meshletIndirectPush;
-        return meshletIndirectPipeline.createCompute(device, meshletIndirectDesc);
+        result = meshletIndirectPipeline.createCompute(device, meshletIndirectDesc);
+        if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> visibilityBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}};
+        result = makeLayout(visibilityBindings, visibilityLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 4> visibilityAbi = {
+            DescriptorBindingDesc{0, visibilityBindings[0]}, DescriptorBindingDesc{0, visibilityBindings[1]},
+            DescriptorBindingDesc{0, visibilityBindings[2]}, DescriptorBindingDesc{0, visibilityBindings[3]}};
+        GraphicsPipelineDesc visibilityDesc{};
+        const std::array<VkFormat, 1> visibilityFormats = {VK_FORMAT_R32_UINT};
+        visibilityDesc.colorFormats = visibilityFormats;
+        visibilityDesc.depthFormat = depthFormat;
+        visibilityDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&visibilityLayout, 1};
+        visibilityDesc.descriptorBindings = visibilityAbi;
+        visibilityDesc.vertexShader = "visibility.vert.spv";
+        visibilityDesc.fragmentShader = "visibility.frag.spv";
+        visibilityDesc.cullMode = VK_CULL_MODE_NONE;
+        visibilityDesc.depthCompare = VK_COMPARE_OP_ALWAYS;
+        const std::array<VkPushConstantRange, 1> visibilityPush = {{
+            {VK_SHADER_STAGE_VERTEX_BIT, 0, 208}}};
+        visibilityDesc.pushConstants = visibilityPush;
+        result = visibilityPipeline.createGraphics(device, visibilityDesc);
+        if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 2> classifyBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        result = makeLayout(classifyBindings, materialClassifyLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 2> classifyAbi = {
+            DescriptorBindingDesc{0, classifyBindings[0]}, DescriptorBindingDesc{0, classifyBindings[1]}};
+        ComputePipelineDesc classifyDesc{};
+        classifyDesc.shader = "material_classify.comp.spv";
+        classifyDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&materialClassifyLayout, 1};
+        classifyDesc.descriptorBindings = classifyAbi;
+        const std::array<VkPushConstantRange, 1> classifyPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16}}};
+        classifyDesc.pushConstants = classifyPush;
+        result = materialClassifyPipeline.createCompute(device, classifyDesc);
+        if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 3> shadingBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        result = makeLayout(shadingBindings, computeShadingLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 3> shadingAbi = {
+            DescriptorBindingDesc{0, shadingBindings[0]}, DescriptorBindingDesc{0, shadingBindings[1]},
+            DescriptorBindingDesc{0, shadingBindings[2]}};
+        ComputePipelineDesc shadingDesc{};
+        shadingDesc.shader = "compute_shading.comp.spv";
+        shadingDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&computeShadingLayout, 1};
+        shadingDesc.descriptorBindings = shadingAbi;
+        shadingDesc.pushConstants = classifyPush;
+        return computeShadingPipeline.createCompute(device, shadingDesc);
     }
 
     [[nodiscard]] VoidResult createFrameDescriptors()
@@ -2122,14 +2187,22 @@ VoidResult Renderer::Impl::recordFrame(
     swapchainBeginDependency.pImageMemoryBarriers = &swapchainBeginBarrier;
     vkCmdPipelineBarrier2(frame.commandBuffer, &swapchainBeginDependency);
 
-    addCsmShadowPasses(graph, ctx);
+    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        addCsmShadowPasses(graph, ctx);
     addVirtualGeometryPasses(graph, ctx);
-    addGBufferPass(graph, ctx);
-    addHiZOcclusionPass(graph, ctx);
-    addClusterBuildPass(graph, ctx);
-    addDeferredLightingPass(graph, ctx);
-    addTransparencyPass(graph, ctx);
-    addTaaResolvePass(graph, ctx);
+    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        addGBufferPass(graph, ctx);
+    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    {
+        addHiZOcclusionPass(graph, ctx);
+        addClusterBuildPass(graph, ctx);
+    }
+    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        addDeferredLightingPass(graph, ctx);
+    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        addTransparencyPass(graph, ctx);
+    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        addTaaResolvePass(graph, ctx);
     addTonemapPass(graph, ctx);
     addPresentPass(graph, ctx);
 

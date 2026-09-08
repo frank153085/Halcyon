@@ -69,7 +69,7 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     result.hiz = graph.createTexture({"HiZ", hizWidth, hizHeight, 1, hizMips, 1,
         Graph::TextureFormat::R32Float, false});
     result.hdr = graph.createTexture({"HDR", extent_.width, extent_.height, 1, 1, 1,
-        Graph::TextureFormat::RGBA16Float, true});
+        Graph::TextureFormat::RGBA32Float, true});
     result.historyA = graph.createTexture({"TAAHistoryA", extent_.width, extent_.height, 1, 1, 1,
         Graph::TextureFormat::RGBA16Float, false});
     result.historyB = graph.createTexture({"TAAHistoryB", extent_.width, extent_.height, 1, 1, 1,

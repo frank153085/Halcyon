@@ -179,9 +179,12 @@ void addTaaResolvePass(Graph::FrameGraph& graph, FramePassContext& ctx)
             HALCYON_BIND_PASS_EXECUTE(passCtx);
             auto& historyWrite = taaHistoryFlip ? historyA : historyB;
             const bool frameHistoryFlip = taaHistoryFlip;
+            const bool virtualHdr = config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
             transitionImage(frameGraphProvider.image(resources.getTexture(taaHdr).native),
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                virtualHdr ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                virtualHdr ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                virtualHdr ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             transitionImage(frameGraphProvider.image(resources.getTexture(taaMotion).native),
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

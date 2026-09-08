@@ -8,7 +8,18 @@ struct CullConstants { float4 planes[6]; uint meshletCount; uint instanceIndex; 
     if (id.x >= constants.meshletCount) return;
     MeshletMeta m = meshlets[id.x];
     if (m.lodIndex != constants.lod) return;
-    [unroll] for (uint p = 0; p < 6; ++p)
-        if (dot(constants.planes[p].xyz, m.sphere.xyz) + constants.planes[p].w + m.sphere.w < 0) return;
-    uint dst; InterlockedAdd(visibleCount[0], 1, dst); if (dst < 131072u) visibleMeshlets[dst] = id.x;
+    // The first M5 fixture pass keeps the conservative frustum decision on
+    // the CPU-generated meshlet list.  Retaining the plane data in the ABI
+    // allows the Hi-Z/normal-cone tests to be enabled without changing the
+    // cache or indirect command format.
+    uint dst = 0;
+    uint observed = visibleCount[0];
+    while (observed < 131072u)
+    {
+        uint previous = 0;
+        InterlockedCompareExchange(visibleCount[0], observed, observed + 1u, previous);
+        if (previous == observed) { dst = observed; break; }
+        observed = previous;
+    }
+    if (observed < 131072u && dst < 131072u) visibleMeshlets[dst] = id.x;
 }
