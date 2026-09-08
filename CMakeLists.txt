@@ -204,6 +204,8 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Vulkan/TonemapPass.cpp
     Source/Renderer/Vulkan/PresentPass.cpp
     Source/Renderer/Vulkan/VisibilityReadbackPass.cpp
+    Source/Renderer/Vulkan/VirtualGeometryPass.cpp
+    Source/Renderer/Vulkan/VirtualGeometryPass.h
     Source/Renderer/Vulkan/GpuUploader.h
     Source/Renderer/Vulkan/GpuResourceManager.cpp
     Source/Renderer/Vulkan/StbImage.cpp

@@ -18,6 +18,7 @@
 #include "VulkanFrameResources.h"
 #include "VulkanPipeline.h"
 #include "VulkanSceneResources.h"
+#include "VirtualGeometryPass.h"
 #include "VulkanSwapchain.h"
 #include "../Graph/FrameGraph.h"
 #include "../Graph/BarrierPlanner.h"
@@ -308,6 +309,8 @@ struct Renderer::Impl
     VulkanPipeline& hizBuildPipeline = pipelines.hizBuildPipeline;
     VulkanPipeline& occlusionPhase1Pipeline = pipelines.occlusionPhase1Pipeline;
     VulkanPipeline& occlusionPhase2Pipeline = pipelines.occlusionPhase2Pipeline;
+    VulkanPipeline& meshletCullPipeline = pipelines.meshletCullPipeline;
+    VulkanPipeline& meshletIndirectPipeline = pipelines.meshletIndirectPipeline;
     VkDescriptorSetLayout& gpuSceneCullLayout = pipelines.gpuSceneCullLayout;
     VkDescriptorSetLayout& gpuSceneIndirectLayout = pipelines.gpuSceneIndirectLayout;
     VkDescriptorSetLayout& gpuSceneGraphicsLayout = pipelines.gpuSceneGraphicsLayout;
@@ -315,6 +318,8 @@ struct Renderer::Impl
     VkDescriptorSetLayout& hizLayout = pipelines.hizLayout;
     VkDescriptorSetLayout& occlusionPhase1Layout = pipelines.occlusionPhase1Layout;
     VkDescriptorSetLayout& occlusionPhase2Layout = pipelines.occlusionPhase2Layout;
+    VkDescriptorSetLayout& meshletCullLayout = pipelines.meshletCullLayout;
+    VkDescriptorSetLayout& meshletIndirectLayout = pipelines.meshletIndirectLayout;
     VkDescriptorPool& gpuSceneDescriptorPool = pipelines.gpuSceneDescriptorPool;
     VkDescriptorSetLayout& materialLayout = pipelines.materialLayout;
     VkDescriptorSetLayout& lightingLayout = pipelines.lightingLayout;
@@ -1038,7 +1043,44 @@ struct Renderer::Impl
         phase2Desc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&occlusionPhase2Layout, 1};
         phase2Desc.descriptorBindings = phase2Abi;
         phase2Desc.pushConstants = occlusionPush;
-        return occlusionPhase2Pipeline.createCompute(device, phase2Desc);
+        result = occlusionPhase2Pipeline.createCompute(device, phase2Desc);
+        if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 3> meshletCullBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        result = makeLayout(meshletCullBindings, meshletCullLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 3> meshletCullAbi = {
+            DescriptorBindingDesc{0, meshletCullBindings[0]}, DescriptorBindingDesc{0, meshletCullBindings[1]},
+            DescriptorBindingDesc{0, meshletCullBindings[2]}};
+        ComputePipelineDesc meshletCullDesc{};
+        meshletCullDesc.shader = "meshlet_cull.comp.spv";
+        meshletCullDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&meshletCullLayout, 1};
+        meshletCullDesc.descriptorBindings = meshletCullAbi;
+        const std::array<VkPushConstantRange, 1> meshletCullPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 112}}};
+        meshletCullDesc.pushConstants = meshletCullPush;
+        result = meshletCullPipeline.createCompute(device, meshletCullDesc);
+        if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> meshletIndirectBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        result = makeLayout(meshletIndirectBindings, meshletIndirectLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 4> meshletIndirectAbi = {
+            DescriptorBindingDesc{0, meshletIndirectBindings[0]}, DescriptorBindingDesc{0, meshletIndirectBindings[1]},
+            DescriptorBindingDesc{0, meshletIndirectBindings[2]}, DescriptorBindingDesc{0, meshletIndirectBindings[3]}};
+        ComputePipelineDesc meshletIndirectDesc{};
+        meshletIndirectDesc.shader = "meshlet_build_indirect.comp.spv";
+        meshletIndirectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&meshletIndirectLayout, 1};
+        meshletIndirectDesc.descriptorBindings = meshletIndirectAbi;
+        const std::array<VkPushConstantRange, 1> meshletIndirectPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16}}};
+        meshletIndirectDesc.pushConstants = meshletIndirectPush;
+        return meshletIndirectPipeline.createCompute(device, meshletIndirectDesc);
     }
 
     [[nodiscard]] VoidResult createFrameDescriptors()
@@ -2032,6 +2074,11 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.irradiance = m3.irradiance;
     ctx.prefiltered = m3.prefiltered;
     ctx.brdfLut = m3.brdfLut;
+    ctx.visibility = m3.visibility;
+    ctx.materialClassification = m3.materialClassification;
+    ctx.visibleMeshlets = m3.visibleMeshlets;
+    ctx.visibleMeshletCount = m3.visibleMeshletCount;
+    ctx.meshletIndirect = m3.meshletIndirect;
     // M5 visibility resources remain declared for ABI stability; unsupported
     // devices continue through the established deferred/GPU-driven passes.
     ctx.clusterRanges = m3.clusterRanges;
@@ -2076,6 +2123,7 @@ VoidResult Renderer::Impl::recordFrame(
     vkCmdPipelineBarrier2(frame.commandBuffer, &swapchainBeginDependency);
 
     addCsmShadowPasses(graph, ctx);
+    addVirtualGeometryPasses(graph, ctx);
     addGBufferPass(graph, ctx);
     addHiZOcclusionPass(graph, ctx);
     addClusterBuildPass(graph, ctx);
@@ -2251,7 +2299,7 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
         // driving for VirtualGeometryIndexed; this only changes the effective
         // renderer mode after capabilities are known.
         if (impl_->config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
-            !impl_->caps.descriptorIndexing)
+            (!impl_->caps.descriptorIndexing || !impl_->caps.indirectCount))
         {
             impl_->config.renderPath = Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed;
         }

@@ -85,6 +85,7 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     result.materialClassification = graph.createBuffer({"MaterialClassification",
         std::max<std::size_t>(1, static_cast<std::size_t>(extent_.width) * extent_.height) * 4u, 4u, true});
     result.visibleMeshlets = graph.createBuffer({"VisibleMeshlets", 131072u * 4u, 4u, true});
+    result.visibleMeshletCount = graph.createBuffer({"VisibleMeshletCount", 4u, 4u, true});
     result.meshletIndirect = graph.createBuffer({"MeshletIndirect", 131072u * 20u, 20u, true});
 
     result.clusterCount = clusterCount();

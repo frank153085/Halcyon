@@ -96,6 +96,11 @@ struct FramePassContext
     Graph::TextureHandle irradiance{};
     Graph::TextureHandle prefiltered{};
     Graph::TextureHandle brdfLut{};
+    Graph::TextureHandle visibility{};
+    Graph::BufferHandle materialClassification{};
+    Graph::BufferHandle visibleMeshlets{};
+    Graph::BufferHandle visibleMeshletCount{};
+    Graph::BufferHandle meshletIndirect{};
     Graph::BufferHandle clusterRanges{};
     Graph::BufferHandle clusterIndices{};
     Graph::BufferHandle clusterOverflow{};

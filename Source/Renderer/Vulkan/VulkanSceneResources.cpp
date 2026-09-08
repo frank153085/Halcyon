@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <limits>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -146,6 +148,76 @@ Halcyon::Result<BufferAllocation> VulkanSceneResources::createMaterialBuffer(
     return allocation;
 }
 
+Halcyon::Result<VulkanSceneResources::VirtualGeometryGpuBuffers>
+VulkanSceneResources::uploadVirtualGeometry(
+    const Halcyon::Renderer::Scene::VirtualGeometryAsset& asset)
+{
+    if (allocator_ == nullptr || uploader_ == nullptr)
+        return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+            {Halcyon::ErrorCode::InvalidState, "virtual geometry uploader is unavailable"});
+    VirtualGeometryGpuBuffers result{};
+    const auto createAndUpload = [&](const void* data, std::size_t size,
+        VkBufferUsageFlags usage, BufferAllocation& destination) -> Halcyon::Result<void>
+    {
+        if (size == 0) return Halcyon::Result<void>::success();
+        VkBufferCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = size; info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        const auto allocation = allocator_->createBuffer(info, MemoryUsage::GpuOnly);
+        if (!allocation) return Halcyon::Result<void>::failure(allocation.error());
+        const auto upload = uploader_->uploadBuffer(device_, uploadCommandPool_, graphicsQueue_,
+            *allocator_, allocation.value(), std::span<const std::byte>{
+                static_cast<const std::byte*>(data), size});
+        if (!upload) { allocator_->destroy(allocation.value()); return upload; }
+        destination = allocation.value(); return Halcyon::Result<void>::success();
+    };
+    const auto fail = [&](Halcyon::Result<void> error) {
+        destroyVirtualGeometry(result); return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(error.error());
+    };
+    std::vector<VirtualGeometryGpuMeshlet> gpuMeshlets;
+    try
+    {
+        gpuMeshlets.reserve(asset.meshlets.size());
+        for (const auto& source : asset.meshlets)
+        {
+            VirtualGeometryGpuMeshlet destination{};
+            destination.vertexOffset = source.vertexOffset;
+            destination.vertexCount = source.vertexCount;
+            destination.triangleOffset = source.triangleOffset;
+            destination.triangleCount = source.triangleCount;
+            destination.indexOffset = source.indexOffset;
+            destination.indexCount = source.indexCount;
+            destination.primitiveIndex = source.primitiveIndex;
+            destination.lodIndex = source.lodIndex;
+            destination.sphere = source.sphere;
+            destination.cone = source.cone;
+            destination.geometricError = source.geometricError;
+            gpuMeshlets.push_back(destination);
+        }
+    }
+    catch (...)
+    {
+        return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+            {Halcyon::ErrorCode::OutOfMemory, "failed to pack virtual geometry meshlets"});
+    }
+    auto upload = createAndUpload(asset.vertices.data(), asset.vertices.size() * sizeof(asset.vertices[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, result.vertices); if (!upload) return fail(std::move(upload));
+    upload = createAndUpload(asset.indices.data(), asset.indices.size() * sizeof(asset.indices[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, result.indices); if (!upload) return fail(std::move(upload));
+    upload = createAndUpload(asset.meshletVertices.data(), asset.meshletVertices.size() * sizeof(asset.meshletVertices[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshletVertices); if (!upload) return fail(std::move(upload));
+    upload = createAndUpload(asset.meshletTriangles.data(), asset.meshletTriangles.size() * sizeof(asset.meshletTriangles[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshletTriangles); if (!upload) return fail(std::move(upload));
+    upload = createAndUpload(gpuMeshlets.data(), gpuMeshlets.size() * sizeof(gpuMeshlets[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshlets); if (!upload) return fail(std::move(upload));
+    upload = createAndUpload(asset.lods.data(), asset.lods.size() * sizeof(asset.lods[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.lods); if (!upload) return fail(std::move(upload));
+    return Halcyon::Result<VirtualGeometryGpuBuffers>::success(std::move(result));
+}
+
+void VulkanSceneResources::destroyVirtualGeometry(VirtualGeometryGpuBuffers& buffers) noexcept
+{
+    if (allocator_ == nullptr) return;
+    allocator_->destroy(buffers.vertices); allocator_->destroy(buffers.indices);
+    allocator_->destroy(buffers.meshletVertices); allocator_->destroy(buffers.meshletTriangles);
+    allocator_->destroy(buffers.meshlets); allocator_->destroy(buffers.lods);
+    buffers = {};
+}
+
 const TextureResource* VulkanSceneResources::texture(std::uint32_t index) const noexcept
 {
     const auto key = textureKeys_.find(index);
@@ -240,6 +312,12 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                 meshes_.erase(found);
             }
             virtualGeometryByMesh_.erase(mesh);
+            const auto virtualGpu = virtualGeometryGpuByMesh_.find(mesh);
+            if (virtualGpu != virtualGeometryGpuByMesh_.end())
+            {
+                destroyVirtualGeometry(virtualGpu->second);
+                virtualGeometryGpuByMesh_.erase(virtualGpu);
+            }
             const auto dense = meshDenseByStable_.find(mesh);
             if (dense != meshDenseByStable_.end())
             {
@@ -337,9 +415,14 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
         try
         {
             meshes_.emplace(handle.index(), uploaded.value());
-            if (source->virtualGeometry)
-                virtualGeometryByMesh_.emplace(handle.index(), source->virtualGeometry);
             uploadedMeshes.push_back(handle.index());
+            if (source->virtualGeometry)
+            {
+                const auto virtualGpu = uploadVirtualGeometry(*source->virtualGeometry);
+                if (!virtualGpu) { rollback(); return Halcyon::Result<void>::failure(virtualGpu.error()); }
+                virtualGeometryByMesh_.emplace(handle.index(), source->virtualGeometry);
+                virtualGeometryGpuByMesh_.emplace(handle.index(), std::move(virtualGpu).value());
+            }
             const std::uint32_t dense = freeMeshDense_.empty()
                 ? static_cast<std::uint32_t>(denseMeshStable_.size())
                 : freeMeshDense_.back();
@@ -353,8 +436,6 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
         }
         catch (...)
         {
-            MeshResource resource = uploaded.value();
-            resourceManager_.destroy(resource);
             rollback();
             return resourceError(
                 Halcyon::ErrorCode::OutOfMemory, "failed to index uploaded scene mesh");
@@ -872,11 +953,18 @@ void VulkanSceneResources::cleanup() noexcept
         allocator_->destroy(gpuDrivenVertices_);
         allocator_->destroy(gpuDrivenIndices_);
         allocator_->destroy(meshDraws_);
+        for (auto& [index, buffers] : virtualGeometryGpuByMesh_)
+        {
+            (void)index;
+            destroyVirtualGeometry(buffers);
+        }
     }
     gpuDrivenVertices_ = {};
     gpuDrivenIndices_ = {};
     meshDraws_ = {};
     meshDrawRows_.clear();
+    virtualGeometryGpuByMesh_.clear();
+    virtualGeometryByMesh_.clear();
     for (auto& [index, meshResource] : meshes_)
     {
         (void)index;

@@ -27,6 +27,8 @@ struct VirtualGeometryMeshlet
     glm::vec4 cone{0.0f};
     float geometricError = 0.0f;
 };
+static_assert(sizeof(VirtualGeometryMeshlet) == 68,
+    "VirtualGeometryMeshlet is part of the cache serialization ABI");
 
 struct VirtualGeometryLod
 {

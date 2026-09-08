@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vulkan/vulkan.h>
 #include <vector>
+#include <glm/glm.hpp>
 
 namespace Halcyon::Vulkan
 {
@@ -76,6 +77,51 @@ public:
         const auto found = virtualGeometryByMesh_.find(meshIndex);
         return found == virtualGeometryByMesh_.end() ? nullptr : found->second.get();
     }
+    [[nodiscard]] const Halcyon::Renderer::Scene::VirtualGeometryAsset* virtualGeometryDense(
+        std::uint32_t denseIndex) const noexcept
+    {
+        if (denseIndex >= denseMeshStable_.size())
+            return nullptr;
+        return virtualGeometry(denseMeshStable_[denseIndex]);
+    }
+    struct VirtualGeometryGpuBuffers
+    {
+        BufferAllocation vertices{};
+        BufferAllocation indices{};
+        BufferAllocation meshletVertices{};
+        BufferAllocation meshletTriangles{};
+        BufferAllocation meshlets{};
+        BufferAllocation lods{};
+    };
+    struct alignas(16) VirtualGeometryGpuMeshlet
+    {
+        std::uint32_t vertexOffset = 0;
+        std::uint32_t vertexCount = 0;
+        std::uint32_t triangleOffset = 0;
+        std::uint32_t triangleCount = 0;
+        std::uint32_t indexOffset = 0;
+        std::uint32_t indexCount = 0;
+        std::uint32_t primitiveIndex = 0;
+        std::uint32_t lodIndex = 0;
+        glm::vec4 sphere{0.0f};
+        glm::vec4 cone{0.0f};
+        float geometricError = 0.0f;
+        std::array<float, 3> padding{};
+    };
+    static_assert(sizeof(VirtualGeometryGpuMeshlet) == 80);
+    [[nodiscard]] const VirtualGeometryGpuBuffers* virtualGeometryBuffers(
+        std::uint32_t meshIndex) const noexcept
+    {
+        const auto found = virtualGeometryGpuByMesh_.find(meshIndex);
+        return found == virtualGeometryGpuByMesh_.end() ? nullptr : &found->second;
+    }
+    [[nodiscard]] const VirtualGeometryGpuBuffers* virtualGeometryBuffersDense(
+        std::uint32_t denseIndex) const noexcept
+    {
+        if (denseIndex >= denseMeshStable_.size())
+            return nullptr;
+        return virtualGeometryBuffers(denseMeshStable_[denseIndex]);
+    }
     [[nodiscard]] Halcyon::Renderer::Scene::MaterialGpuData materialRow(
         std::uint32_t denseIndex) const noexcept;
     [[nodiscard]] const TextureResource* textureDense(
@@ -135,6 +181,9 @@ private:
         const Halcyon::Renderer::Scene::SceneMaterial& material);
     [[nodiscard]] Halcyon::Result<std::string> retainTexture(
         const Halcyon::Renderer::Scene::SceneTexture& texture);
+    [[nodiscard]] Halcyon::Result<VirtualGeometryGpuBuffers> uploadVirtualGeometry(
+        const Halcyon::Renderer::Scene::VirtualGeometryAsset& asset);
+    void destroyVirtualGeometry(VirtualGeometryGpuBuffers& buffers) noexcept;
     void releaseTexture(std::uint32_t index) noexcept;
     [[nodiscard]] const TextureResource* texture(std::uint32_t index) const noexcept;
     void destroyDescriptorPool() noexcept;
@@ -151,6 +200,7 @@ private:
     VkDescriptorPool textureDescriptorPool_ = VK_NULL_HANDLE;
     std::unordered_map<std::uint32_t, MeshResource> meshes_;
     std::unordered_map<std::uint32_t, std::shared_ptr<const Halcyon::Renderer::Scene::VirtualGeometryAsset>> virtualGeometryByMesh_;
+    std::unordered_map<std::uint32_t, VirtualGeometryGpuBuffers> virtualGeometryGpuByMesh_;
     BufferAllocation gpuDrivenVertices_{};
     BufferAllocation gpuDrivenIndices_{};
     BufferAllocation meshDraws_{};

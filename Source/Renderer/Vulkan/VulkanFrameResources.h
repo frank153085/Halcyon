@@ -40,6 +40,7 @@ public:
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> visibility;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> materialClassification;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshlets;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshletCount;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirect;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterRanges;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterIndices;

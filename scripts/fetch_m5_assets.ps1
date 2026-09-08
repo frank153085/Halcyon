@@ -5,7 +5,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$url = "https://graphics.stanford.edu/pub/3Dscanrep/lucy.tar.gz"
+# Stanford's repository serves the fixed 307 MB archive from /data. The
+# digest is pinned so a mirror or partial download cannot silently enter CI.
+$url = "https://graphics.stanford.edu/data/3Dscanrep/lucy.tar.gz"
+$PinnedSha256 = "c4beb1f7bfa965643bbbf889bd1849a4b4b955e95c731941be61e6edac65616a"
 $root = [System.IO.Path]::GetFullPath($Destination)
 $archive = Join-Path $root "lucy.tar.gz"
 $manifest = Join-Path $root "lucy.manifest.json"
@@ -17,8 +20,9 @@ if (-not (Test-Path $archive)) {
     Invoke-WebRequest -Uri $url -OutFile $archive
 }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
-if ($ExpectedSha256 -and $hash -ne $ExpectedSha256.ToLowerInvariant()) {
-    throw "Lucy SHA-256 mismatch: expected $ExpectedSha256, got $hash"
+$expected = if ($ExpectedSha256) { $ExpectedSha256.ToLowerInvariant() } else { $PinnedSha256 }
+if ($hash -ne $expected) {
+    throw "Lucy SHA-256 mismatch: expected $expected, got $hash"
 }
 if (Test-Path $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $extract | Out-Null

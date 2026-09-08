@@ -37,6 +37,8 @@ public:
     VulkanPipeline hizBuildPipeline;
     VulkanPipeline occlusionPhase1Pipeline;
     VulkanPipeline occlusionPhase2Pipeline;
+    VulkanPipeline meshletCullPipeline;
+    VulkanPipeline meshletIndirectPipeline;
 
     VkDescriptorSetLayout gpuSceneCullLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout gpuSceneIndirectLayout = VK_NULL_HANDLE;
@@ -45,6 +47,8 @@ public:
     VkDescriptorSetLayout hizLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout occlusionPhase1Layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout occlusionPhase2Layout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout meshletCullLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout meshletIndirectLayout = VK_NULL_HANDLE;
     VkDescriptorPool gpuSceneDescriptorPool = VK_NULL_HANDLE;
 
     VkDescriptorSetLayout materialLayout = VK_NULL_HANDLE;
