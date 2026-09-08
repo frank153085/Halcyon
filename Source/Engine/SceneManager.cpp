@@ -3,6 +3,8 @@
 #include "Core/HandlePool.h"
 #include "Renderer/Scene/Ecs/RenderExtractor.h"
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.h"
+#include "Renderer/Scene/Sha256.h"
+#include "Renderer/Scene/VirtualGeometryCache.h"
 
 #include <algorithm>
 #include <cctype>
@@ -197,12 +199,12 @@ Result<SceneAssetHandle> SceneManager::loadAsset(
         return Result<SceneAssetHandle>::failure(sceneManagerError(
             ErrorCode::NotFound, "scene asset does not exist: " + resolved.string()));
     }
-    if (!isSupportedScenePath(resolved))
+    if (!isSupportedScenePath(resolved) && resolved.extension() != ".ply" && resolved.extension() != ".PLY")
     {
         return Result<SceneAssetHandle>::failure(sceneManagerError(
             ErrorCode::Unsupported, "scene assets must use .gltf or .glb: " + resolved.string()));
     }
-    auto loaded = Renderer::Scene::loadStaticScene(resolved);
+    auto loaded = Renderer::Scene::loadGeometrySource(resolved);
     if (!loaded)
     {
         return Result<SceneAssetHandle>::failure(
@@ -241,6 +243,37 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             importedResult.error().withContext("SceneManager::createAsset " + name));
     }
     SceneImportResult imported = importedResult.value();
+    // PLY assets opt into the M5 sidecar when it is present and valid. A
+    // missing or stale cache is deliberately non-fatal: build it in memory so
+    // the existing renderer can still display the source mesh.
+    std::shared_ptr<const Renderer::Scene::VirtualGeometryAsset> virtualGeometry;
+    const std::filesystem::path sourcePath = sceneAsset.sourcePath;
+    const auto extension = sourcePath.extension().string();
+    if (extension == ".ply" || extension == ".PLY")
+    {
+        const auto sourceHash = Renderer::Scene::sha256File(sourcePath);
+        if (sourceHash)
+        {
+            const auto sidecar = sourcePath.string() + ".halcyon.vgcache";
+            auto cached = Renderer::Scene::readVirtualGeometryCache(sidecar, &sourceHash.value());
+            if (!cached)
+            {
+                const auto rebuilt = Renderer::Scene::buildVirtualGeometry(sceneAsset);
+                if (rebuilt)
+                {
+                    (void)Renderer::Scene::writeVirtualGeometryCache(sidecar, rebuilt.value(),
+                        sourceHash.value());
+                    cached = std::move(rebuilt);
+                }
+            }
+            if (cached) virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(std::move(cached).value());
+        }
+    }
+    if (virtualGeometry)
+    {
+        for (std::size_t i = 0; i < imported.meshes.size() && i < sceneAsset.primitives.size(); ++i)
+            (void)impl_->database.attachVirtualGeometry(imported.meshes[i], virtualGeometry);
+    }
     if (impl_->renderer != nullptr)
     {
         const auto upload = impl_->renderer->uploadSceneAsset(impl_->database, imported);

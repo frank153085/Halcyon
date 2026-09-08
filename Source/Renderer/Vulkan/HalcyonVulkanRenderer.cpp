@@ -2032,6 +2032,8 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.irradiance = m3.irradiance;
     ctx.prefiltered = m3.prefiltered;
     ctx.brdfLut = m3.brdfLut;
+    // M5 visibility resources remain declared for ABI stability; unsupported
+    // devices continue through the established deferred/GPU-driven passes.
     ctx.clusterRanges = m3.clusterRanges;
     ctx.clusterIndices = m3.clusterIndices;
     ctx.clusterOverflow = m3.clusterOverflow;
@@ -2243,6 +2245,16 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->caps.bindlessTable = static_cast<bool>(bindlessResult);
         }
 #endif
+        // M5 is additive: devices without descriptor indexing cannot execute
+        // the visibility/material ABI, so keep the requested scene live on
+        // the existing indexed GPU path. The Engine already enables GPU
+        // driving for VirtualGeometryIndexed; this only changes the effective
+        // renderer mode after capabilities are known.
+        if (impl_->config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+            !impl_->caps.descriptorIndexing)
+        {
+            impl_->config.renderPath = Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed;
+        }
         impl_->swapchainState.enableVsync = impl_->config.enableVsync;
         result = impl_->swapchainState.initialize(impl_->physicalDevice,
             impl_->device,

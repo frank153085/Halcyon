@@ -6,6 +6,7 @@
 #include "Renderer/Scene/Ecs/Ecs.h"
 #include "Renderer/Scene/SceneDatabase.h"
 #include "Renderer/Scene/StaticSceneLoader.h"
+#include "Renderer/Scene/VirtualGeometry.h"
 #include "Renderer/Scene/ProceduralStressScene.h"
 
 namespace Halcyon
@@ -27,6 +28,7 @@ using StaticSceneLoadOptions = Renderer::Scene::StaticSceneLoadOptions;
 using FastGltfSceneLoader = Renderer::Scene::FastGltfSceneLoader;
 using Renderer::Scene::loadGltfScene;
 using Renderer::Scene::loadStaticScene;
+using Renderer::Scene::loadGeometrySource;
 using SceneDatabase = Renderer::Scene::SceneDatabase;
 using SceneMesh = Renderer::Scene::SceneMesh;
 using SceneMaterial = Renderer::Scene::SceneMaterial;

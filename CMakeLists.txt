@@ -20,10 +20,10 @@ option(HALCYON_ENABLE_IMGUI "Build Dear ImGui" OFF)
 option(HALCYON_ENABLE_SPIRV_TOOLS "Build SPIR-V validation and optimization tools" OFF)
 option(HALCYON_ENABLE_TRACY "Enable optional Tracy CPU instrumentation" OFF)
 option(HALCYON_ENABLE_BASISU "Build Basis Universal texture tooling" OFF)
-option(HALCYON_ENABLE_MESHOPTIMIZER "Build meshoptimizer" OFF)
+option(HALCYON_ENABLE_MESHOPTIMIZER "Build meshoptimizer" ON)
 option(HALCYON_ENABLE_DRACO "Build Draco geometry compression" OFF)
 option(HALCYON_ENABLE_BENCHMARK "Build Google Benchmark" OFF)
-option(HALCYON_ENABLE_ZSTD "Build Zstandard" OFF)
+option(HALCYON_ENABLE_ZSTD "Build Zstandard" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -95,6 +95,29 @@ target_compile_definitions(HalcyonCore INTERFACE
     GLM_FORCE_RADIANS
 )
 
+if(NOT TARGET Halcyon::Meshoptimizer OR NOT TARGET Halcyon::Zstd)
+    message(FATAL_ERROR "M5 requires HALCYON_ENABLE_MESHOPTIMIZER=ON and HALCYON_ENABLE_ZSTD=ON")
+endif()
+
+add_library(HalcyonAssetPipeline STATIC
+    Source/Renderer/Scene/StaticSceneLoader.cpp
+    Source/Renderer/Scene/StaticSceneLoader.h
+    Source/Renderer/Scene/PlySceneLoader.cpp
+    Source/Renderer/Scene/PlySceneLoader.h
+    Source/Renderer/Scene/VirtualGeometry.cpp
+    Source/Renderer/Scene/VirtualGeometry.h
+    Source/Renderer/Scene/VirtualGeometryCache.cpp
+    Source/Renderer/Scene/VirtualGeometryCache.h
+    Source/Renderer/Scene/Sha256.cpp
+    Source/Renderer/Scene/Sha256.h)
+target_include_directories(HalcyonAssetPipeline PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Include")
+target_link_libraries(HalcyonAssetPipeline
+    PUBLIC HalcyonCore glm::glm
+    PRIVATE Halcyon::FastGltf Halcyon::Meshoptimizer Halcyon::TinyPly Halcyon::Zstd)
+halcyon_enable_warnings(HalcyonAssetPipeline)
+
 add_library(HalcyonRenderer STATIC
     Source/Core/Profiler.h
     Source/Renderer/Resources/DeferredDeletionQueue.h
@@ -102,7 +125,6 @@ add_library(HalcyonRenderer STATIC
     Source/Renderer/Scene/Camera.h
     Source/Renderer/Scene/FramePacket.h
     Source/Renderer/Scene/GpuScene.h
-    Source/Renderer/Scene/StaticSceneLoader.cpp
     Source/Renderer/Scene/StaticSceneLoader.h
     Source/Renderer/Scene/ProceduralStressScene.cpp
     Source/Renderer/Scene/ProceduralStressScene.h
@@ -204,7 +226,7 @@ target_include_directories(HalcyonRenderer PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Source"
     "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(HalcyonRenderer
-    PUBLIC HalcyonCore glm::glm Vulkan::Vulkan
+    PUBLIC HalcyonCore HalcyonAssetPipeline glm::glm Vulkan::Vulkan
     PRIVATE Halcyon::Vma Halcyon::Stb
     PUBLIC Halcyon::RobinMap
     PRIVATE glfw
@@ -322,6 +344,24 @@ if(HALCYON_DXC_EXECUTABLE)
     set(HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/gpu_driven.frag.spv")
     set(HALCYON_OCCLUSION_PHASE1_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/occlusion_phase1.comp.spv")
     set(HALCYON_OCCLUSION_PHASE2_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/occlusion_phase2.comp.spv")
+    set(HALCYON_M5_SHADER_OUTPUTS)
+    function(halcyon_add_m5_shader stem profile)
+        set(output "${HALCYON_SHADER_OUTPUT_DIR}/${stem}.spv")
+        add_custom_command(OUTPUT "${output}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
+            COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc
+                    -T "${profile}" -E main -Fo "${output}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/${stem}.hlsl"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/${stem}.hlsl"
+            VERBATIM COMMENT "Compiling M5 ${stem}")
+        set(HALCYON_M5_SHADER_OUTPUTS "${HALCYON_M5_SHADER_OUTPUTS};${output}" PARENT_SCOPE)
+    endfunction()
+    halcyon_add_m5_shader(meshlet_cull.comp cs_6_6)
+    halcyon_add_m5_shader(meshlet_build_indirect.comp cs_6_6)
+    halcyon_add_m5_shader(visibility.vert vs_6_6)
+    halcyon_add_m5_shader(visibility.frag ps_6_6)
+    halcyon_add_m5_shader(material_classify.comp cs_6_6)
+    halcyon_add_m5_shader(compute_shading.comp cs_6_6)
     add_custom_command(OUTPUT "${HALCYON_PBR_VERTEX_SPIRV}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
@@ -421,6 +461,7 @@ if(HALCYON_DXC_EXECUTABLE)
             "${HALCYON_GPU_DRIVEN_VERTEX_SPIRV}" "${HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV}"
             "${HALCYON_GPU_DRIVEN_CSM_VERTEX_SPIRV}"
             "${HALCYON_OCCLUSION_PHASE1_SPIRV}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
+            ${HALCYON_M5_SHADER_OUTPUTS}
     )
     if(HALCYON_SPIRV_VAL_EXECUTABLE)
         add_custom_target(HalcyonShaderValidation ALL
@@ -527,7 +568,7 @@ endif()
 # separate executable makes asset-pipeline experiments buildable on machines
 # without a GPU and gives the runtime a deterministic manifest contract.
 add_executable(HalcyonCooker Source/Cooker/Main.cpp)
-target_link_libraries(HalcyonCooker PRIVATE HalcyonCore)
+target_link_libraries(HalcyonCooker PRIVATE HalcyonAssetPipeline)
 halcyon_configure_asset_root(HalcyonCooker)
 halcyon_enable_warnings(HalcyonCooker)
 
@@ -547,6 +588,13 @@ if(HALCYON_BUILD_TESTS)
     target_link_libraries(HalcyonMemoryAllocatorTests PRIVATE HalcyonCore)
     halcyon_enable_warnings(HalcyonMemoryAllocatorTests)
     add_test(NAME Halcyon.MemoryAllocator COMMAND HalcyonMemoryAllocatorTests)
+
+    add_executable(HalcyonVirtualGeometryTests Tests/VirtualGeometryTests.cpp)
+    target_link_libraries(HalcyonVirtualGeometryTests PRIVATE HalcyonAssetPipeline)
+    target_compile_definitions(HalcyonVirtualGeometryTests PRIVATE
+        HALCYON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    halcyon_enable_warnings(HalcyonVirtualGeometryTests)
+    add_test(NAME Halcyon.VirtualGeometry COMMAND HalcyonVirtualGeometryTests)
 
     if(HALCYON_BUILD_FRAMEGRAPH)
         add_executable(HalcyonRendererCoreTests Tests/RendererCoreTests.cpp)
@@ -682,6 +730,7 @@ if(HALCYON_BUILD_TESTS)
     add_dependencies(HalcyonTests
         HalcyonCoreTests
         HalcyonMemoryAllocatorTests
+        HalcyonVirtualGeometryTests
         HalcyonCameraTests
         HalcyonQualityTests
         HalcyonStaticSceneLoaderTests
@@ -699,4 +748,11 @@ if(HALCYON_BUILD_TESTS)
             add_dependencies(HalcyonTests HalcyonFrameGraphTests)
         endif()
     endif()
+endif()
+
+if(HALCYON_ENABLE_BENCHMARK)
+    add_executable(HalcyonVirtualGeometryBenchmarks Tests/VirtualGeometryBenchmarks.cpp)
+    target_link_libraries(HalcyonVirtualGeometryBenchmarks PRIVATE
+        HalcyonAssetPipeline Halcyon::Benchmark)
+    halcyon_enable_warnings(HalcyonVirtualGeometryBenchmarks)
 endif()

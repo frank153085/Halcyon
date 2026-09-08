@@ -80,6 +80,12 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
         Graph::TextureFormat::RGBA16Float, false, true});
     result.brdfLut = graph.createTexture({"IBL_BrdfLut", 128, 128, 1, 1, 1,
         Graph::TextureFormat::RG16Float, false});
+    result.visibility = graph.createTexture({"VisibilityBuffer", extent_.width, extent_.height, 1, 1, 1,
+        Graph::TextureFormat::R32Uint, true});
+    result.materialClassification = graph.createBuffer({"MaterialClassification",
+        std::max<std::size_t>(1, static_cast<std::size_t>(extent_.width) * extent_.height) * 4u, 4u, true});
+    result.visibleMeshlets = graph.createBuffer({"VisibleMeshlets", 131072u * 4u, 4u, true});
+    result.meshletIndirect = graph.createBuffer({"MeshletIndirect", 131072u * 20u, 20u, true});
 
     result.clusterCount = clusterCount();
     result.clusterRanges = graph.createBuffer(

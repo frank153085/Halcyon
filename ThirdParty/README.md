@@ -18,8 +18,8 @@ examples, tools, and installation rules by default.
 | M1 | Vulkan Memory Allocator, stb, robin-map | Vulkan allocation, image loading, compact hash tables |
 | M2 | Dear ImGui, GoogleTest, SPIR-V Tools, SPIR-V Headers | Debug UI, tests, shader validation and inspection |
 | M3 | fastgltf, MikkTSpace, Basis Universal | glTF loading, tangent generation, compressed textures |
-| M4 | meshoptimizer, Draco | LOD and meshlet preparation, compressed geometry |
-| M5 | Google Benchmark, zstd | Performance regression tests and cooked-cache compression |
+| M4 | meshoptimizer | GPU-driven scene preparation |
+| M5 | meshoptimizer, tinyply, zstd, Google Benchmark | Fixed LOD/meshlets, Lucy PLY input, deterministic cache compression and performance tests |
 
 ## CMake options
 
@@ -58,6 +58,7 @@ redistributed.
 | `mikktspace` | `3e895b49d05ea07e4c2133156cfa94369e19e409` | Repository license files |
 | `basisu` | `99f52d63aa6799cbdaecfe977111dc5ec3b31d47` | `LICENSE` |
 | `meshoptimizer` | `661f8626c0bf7e49dd139254e09ab93abf4f4a59` | `LICENSE` |
+| `tinyply` | `c9bb690dfe5e9105961e9e28120c48c9ae084bc6` | Public domain dedication in `source/tinyply.h` |
 | `draco` | `052a31124c75e64dfbf4f9bc0df066e626aeef41` | `LICENSE` |
 | `benchmark` | `04b5f41ec7e3b68b28a2379bc19804a48953117d` | `LICENSE` |
 | `zstd` | `10da6ba6de05e29169261fa4b68eb99239f770dd` | `LICENSE`, `COPYING` |

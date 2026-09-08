@@ -157,7 +157,8 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.enableClusteredLighting = config.enableClusteredLighting;
     backendConfig.enableTransparency = config.enableTransparency;
     backendConfig.enableGpuDrivenScene = config.enableGpuDrivenScene ||
-        config.enableTwoPhaseOcclusion;
+        config.enableTwoPhaseOcclusion || config.renderPath != RenderPathMode::DeferredIndexed;
+    backendConfig.renderPath = config.renderPath;
     backendConfig.enableTwoPhaseOcclusion = config.enableTwoPhaseOcclusion;
     backendConfig.enableVsync = config.enableVsync;
     backendConfig.instanceIdReportPath = config.instanceIdReportPath;

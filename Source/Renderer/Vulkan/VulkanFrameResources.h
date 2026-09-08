@@ -37,6 +37,10 @@ public:
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> irradiance;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> prefiltered;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> brdfLut;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> visibility;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> materialClassification;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshlets;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirect;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterRanges;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterIndices;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterOverflow;

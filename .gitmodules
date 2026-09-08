@@ -52,3 +52,6 @@
 [submodule "ThirdParty/tracy"]
 	path = ThirdParty/tracy
 	url = https://github.com/wolfpld/tracy.git
+[submodule "ThirdParty/tinyply"]
+	path = ThirdParty/tinyply
+	url = https://github.com/ddiakopoulos/tinyply.git

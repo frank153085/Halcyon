@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Scene/SceneDatabase.h"
+#include "../Scene/VirtualGeometry.h"
 #include "../Scene/GpuScene.h"
 #include "Core/Result.h"
 #include "GpuResourceManager.h"
@@ -68,6 +69,12 @@ public:
     [[nodiscard]] std::uint32_t textureCount() const noexcept
     {
         return static_cast<std::uint32_t>(denseTextureStable_.size());
+    }
+    [[nodiscard]] const Halcyon::Renderer::Scene::VirtualGeometryAsset* virtualGeometry(
+        std::uint32_t meshIndex) const noexcept
+    {
+        const auto found = virtualGeometryByMesh_.find(meshIndex);
+        return found == virtualGeometryByMesh_.end() ? nullptr : found->second.get();
     }
     [[nodiscard]] Halcyon::Renderer::Scene::MaterialGpuData materialRow(
         std::uint32_t denseIndex) const noexcept;
@@ -143,6 +150,7 @@ private:
     VkDescriptorSetLayout textureSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool textureDescriptorPool_ = VK_NULL_HANDLE;
     std::unordered_map<std::uint32_t, MeshResource> meshes_;
+    std::unordered_map<std::uint32_t, std::shared_ptr<const Halcyon::Renderer::Scene::VirtualGeometryAsset>> virtualGeometryByMesh_;
     BufferAllocation gpuDrivenVertices_{};
     BufferAllocation gpuDrivenIndices_{};
     BufferAllocation meshDraws_{};

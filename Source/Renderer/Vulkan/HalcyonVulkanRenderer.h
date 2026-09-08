@@ -45,6 +45,7 @@ struct RendererConfig
     bool enableClusteredLighting = true;
     bool enableTransparency = true;
     bool enableGpuDrivenScene = false;
+    Halcyon::Renderer::Scene::RenderPathMode renderPath = Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
     bool enableTwoPhaseOcclusion = false;
     bool enableVsync = true;
     std::filesystem::path instanceIdReportPath{};

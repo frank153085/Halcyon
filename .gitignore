@@ -49,6 +49,7 @@ lib/
 
 # Runtime cache written when unpacking embedded glTF images.
 *.embedded_*.bin
+*.halcyon.vgcache
 
 ### Operating-system files ###
 .DS_Store

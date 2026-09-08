@@ -4,6 +4,7 @@
 #include "../Quality/Pbr.h"
 #include "../Resources/ResourceTypes.h"
 #include "StaticSceneLoader.h"
+#include "VirtualGeometry.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <memory>
 
 namespace Halcyon::Renderer::Scene
 {
@@ -26,6 +28,9 @@ struct SceneMesh
     std::vector<std::uint32_t> indices;
     glm::vec3 boundsMin{0.0f};
     glm::vec3 boundsMax{0.0f};
+    // Optional M5 representation. Traditional vertex/index data remains the
+    // compatibility source for Deferred/GPU-driven paths.
+    std::shared_ptr<const VirtualGeometryAsset> virtualGeometry;
 };
 
 struct SceneMaterial
@@ -316,6 +321,15 @@ public:
     [[nodiscard]] SceneMesh* get(MeshHandle handle) noexcept
     {
         return meshes_.get(handle);
+    }
+
+    [[nodiscard]] bool attachVirtualGeometry(MeshHandle handle,
+        std::shared_ptr<const VirtualGeometryAsset> asset) noexcept
+    {
+        auto* mesh = get(handle);
+        if (mesh == nullptr) return false;
+        mesh->virtualGeometry = std::move(asset);
+        return true;
     }
     [[nodiscard]] const SceneMesh* get(MeshHandle handle) const noexcept
     {

@@ -239,6 +239,7 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                 resourceManager_.destroy(found->second);
                 meshes_.erase(found);
             }
+            virtualGeometryByMesh_.erase(mesh);
             const auto dense = meshDenseByStable_.find(mesh);
             if (dense != meshDenseByStable_.end())
             {
@@ -336,6 +337,8 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
         try
         {
             meshes_.emplace(handle.index(), uploaded.value());
+            if (source->virtualGeometry)
+                virtualGeometryByMesh_.emplace(handle.index(), source->virtualGeometry);
             uploadedMeshes.push_back(handle.index());
             const std::uint32_t dense = freeMeshDense_.empty()
                 ? static_cast<std::uint32_t>(denseMeshStable_.size())

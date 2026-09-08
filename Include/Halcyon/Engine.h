@@ -3,6 +3,7 @@
 #include "Core/Result.h"
 #include "RenderTypes.h"
 #include "Scene.h"
+#include "GpuScene.h"
 #include "SceneManager.h"
 #include "View.h"
 
@@ -41,6 +42,7 @@ struct EngineConfig
     bool enableClusteredLighting = true;
     bool enableTransparency = true;
     bool enableGpuDrivenScene = false;
+    RenderPathMode renderPath = RenderPathMode::DeferredIndexed;
     bool enableTwoPhaseOcclusion = false;
     bool enableVsync = true;
     std::filesystem::path instanceIdReportPath{};
