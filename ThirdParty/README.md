@@ -20,6 +20,7 @@ examples, tools, and installation rules by default.
 | M3 | fastgltf, MikkTSpace, Basis Universal | glTF loading, tangent generation, compressed textures |
 | M4 | meshoptimizer | GPU-driven scene preparation |
 | M5 | meshoptimizer, tinyply, zstd, Google Benchmark | Fixed LOD/meshlets, Lucy PLY input, deterministic cache compression and performance tests |
+| M6 | METIS v5.2.1, GKlib | Deterministic cluster partitioning and LOD DAG construction |
 
 ## CMake options
 
@@ -34,6 +35,7 @@ The M1 header-only targets are always available. Compiled or larger dependencies
 -DHALCYON_ENABLE_DRACO=ON
 -DHALCYON_ENABLE_BENCHMARK=ON
 -DHALCYON_ENABLE_ZSTD=ON
+-DHALCYON_ENABLE_METIS=ON
 ```
 
 The options are intentionally independent so an experiment can enable one dependency without
@@ -62,6 +64,7 @@ redistributed.
 | `draco` | `052a31124c75e64dfbf4f9bc0df066e626aeef41` | `LICENSE` |
 | `benchmark` | `04b5f41ec7e3b68b28a2379bc19804a48953117d` | `LICENSE` |
 | `zstd` | `10da6ba6de05e29169261fa4b68eb99239f770dd` | `LICENSE`, `COPYING` |
+| `metis` | `f5ae915a84d3bbf1508b529af90292dd7085b9ec` (v5.2.1) | `LICENSE`; GKlib `LICENSE.txt` |
 
 ## License handling
 

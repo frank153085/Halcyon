@@ -83,6 +83,113 @@ void buildTests()
     EXPECT(asset.hasUniformPrimitiveMaterial());
     EXPECT(asset.hasUniformPrimitiveMaterial(0u));
     EXPECT(!asset.hasUniformPrimitiveMaterial(1u));
+    EXPECT(!asset.clusters.empty());
+    EXPECT(!asset.dagNodes.empty());
+    EXPECT(validateVirtualGeometryDag(asset));
+    // One cluster per LOD has no cross-cluster boundary. Vertices reused by a
+    // different LOD must not be mistaken for neighbors in the same level.
+    EXPECT(std::all_of(asset.clusters.begin(), asset.clusters.end(),
+        [](const VirtualGeometryCluster& cluster)
+        {
+            return cluster.boundaryVertices.empty();
+        }));
+
+    VirtualGeometryBuildOptions splitOptions{};
+    splitOptions.maxVertices = 3u;
+    splitOptions.maxTriangles = 4u;
+    splitOptions.maxClusterVertices = 3u;
+    splitOptions.maxClusterTriangles = 3u;
+    splitOptions.lodRatios = {1.0f, 0.5f, 0.0f};
+    const auto splitResult = buildVirtualGeometry(makeScene(), splitOptions);
+    EXPECT(splitResult);
+    if (splitResult)
+    {
+        const auto& split = splitResult.value();
+        std::vector<std::uint32_t> fineBoundary;
+        for (const auto& cluster : split.clusters)
+            if (cluster.lodDepth == 0u)
+                fineBoundary.insert(fineBoundary.end(), cluster.boundaryVertices.begin(),
+                    cluster.boundaryVertices.end());
+        std::sort(fineBoundary.begin(), fineBoundary.end());
+        fineBoundary.erase(std::unique(fineBoundary.begin(), fineBoundary.end()),
+            fineBoundary.end());
+        EXPECT(!fineBoundary.empty());
+        bool hasAdjacency = false;
+        for (std::uint32_t clusterIndex = 0u; clusterIndex < split.clusters.size();
+            ++clusterIndex)
+        {
+            const auto& cluster = split.clusters[clusterIndex];
+            EXPECT(std::is_sorted(cluster.adjacentClusters.begin(),
+                cluster.adjacentClusters.end()));
+            EXPECT(std::adjacent_find(cluster.adjacentClusters.begin(),
+                cluster.adjacentClusters.end()) == cluster.adjacentClusters.end());
+            for (const auto adjacent : cluster.adjacentClusters)
+            {
+                hasAdjacency = true;
+                EXPECT(adjacent < split.clusters.size());
+                if (adjacent < split.clusters.size())
+                {
+                    const auto& other = split.clusters[adjacent];
+                    EXPECT(other.lodDepth == cluster.lodDepth);
+                    EXPECT(other.primitiveIndex == cluster.primitiveIndex);
+                    EXPECT(std::binary_search(other.adjacentClusters.begin(),
+                        other.adjacentClusters.end(), clusterIndex));
+                }
+            }
+        }
+        EXPECT(hasAdjacency);
+        for (const auto boundary : fineBoundary)
+        {
+            for (const auto& lod : split.lods)
+            {
+                bool retained = false;
+                for (std::uint32_t i = 0u; i < lod.indexCount; ++i)
+                    retained = retained || split.indices[lod.indexOffset + i] == boundary;
+                EXPECT(retained);
+            }
+        }
+    }
+    EXPECT(std::abs(virtualGeometryScreenError(1.0f, 10.0f, 720.0f,
+        1.5707963f) - 36.0f) < 0.01f);
+    VirtualGeometryLodSelectionState selection{};
+    const auto root = std::find_if(asset.dagNodes.begin(), asset.dagNodes.end(),
+        [](const VirtualGeometryDagNode& node)
+        {
+            return node.parentIndex == std::numeric_limits<std::uint32_t>::max();
+        });
+    if (root != asset.dagNodes.end() && root->childCount != 0u)
+    {
+        selection.currentNode = static_cast<std::uint32_t>(std::distance(asset.dagNodes.begin(), root));
+        EXPECT(!selectVirtualGeometryLod(asset, selection, 2.0f));
+        EXPECT(selectVirtualGeometryLod(asset, selection, 2.0f));
+        EXPECT(selection.currentNode != 0u);
+    }
+    VirtualGeometryAsset balanceAsset{};
+    balanceAsset.clusters.resize(6u);
+    for (std::uint32_t depth = 0u; depth < 3u; ++depth)
+    {
+        const std::uint32_t left = depth * 2u;
+        const std::uint32_t right = left + 1u;
+        balanceAsset.clusters[left].lodDepth = depth;
+        balanceAsset.clusters[right].lodDepth = depth;
+        balanceAsset.clusters[left].adjacentClusters = {right};
+        balanceAsset.clusters[right].adjacentClusters = {left};
+    }
+    balanceAsset.dagNodes = {
+        {0u, 2u, 0u, 0u, 0u, 1u, {}, 0.0f},
+        {1u, 3u, 0u, 0u, 0u, 1u, {}, 0.0f},
+        {2u, 4u, 0u, 1u, 1u, 0u, {}, 1.0f},
+        {3u, 5u, 1u, 1u, 1u, 0u, {}, 1.0f},
+        {4u, std::numeric_limits<std::uint32_t>::max(), 2u, 1u, 2u, 0u, {}, 2.0f},
+        {5u, std::numeric_limits<std::uint32_t>::max(), 3u, 1u, 2u, 0u, {}, 2.0f},
+    };
+    balanceAsset.dagEdges = {{2u, 0u}, {3u, 1u}, {4u, 2u}, {5u, 3u}};
+    EXPECT(validateVirtualGeometryDag(balanceAsset));
+    std::array<std::uint32_t, 6> decisions{0u, 0u, 1u, 0u, 1u, 0u};
+    EXPECT(balanceVirtualGeometryLodRefinement(balanceAsset, decisions));
+    EXPECT(decisions[4] == 1u);
+    EXPECT(decisions[5] == 1u);
+    EXPECT(decisions[3] == 0u);
     auto mixedMaterialAsset = asset;
     if (!mixedMaterialAsset.primitives.empty())
     {
@@ -293,7 +400,41 @@ void cacheTests()
     if (roundTrip) {
         EXPECT(roundTrip.value().vertices.size() == built.value().vertices.size());
         EXPECT(roundTrip.value().meshlets.size() == built.value().meshlets.size());
+        EXPECT(roundTrip.value().clusters.size() == built.value().clusters.size());
+        EXPECT(roundTrip.value().dagNodes.size() == built.value().dagNodes.size());
+        EXPECT(roundTrip.value().dagEdges.size() == built.value().dagEdges.size());
+        EXPECT(roundTrip.value().clusters.size() == built.value().clusters.size());
+        for (std::size_t i = 0; i < built.value().clusters.size(); ++i)
+            EXPECT(roundTrip.value().clusters[i].adjacentClusters ==
+                built.value().clusters[i].adjacentClusters);
+        EXPECT(validateVirtualGeometryDag(roundTrip.value()));
         EXPECT(metadata.build.maxVertices == kVirtualGeometryMaxVertices);
+    }
+    VirtualGeometryBuildOptions adjacencyBuildOptions{};
+    adjacencyBuildOptions.maxVertices = 3u;
+    adjacencyBuildOptions.maxTriangles = 4u;
+    adjacencyBuildOptions.maxClusterVertices = 3u;
+    adjacencyBuildOptions.maxClusterTriangles = 3u;
+    adjacencyBuildOptions.lodRatios = {1.0f, 0.5f, 0.0f};
+    const auto adjacencyBuilt = buildVirtualGeometry(makeScene(), adjacencyBuildOptions);
+    EXPECT(adjacencyBuilt);
+    if (adjacencyBuilt)
+    {
+        VirtualGeometryCacheOptions adjacencyCacheOptions{};
+        adjacencyCacheOptions.build = adjacencyBuildOptions;
+        EXPECT(writeVirtualGeometryCache(secondPath, adjacencyBuilt.value(), hash,
+            adjacencyCacheOptions));
+        const auto adjacencyRoundTrip = readVirtualGeometryCache(secondPath, &hash,
+            nullptr, &adjacencyCacheOptions);
+        EXPECT(adjacencyRoundTrip);
+        if (adjacencyRoundTrip)
+        {
+            EXPECT(adjacencyRoundTrip.value().clusters.size() ==
+                adjacencyBuilt.value().clusters.size());
+            for (std::size_t i = 0; i < adjacencyBuilt.value().clusters.size(); ++i)
+                EXPECT(adjacencyRoundTrip.value().clusters[i].adjacentClusters ==
+                    adjacencyBuilt.value().clusters[i].adjacentClusters);
+        }
     }
     const auto wrongHash = sha256(std::as_bytes(std::span("wrong", 5)));
     EXPECT(!readVirtualGeometryCache(path, &wrongHash));
@@ -321,9 +462,27 @@ void cacheTests()
             kVirtualVisibilityMaterialIndexMask + 1u;
         EXPECT(!writeVirtualGeometryCache(secondPath, oversizedMaterial, hash));
     }
+    auto malformedAdjacency = built.value();
+    if (!malformedAdjacency.clusters.empty())
+    {
+        malformedAdjacency.clusters.front().adjacentClusters.push_back(0u);
+        EXPECT(!writeVirtualGeometryCache(secondPath, malformedAdjacency, hash));
+    }
     std::fstream stream(path, std::ios::in | std::ios::out | std::ios::binary);
     char magic = 0; stream.read(&magic, 1); stream.seekp(0); magic ^= 0x7f; stream.write(&magic, 1); stream.close();
     EXPECT(!readVirtualGeometryCache(path));
+    EXPECT(writeVirtualGeometryCache(path, built.value(), hash));
+    {
+        auto oldVersion = readBytes(path);
+        oldVersion[8] = 3;
+        oldVersion[9] = oldVersion[10] = oldVersion[11] = 0;
+        std::ofstream legacy(path, std::ios::binary | std::ios::trunc);
+        legacy.write(oldVersion.data(), static_cast<std::streamsize>(oldVersion.size()));
+    }
+    const auto legacy = readVirtualGeometryCache(path);
+    EXPECT(!legacy);
+    if (!legacy)
+        EXPECT(legacy.error().describe().find("re-run HalcyonCooker") != std::string::npos);
     EXPECT(writeVirtualGeometryCache(path, built.value(), hash));
     // Keep a header-only cache rejection explicit: the reader must reject the
     // short zstd frame before inspecting payload bytes.

@@ -132,7 +132,10 @@ Halcyon::Result<void> VulkanPipeline::createCompute(
 Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
     VkDevice device, const GraphicsPipelineDesc& desc)
 {
-    if (device == VK_NULL_HANDLE || desc.vertexShader.empty() ||
+    const bool meshPipeline = !desc.meshShader.empty();
+    if (device == VK_NULL_HANDLE || (!meshPipeline && desc.vertexShader.empty()) ||
+        (meshPipeline && !desc.vertexShader.empty()) ||
+        (!desc.depthOnly && desc.fragmentShader.empty()) ||
         (!desc.depthOnly && desc.colorFormats.empty()) ||
         (desc.depthOnly && (desc.depthFormat == VK_FORMAT_UNDEFINED ||
                                !desc.colorFormats.empty())) ||
@@ -142,17 +145,38 @@ Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
     }
     device_ = device;
     ShaderLibrary shaderLibrary{device};
-    Halcyon::Renderer::Shaders::ShaderReflection vertexReflection;
-    const auto vertex = shaderLibrary.create(desc.vertexShader, &vertexReflection);
-    if (!vertex) return Halcyon::Result<void>::failure(vertex.error());
-    vertexShader_ = vertex.value();
-    const auto vertexAbi = validateReflection(vertexReflection, desc.descriptorLayouts,
-        desc.descriptorBindings, desc.pushConstants, VK_SHADER_STAGE_VERTEX_BIT,
-        desc.vertexShader);
-    if (!vertexAbi)
+    if (meshPipeline)
     {
-        destroy();
-        return vertexAbi;
+        Halcyon::Renderer::Shaders::ShaderReflection meshReflection;
+        const auto mesh = shaderLibrary.create(desc.meshShader, &meshReflection);
+        if (!mesh) return Halcyon::Result<void>::failure(mesh.error());
+        meshShader_ = mesh.value();
+        const auto meshAbi = validateReflection(meshReflection, desc.descriptorLayouts,
+            desc.descriptorBindings, desc.pushConstants, VK_SHADER_STAGE_MESH_BIT_EXT,
+            desc.meshShader);
+        if (!meshAbi) { destroy(); return meshAbi; }
+        if (!desc.taskShader.empty())
+        {
+            Halcyon::Renderer::Shaders::ShaderReflection taskReflection;
+            const auto task = shaderLibrary.create(desc.taskShader, &taskReflection);
+            if (!task) { destroy(); return Halcyon::Result<void>::failure(task.error()); }
+            taskShader_ = task.value();
+            const auto taskAbi = validateReflection(taskReflection, desc.descriptorLayouts,
+                desc.descriptorBindings, desc.pushConstants, VK_SHADER_STAGE_TASK_BIT_EXT,
+                desc.taskShader);
+            if (!taskAbi) { destroy(); return taskAbi; }
+        }
+    }
+    else
+    {
+        Halcyon::Renderer::Shaders::ShaderReflection vertexReflection;
+        const auto vertex = shaderLibrary.create(desc.vertexShader, &vertexReflection);
+        if (!vertex) return Halcyon::Result<void>::failure(vertex.error());
+        vertexShader_ = vertex.value();
+        const auto vertexAbi = validateReflection(vertexReflection, desc.descriptorLayouts,
+            desc.descriptorBindings, desc.pushConstants, VK_SHADER_STAGE_VERTEX_BIT,
+            desc.vertexShader);
+        if (!vertexAbi) { destroy(); return vertexAbi; }
     }
     if (!desc.depthOnly)
     {
@@ -207,20 +231,39 @@ Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
         return fail(vkFailure("vkCreatePipelineLayout", result));
     }
 
-    VkPipelineShaderStageCreateInfo vertexStage{};
-    vertexStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertexStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertexStage.module = vertexShader_;
-    vertexStage.pName = "main";
-    std::array<VkPipelineShaderStageCreateInfo, 2> stages{vertexStage, {}};
-    std::uint32_t stageCount = 1;
+    std::array<VkPipelineShaderStageCreateInfo, 3> stages{};
+    std::uint32_t stageCount = 0;
+    if (meshPipeline)
+    {
+        if (taskShader_ != VK_NULL_HANDLE)
+        {
+            stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[stageCount].stage = VK_SHADER_STAGE_TASK_BIT_EXT;
+            stages[stageCount].module = taskShader_;
+            stages[stageCount].pName = "main";
+            ++stageCount;
+        }
+        stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stageCount].stage = VK_SHADER_STAGE_MESH_BIT_EXT;
+        stages[stageCount].module = meshShader_;
+        stages[stageCount].pName = "main";
+        ++stageCount;
+    }
+    else
+    {
+        stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stageCount].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[stageCount].module = vertexShader_;
+        stages[stageCount].pName = "main";
+        ++stageCount;
+    }
     if (!desc.depthOnly)
     {
-        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[1].module = fragmentShader_;
-        stages[1].pName = "main";
-        stageCount = 2;
+        stages[stageCount].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[stageCount].module = fragmentShader_;
+        stages[stageCount].pName = "main";
+        ++stageCount;
     }
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
@@ -237,7 +280,7 @@ Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
         VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
         VkVertexInputAttributeDescription{2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
         VkVertexInputAttributeDescription{3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32}};
-    if (!fullscreen && !storageVertex)
+    if (!meshPipeline && !fullscreen && !storageVertex)
     {
         vertexInput.vertexBindingDescriptionCount = 1;
         vertexInput.pVertexBindingDescriptions = &binding;
@@ -303,8 +346,8 @@ Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
     pipelineInfo.pNext = &renderingInfo;
     pipelineInfo.stageCount = stageCount;
     pipelineInfo.pStages = stages.data();
-    pipelineInfo.pVertexInputState = &vertexInput;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pVertexInputState = meshPipeline ? nullptr : &vertexInput;
+    pipelineInfo.pInputAssemblyState = meshPipeline ? nullptr : &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterization;
     pipelineInfo.pMultisampleState = &multisample;
@@ -369,6 +412,8 @@ void VulkanPipeline::swap(VulkanPipeline& other) noexcept
     swap(pipeline_, other.pipeline_);
     swap(computePipeline_, other.computePipeline_);
     swap(vertexShader_, other.vertexShader_);
+    swap(taskShader_, other.taskShader_);
+    swap(meshShader_, other.meshShader_);
     swap(fragmentShader_, other.fragmentShader_);
     swap(computeShader_, other.computeShader_);
 }
@@ -393,6 +438,14 @@ void VulkanPipeline::destroy() noexcept
         {
             vkDestroyShaderModule(device_, vertexShader_, nullptr);
         }
+        if (taskShader_ != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(device_, taskShader_, nullptr);
+        }
+        if (meshShader_ != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(device_, meshShader_, nullptr);
+        }
         if (fragmentShader_ != VK_NULL_HANDLE)
         {
             vkDestroyShaderModule(device_, fragmentShader_, nullptr);
@@ -406,6 +459,8 @@ void VulkanPipeline::destroy() noexcept
     computePipeline_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
     vertexShader_ = VK_NULL_HANDLE;
+    taskShader_ = VK_NULL_HANDLE;
+    meshShader_ = VK_NULL_HANDLE;
     fragmentShader_ = VK_NULL_HANDLE;
     computeShader_ = VK_NULL_HANDLE;
 }

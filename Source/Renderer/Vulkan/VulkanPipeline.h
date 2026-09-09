@@ -39,6 +39,8 @@ struct GraphicsPipelineDesc
     std::span<const DescriptorBindingDesc> descriptorBindings{};
     std::span<const VkPushConstantRange> pushConstants{};
     std::string_view vertexShader{};
+    std::string_view taskShader{};
+    std::string_view meshShader{};
     std::string_view fragmentShader{};
 };
 
@@ -110,6 +112,8 @@ private:
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline computePipeline_ = VK_NULL_HANDLE;
     VkShaderModule vertexShader_ = VK_NULL_HANDLE;
+    VkShaderModule taskShader_ = VK_NULL_HANDLE;
+    VkShaderModule meshShader_ = VK_NULL_HANDLE;
     VkShaderModule fragmentShader_ = VK_NULL_HANDLE;
     VkShaderModule computeShader_ = VK_NULL_HANDLE;
 };

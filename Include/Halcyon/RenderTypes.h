@@ -64,6 +64,11 @@ struct FrameStats
     // Virtual Geometry counters copied from the GPU meshlet submission path.
     std::uint32_t virtualVisibleMeshletCount = 0;
     std::uint32_t virtualIndirectCommandCount = 0;
+    std::uint32_t virtualDagNodeCount = 0;
+    std::uint32_t virtualSelectedNodeCount = 0;
+    std::uint32_t virtualLodSwitchCount = 0;
+    bool meshShaderActive = false;
+    std::string meshShaderFallbackReason;
     // Number of malformed non-background visibility records rejected during
     // material classification. A valid virtual-geometry frame must report 0.
     std::uint32_t virtualInvalidVisibilityCount = 0;
@@ -129,6 +134,10 @@ struct Capabilities
     bool bindlessTable = false;
     bool bufferDeviceAddress = false;
     bool indirectCount = false;
+    bool scalarBlockLayout = false;
+    bool geometryShader = false;
+    bool meshShader = false;
+    std::uint32_t maxMeshWorkGroupCountX = 0;
     bool fragmentBarycentric = false;
     bool rayQuery = false;
     bool depthD32 = false;

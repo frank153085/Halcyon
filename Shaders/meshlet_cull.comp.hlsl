@@ -7,6 +7,38 @@
 [[vk::binding(4, 0)]] StructuredBuffer<TransformRow> transforms;
 struct CullFrame { float4x4 viewProjection; uint4 hiz; };
 [[vk::binding(5, 0)]] ConstantBuffer<CullFrame> frame;
+struct DagNode {
+    uint clusterIndex;
+    uint parentIndex;
+    uint firstChild;
+    uint childCount;
+    uint lodDepth;
+    uint flags;
+    float4 sphere;
+    float geometricError;
+    float3 _padding;
+    uint2 _stridePadding;
+};
+struct Cluster {
+    uint meshletOffset;
+    uint meshletCount;
+    uint vertexOffset;
+    uint vertexCount;
+    uint triangleCount;
+    uint lodDepth;
+    uint primitiveIndex;
+    float4 sphere;
+    float geometricError;
+    float3 _padding;
+    uint _stridePadding;
+};
+[[vk::binding(6, 0)]] StructuredBuffer<DagNode> dagNodes;
+[[vk::binding(7, 0)]] StructuredBuffer<Cluster> clusters;
+[[vk::binding(8, 0)]] StructuredBuffer<uint> clusterMeshletIndices;
+[[vk::binding(9, 0)]] StructuredBuffer<uint> selectedNodes;
+[[vk::binding(10, 0)]] StructuredBuffer<uint> selectedCount;
+[[vk::binding(11, 0)]] StructuredBuffer<uint> meshletDagNodes;
+[[vk::binding(12, 0)]] StructuredBuffer<uint4> lodStates;
 struct CullConstants { float4 planes[6]; float4 cameraPosition; uint meshletCount; uint instanceIndex; uint lodAndFlags; uint visibleCapacity; };
 [[vk::push_constant]] ConstantBuffer<CullConstants> constants;
 
@@ -93,10 +125,16 @@ bool supportsObjectSpaceCone(float4x4 model)
         orthogonality <= maximum * maximum * 1.0e-4;
 }
 
+bool selectedByLod(uint meshletIndex)
+{
+    const uint nodeIndex = meshletDagNodes[meshletIndex];
+    return (lodStates[nodeIndex].w & 2u) != 0u;
+}
+
 [numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= constants.meshletCount) return;
     MeshletMeta m = meshlets[id.x];
-    if (m.lodIndex != (constants.lodAndFlags & VG_CULL_LOD_MASK)) return;
+    if (!selectedByLod(id.x)) return;
     const float4x4 model = transforms[constants.instanceIndex].model;
     // Frustum planes stay in world space so non-uniform and sheared instance
     // transforms can use a conservative transformed sphere radius.

@@ -35,6 +35,7 @@ struct EngineConfig
     std::uint32_t framesInFlight = 3;
     bool enableValidation = HALCYON_ENABLE_VALIDATION != 0;
     FeatureMode rayQuery = FeatureMode::Disabled;
+    FeatureMode meshShader = FeatureMode::Auto;
     SceneManagerConfig scene{};
     float fixedDeltaSeconds = 1.0f / 60.0f;
     float exposure = 0.0f;

@@ -24,6 +24,9 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     occlusionPhase2Pipeline.destroy();
     meshletCullPipeline.destroy();
     meshletIndirectPipeline.destroy();
+    meshletMeshIndirectPipeline.destroy();
+    virtualGeometryMeshPipeline.destroy();
+    lodSelectPipeline.destroy();
     visibilityPipeline.destroy();
     materialClassifyPipeline.destroy();
     computeShadingPipeline.destroy();
@@ -63,6 +66,9 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
         }
         if (meshletCullLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletCullLayout, nullptr);
         if (meshletIndirectLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletIndirectLayout, nullptr);
+        if (meshletMeshIndirectLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, meshletMeshIndirectLayout, nullptr);
+        if (virtualGeometryMeshLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, virtualGeometryMeshLayout, nullptr);
+        if (lodSelectLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, lodSelectLayout, nullptr);
         if (visibilityLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, visibilityLayout, nullptr);
         if (materialClassifyLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, materialClassifyLayout, nullptr);
         if (computeShadingLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, computeShadingLayout, nullptr);
@@ -77,6 +83,9 @@ void PipelineRegistry::destroySwapchainResources(VkDevice device) noexcept
     occlusionPhase2Layout = VK_NULL_HANDLE;
     meshletCullLayout = VK_NULL_HANDLE;
     meshletIndirectLayout = VK_NULL_HANDLE;
+    meshletMeshIndirectLayout = VK_NULL_HANDLE;
+    virtualGeometryMeshLayout = VK_NULL_HANDLE;
+    lodSelectLayout = VK_NULL_HANDLE;
     visibilityLayout = VK_NULL_HANDLE;
     materialClassifyLayout = VK_NULL_HANDLE;
     computeShadingLayout = VK_NULL_HANDLE;

@@ -138,7 +138,10 @@ Halcyon::Result<Sha256Digest> sha256File(const std::filesystem::path& path)
     if (!stream) return Halcyon::Result<Sha256Digest>::failure(
         {Halcyon::ErrorCode::NotFound, "unable to open source for hashing", path.string()});
     Sha256Accumulator accumulator;
-    std::array<char, 1024u * 1024u> chunk{};
+    // Keep the streaming buffer comfortably below Windows' default 1 MiB
+    // thread stack. The previous 1 MiB local array overflowed before hashing
+    // any file when Virtual Geometry sidecars were enabled for glTF assets.
+    std::array<char, 64u * 1024u> chunk{};
     while (stream)
     {
         stream.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));

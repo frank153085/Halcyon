@@ -219,6 +219,8 @@ void printUsage() noexcept
                 "  --no-gpu-driven           disable GPU-driven rendering (CPU baseline)\n"
                 "  --two-phase-occlusion    enable previous/current Hi-Z re-test\n"
                 "  --virtual-geometry       use the M5 visibility/compute-shading path\n"
+                "  --virtual-geometry-mesh  request the M6 Mesh Shader path (Auto fallback)\n"
+                "  --virtual-geometry-mesh-required  require M6 Mesh Shader support\n"
                 "  --no-validation  disable Vulkan validation layers\n"
                 "  --validation     enable Vulkan validation layers\n"
                 "  --log            enable console and file logging (or set HALCYON_LOG=1)\n"
@@ -395,6 +397,20 @@ void printUsage() noexcept
             config.engine.enableGpuDrivenScene = true;
             continue;
         }
+        if (argument == "--virtual-geometry-mesh")
+        {
+            config.engine.renderPath = RenderPathMode::VirtualGeometryMeshShader;
+            config.engine.meshShader = FeatureMode::Auto;
+            config.engine.enableGpuDrivenScene = true;
+            continue;
+        }
+        if (argument == "--virtual-geometry-mesh-required")
+        {
+            config.engine.renderPath = RenderPathMode::VirtualGeometryMeshShader;
+            config.engine.meshShader = FeatureMode::Required;
+            config.engine.enableGpuDrivenScene = true;
+            continue;
+        }
         if (argument == "--log")
         {
             continue;
@@ -426,6 +442,7 @@ void printUsage() noexcept
         return gpuDriven ? "GpuDrivenIndexed" : "DeferredIndexed";
     case RenderPathMode::GpuDrivenIndexed: return "GpuDrivenIndexed";
     case RenderPathMode::VirtualGeometryIndexed: return "VirtualGeometryIndexed";
+    case RenderPathMode::VirtualGeometryMeshShader: return "VirtualGeometryMeshShader";
     }
     return "Unknown";
 }
@@ -804,6 +821,8 @@ int Application::run(
                                "gpu_frustum_cull_ms,gpu_indirect_build_ms,gpu_hiz_build_ms,"
                                "gpu_two_phase_ms,visible_instance_count,indirect_draw_count,"
                                "virtual_visible_meshlet_count,virtual_indirect_command_count,"
+                               "virtual_dag_node_count,virtual_selected_node_count,virtual_lod_switch_count,"
+                               "mesh_shader_active,mesh_shader_fallback_reason,"
                                "virtual_invalid_visibility_count,"
                                "frustum_visible_instance_count,occluded_instance_count,gpu_driven_active,"
                                "gpu_fallback_instance_count,"
@@ -858,6 +877,11 @@ int Application::run(
                         << previousStats.indirectDrawCount << ','
                         << previousStats.virtualVisibleMeshletCount << ','
                         << previousStats.virtualIndirectCommandCount << ','
+                        << previousStats.virtualDagNodeCount << ','
+                        << previousStats.virtualSelectedNodeCount << ','
+                        << previousStats.virtualLodSwitchCount << ','
+                        << (previousStats.meshShaderActive ? 1 : 0) << ','
+                        << previousStats.meshShaderFallbackReason << ','
                         << previousStats.virtualInvalidVisibilityCount << ','
                         << previousStats.frustumVisibleInstanceCount << ','
                         << previousStats.occludedInstanceCount << ','

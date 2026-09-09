@@ -38,6 +38,7 @@ struct RendererConfig
     std::uint32_t framesInFlight = 3;
     bool enableValidation = true;
     FeatureMode rayQuery = FeatureMode::Auto;
+    FeatureMode meshShader = FeatureMode::Auto;
     const char* applicationName = "Halcyon";
     std::uint32_t applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     float exposure = 0.0f;

@@ -39,6 +39,9 @@ public:
     VulkanPipeline occlusionPhase2Pipeline;
     VulkanPipeline meshletCullPipeline;
     VulkanPipeline meshletIndirectPipeline;
+    VulkanPipeline meshletMeshIndirectPipeline;
+    VulkanPipeline virtualGeometryMeshPipeline;
+    VulkanPipeline lodSelectPipeline;
     VulkanPipeline visibilityPipeline;
     VulkanPipeline materialClassifyPipeline;
     VulkanPipeline computeShadingPipeline;
@@ -52,6 +55,9 @@ public:
     VkDescriptorSetLayout occlusionPhase2Layout = VK_NULL_HANDLE;
     VkDescriptorSetLayout meshletCullLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout meshletIndirectLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout meshletMeshIndirectLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout virtualGeometryMeshLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout lodSelectLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout visibilityLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialClassifyLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout computeShadingLayout = VK_NULL_HANDLE;

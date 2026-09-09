@@ -117,12 +117,16 @@ struct DeviceCandidate
     VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR barycentric{};
     VkPhysicalDeviceRayQueryFeaturesKHR rayQuery{};
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructure{};
+    VkPhysicalDeviceMeshShaderFeaturesEXT meshShader{};
+    VkPhysicalDeviceMeshShaderPropertiesEXT meshShaderProperties{};
     VkPhysicalDeviceFeatures coreFeatures{};
     QueueSelection queues{};
     bool hasBarycentricExtension = false;
     bool hasRayQueryExtensions = false;
     bool rayQuerySupported = false;
     bool barycentricSupported = false;
+    bool hasMeshShaderExtension = false;
+    bool meshShaderSupported = false;
     std::uint64_t deviceLocalBytes = 0;
     int score = std::numeric_limits<int>::min();
 };
@@ -229,6 +233,17 @@ struct DeviceCandidate
         hasName(extensions, VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
         hasName(extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
         hasName(extensions, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+    candidate.hasMeshShaderExtension =
+        hasName(extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+    if (candidate.hasMeshShaderExtension)
+    {
+        candidate.meshShaderProperties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
+        VkPhysicalDeviceProperties2 properties2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        properties2.pNext = &candidate.meshShaderProperties;
+        vkGetPhysicalDeviceProperties2(candidate.handle, &properties2);
+    }
 
     if (candidate.hasBarycentricExtension)
     {
@@ -255,6 +270,18 @@ struct DeviceCandidate
         candidate.rayQuery.pNext = &candidate.accelerationStructure;
     }
 
+    if (candidate.hasMeshShaderExtension)
+    {
+        candidate.meshShader = {};
+        candidate.meshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+        if (candidate.hasRayQueryExtensions)
+            candidate.accelerationStructure.pNext = &candidate.meshShader;
+        else if (candidate.hasBarycentricExtension)
+            candidate.barycentric.pNext = &candidate.meshShader;
+        else
+            candidate.features13.pNext = &candidate.meshShader;
+    }
+
     vkGetPhysicalDeviceFeatures2(candidate.handle, &features2);
     candidate.coreFeatures = features2.features;
     candidate.barycentricSupported =
@@ -262,6 +289,18 @@ struct DeviceCandidate
     candidate.rayQuerySupported = candidate.hasRayQueryExtensions && candidate.rayQuery.rayQuery &&
                                   candidate.accelerationStructure.accelerationStructure &&
                                   candidate.features12.bufferDeviceAddress;
+    // M6 currently uses a mesh-only graphics pipeline. Task shaders remain an
+    // optional future optimization and must not exclude otherwise capable
+    // VK_EXT_mesh_shader devices.
+    candidate.meshShaderSupported = candidate.hasMeshShaderExtension &&
+        candidate.meshShader.meshShader &&
+        candidate.features12.scalarBlockLayout &&
+        candidate.coreFeatures.geometryShader &&
+        candidate.meshShaderProperties.maxMeshOutputVertices >= 64u &&
+        candidate.meshShaderProperties.maxMeshOutputPrimitives >= 124u &&
+        candidate.meshShaderProperties.maxMeshWorkGroupInvocations >= 32u &&
+        candidate.meshShaderProperties.maxMeshWorkGroupSize[0] >= 32u &&
+        candidate.meshShaderProperties.maxMeshWorkGroupCount[0] != 0u;
     return true;
 }
 
@@ -693,6 +732,11 @@ VoidResult VulkanDevice::pickPhysicalDevice()
             best.features12.descriptorBindingPartiallyBound != VK_FALSE;
         capabilities.bufferDeviceAddress = best.features12.bufferDeviceAddress != VK_FALSE;
         capabilities.indirectCount = best.features12.drawIndirectCount != VK_FALSE;
+        capabilities.scalarBlockLayout = best.features12.scalarBlockLayout != VK_FALSE;
+        capabilities.geometryShader = best.coreFeatures.geometryShader != VK_FALSE;
+        capabilities.meshShader = best.meshShaderSupported;
+        capabilities.maxMeshWorkGroupCountX = best.meshShaderSupported
+            ? best.meshShaderProperties.maxMeshWorkGroupCount[0] : 0u;
         capabilities.fragmentBarycentric = best.barycentricSupported;
         capabilities.rayQuery = best.rayQuerySupported;
         capabilities.depthD32 = true;
@@ -706,6 +750,8 @@ VoidResult VulkanDevice::pickPhysicalDevice()
             return fail(
                 "Ray Query was required but the selected Vulkan device does not support it");
         }
+        if (config.meshShader == FeatureMode::Required && !capabilities.meshShader)
+            return fail("Mesh Shader was required but VK_EXT_mesh_shader is unavailable");
         return ok();
     }
 
@@ -752,6 +798,12 @@ VoidResult VulkanDevice::createDevice()
         {
             deviceExtensions.push_back(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
         }
+        const bool canUseMeshShader = capabilities.meshShader &&
+            config.meshShader != FeatureMode::Disabled;
+        if (canUseMeshShader)
+            deviceExtensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        else if (config.meshShader == FeatureMode::Required)
+            return fail("Mesh Shader was required but the selected device cannot enable it");
         const std::size_t baseExtensionCount = deviceExtensions.size();
         const bool canUseRayQuery = capabilities.rayQuery && config.rayQuery != FeatureMode::Disabled;
         if (canUseRayQuery)
@@ -789,6 +841,10 @@ VoidResult VulkanDevice::createDevice()
             capabilities.descriptorIndexing ? VK_TRUE : VK_FALSE;
         enabled12.bufferDeviceAddress = capabilities.bufferDeviceAddress ? VK_TRUE : VK_FALSE;
         enabled12.drawIndirectCount = capabilities.indirectCount ? VK_TRUE : VK_FALSE;
+        // Virtual Geometry uses the 48-byte HLSL StructuredBuffer<Vertex>
+        // layout shared with StaticSceneVertex. DXC emits scalar member
+        // offsets for this ABI when compiling with -fvk-use-dx-layout.
+        enabled12.scalarBlockLayout = capabilities.scalarBlockLayout ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceVulkan13Features enabled13{};
         enabled13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         enabled13.dynamicRendering = VK_TRUE;
@@ -804,6 +860,7 @@ VoidResult VulkanDevice::createDevice()
         // non-zero firstInstance values reach SV_InstanceID.
         enabledFeatures.features.drawIndirectFirstInstance = VK_TRUE;
         enabledFeatures.features.fragmentStoresAndAtomics = VK_TRUE;
+        enabledFeatures.features.geometryShader = capabilities.geometryShader ? VK_TRUE : VK_FALSE;
         enabledFeatures.pNext = &enabled12;
         enabled12.pNext = &enabled13;
 
@@ -818,6 +875,7 @@ VoidResult VulkanDevice::createDevice()
 
         VkPhysicalDeviceRayQueryFeaturesKHR enabledRay{};
         VkPhysicalDeviceAccelerationStructureFeaturesKHR enabledAcceleration{};
+        VkPhysicalDeviceMeshShaderFeaturesEXT enabledMeshShader{};
         if (canUseRayQuery && deviceExtensions.size() >= baseExtensionCount + 3u)
         {
             enabledRay.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
@@ -835,6 +893,18 @@ VoidResult VulkanDevice::createDevice()
             }
             enabledRay.pNext = &enabledAcceleration;
             rayQueryEnabled = true;
+        }
+        if (canUseMeshShader)
+        {
+            enabledMeshShader.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+            enabledMeshShader.taskShader = VK_FALSE;
+            enabledMeshShader.meshShader = VK_TRUE;
+            if (canUseRayQuery && deviceExtensions.size() >= baseExtensionCount + 4u)
+                enabledAcceleration.pNext = &enabledMeshShader;
+            else if (capabilities.fragmentBarycentric)
+                enabledBarycentric.pNext = &enabledMeshShader;
+            else
+                enabled13.pNext = &enabledMeshShader;
         }
 
         VkDeviceCreateInfo createInfo{};
@@ -855,12 +925,14 @@ VoidResult VulkanDevice::createDevice()
             rayQueryEnabled = false;
             if (capabilities.fragmentBarycentric)
             {
-                enabledBarycentric.pNext = nullptr;
+                enabledBarycentric.pNext = canUseMeshShader
+                    ? static_cast<void*>(&enabledMeshShader) : nullptr;
                 enabled13.pNext = &enabledBarycentric;
             }
             else
             {
-                enabled13.pNext = nullptr;
+                enabled13.pNext = canUseMeshShader
+                    ? static_cast<void*>(&enabledMeshShader) : nullptr;
             }
             enabled12.bufferDeviceAddress = capabilities.bufferDeviceAddress ? VK_TRUE : VK_FALSE;
             deviceExtensions.resize(baseExtensionCount);
@@ -871,6 +943,21 @@ VoidResult VulkanDevice::createDevice()
         if (result != VK_SUCCESS)
         {
             return fail(vkFailure("vkCreateDevice", result));
+        }
+
+        if (canUseMeshShader)
+        {
+            cmdDrawMeshTasksIndirectCount =
+                reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectCountEXT>(
+                    vkGetDeviceProcAddr(device, "vkCmdDrawMeshTasksIndirectCountEXT"));
+            if (cmdDrawMeshTasksIndirectCount == nullptr)
+            {
+                capabilities.meshShader = false;
+                capabilities.maxMeshWorkGroupCountX = 0u;
+                if (config.meshShader == FeatureMode::Required)
+                    return fail("Mesh Shader was required but "
+                        "vkCmdDrawMeshTasksIndirectCountEXT is unavailable");
+            }
         }
 
         vkGetDeviceQueue(device, graphicsQueueFamily, 0, &graphicsQueue);
@@ -916,6 +1003,7 @@ void VulkanDevice::cleanup() noexcept
     physicalDevice = VK_NULL_HANDLE;
     graphicsQueue = VK_NULL_HANDLE;
     presentQueue = VK_NULL_HANDLE;
+    cmdDrawMeshTasksIndirectCount = nullptr;
     graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
     presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
     presentTimestampValidBits = 0;

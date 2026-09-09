@@ -92,6 +92,15 @@ public:
         BufferAllocation meshletTriangles{};
         BufferAllocation meshlets{};
         BufferAllocation lods{};
+        BufferAllocation clusters{};
+        BufferAllocation dagNodes{};
+        BufferAllocation dagEdges{};
+        BufferAllocation lodStates{};
+        BufferAllocation boundaryVertices{};
+        BufferAllocation clusterMeshletIndices{};
+        BufferAllocation meshletDagNodes{};
+        BufferAllocation clusterAdjacencyOffsets{};
+        BufferAllocation clusterAdjacencyIndices{};
     };
     struct alignas(16) VirtualGeometryGpuMeshlet
     {
@@ -109,6 +118,27 @@ public:
         std::array<float, 3> padding{};
     };
     static_assert(sizeof(VirtualGeometryGpuMeshlet) == 80);
+    struct alignas(16) VirtualGeometryGpuCluster
+    {
+        std::uint32_t meshletOffset = 0, meshletCount = 0;
+        std::uint32_t vertexOffset = 0, vertexCount = 0;
+        std::uint32_t triangleCount = 0, lodDepth = 0;
+        std::uint32_t primitiveIndex = 0;
+        glm::vec4 sphere{0.0f};
+        float geometricError = 0.0f;
+        std::array<float, 3> padding{};
+    };
+    struct alignas(16) VirtualGeometryGpuDagNode
+    {
+        std::uint32_t clusterIndex = 0, parentIndex = 0;
+        std::uint32_t firstChild = 0, childCount = 0;
+        std::uint32_t lodDepth = 0, flags = 0;
+        glm::vec4 sphere{0.0f};
+        float geometricError = 0.0f;
+        std::array<float, 3> padding{};
+    };
+    static_assert(sizeof(VirtualGeometryGpuCluster) == 64);
+    static_assert(sizeof(VirtualGeometryGpuDagNode) == 64);
     [[nodiscard]] const VirtualGeometryGpuBuffers* virtualGeometryBuffers(
         std::uint32_t meshIndex) const noexcept
     {

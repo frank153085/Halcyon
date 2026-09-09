@@ -6,7 +6,7 @@
 namespace Halcyon::Renderer::Scene
 {
 
-inline constexpr std::uint32_t kVirtualGeometryCacheVersion = 3u;
+inline constexpr std::uint32_t kVirtualGeometryCacheVersion = 4u;
 
 struct VirtualGeometryCacheOptions
 {

@@ -23,6 +23,7 @@ enum class RenderPathMode : std::uint8_t
     DeferredIndexed,
     GpuDrivenIndexed,
     VirtualGeometryIndexed,
+    VirtualGeometryMeshShader,
 };
 
 [[nodiscard]] inline bool sphereInsideFrustum(

@@ -54,8 +54,13 @@ public:
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualCullFrame;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshlets;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshletCount;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> selectedLodNodes;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> selectedLodCount;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> lodBalanceDepth;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirect;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirectCount;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletMeshIndirect;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletMeshIndirectCount;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualValidation;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterRanges;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterIndices;

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <span>
 #include <vector>
 
 namespace Halcyon::Renderer::Scene
@@ -157,6 +158,53 @@ struct VirtualGeometryLod
     float ratio = 1.0f;
 };
 
+// M6 metadata is kept separate from the M5 meshlet streams so the indexed
+// compatibility path can continue to consume the existing tables.
+struct VirtualGeometryCluster
+{
+    // meshletOffset/count address the explicit index list below.  METIS does
+    // not guarantee that a partition is contiguous in the source LOD.
+    std::uint32_t meshletOffset = 0;
+    std::uint32_t meshletCount = 0;
+    std::uint32_t vertexOffset = 0;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t triangleCount = 0;
+    std::uint32_t lodDepth = 0;
+    std::uint32_t primitiveIndex = 0;
+    glm::vec4 sphere{0.0f};
+    float geometricError = 0.0f;
+    std::vector<std::uint32_t> meshletIndices;
+    std::vector<std::uint32_t> boundaryVertices;
+    // Deterministic same-LOD cluster adjacency. Entries are sorted, unique,
+    // and symmetric; the cache validator treats this as part of the v4 ABI.
+    std::vector<std::uint32_t> adjacentClusters;
+};
+
+struct VirtualGeometryDagNode
+{
+    std::uint32_t clusterIndex = 0;
+    std::uint32_t parentIndex = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t firstChild = 0;
+    std::uint32_t childCount = 0;
+    std::uint32_t lodDepth = 0;
+    std::uint32_t flags = 0;
+    glm::vec4 sphere{0.0f};
+    float geometricError = 0.0f;
+};
+
+struct VirtualGeometryDagEdge
+{
+    std::uint32_t parent = 0;
+    std::uint32_t child = 0;
+};
+
+struct VirtualGeometryLodSelectionState
+{
+    std::uint32_t currentNode = 0;
+    std::uint32_t candidateNode = 0;
+    std::uint32_t pendingFrames = 0;
+};
+
 struct VirtualGeometryPrimitive
 {
     std::uint32_t vertexOffset = 0;
@@ -175,6 +223,9 @@ struct VirtualGeometryAsset
     std::vector<VirtualGeometryMeshlet> meshlets;
     std::vector<VirtualGeometryLod> lods;
     std::vector<VirtualGeometryPrimitive> primitives;
+    std::vector<VirtualGeometryCluster> clusters;
+    std::vector<VirtualGeometryDagNode> dagNodes;
+    std::vector<VirtualGeometryDagEdge> dagEdges;
 
     [[nodiscard]] std::size_t triangleCount() const noexcept { return indices.size() / 3u; }
 
@@ -208,10 +259,37 @@ struct VirtualGeometryBuildOptions
     std::uint32_t maxVertices = kVirtualGeometryMaxVertices;
     std::uint32_t maxTriangles = kVirtualGeometryMaxTriangles;
     float simplifyError = 1.0f;
+    std::uint32_t maxClusterVertices = 256u;
+    std::uint32_t maxClusterTriangles = 1024u;
+    std::uint32_t metisSeed = 0u;
+    std::uint32_t metisUfactor = 1u;
+    std::uint32_t maxDagDepth = 8u;
+    float lodRefineThresholdPixels = 1.0f;
+    float lodCoarsenThresholdPixels = 0.75f;
 };
 
 [[nodiscard]] Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometry(
     const StaticScene& scene, const VirtualGeometryBuildOptions& options = {});
+
+[[nodiscard]] Halcyon::Result<void> buildVirtualGeometryDag(
+    VirtualGeometryAsset& asset, const VirtualGeometryBuildOptions& options = {});
+
+[[nodiscard]] bool validateVirtualGeometryDag(
+    const VirtualGeometryAsset& asset) noexcept;
+
+[[nodiscard]] float virtualGeometryScreenError(
+    float geometricError, float distance, float viewportHeight, float verticalFov) noexcept;
+
+[[nodiscard]] bool selectVirtualGeometryLod(
+    const VirtualGeometryAsset& asset, VirtualGeometryLodSelectionState& state,
+    float projectedError, const VirtualGeometryBuildOptions& options = {}) noexcept;
+
+// Mirrors the GPU's monotonic adjacency pass. Each entry is a boolean refine
+// decision for the corresponding DAG node; only coarse nodes may be forced
+// finer, and the resulting frontier satisfies the local 2:1 rule.
+[[nodiscard]] bool balanceVirtualGeometryLodRefinement(
+    const VirtualGeometryAsset& asset,
+    std::span<std::uint32_t> refinementDecisions) noexcept;
 
 [[nodiscard]] Halcyon::Result<StaticScene> loadGeometrySource(
     const std::filesystem::path& path, const StaticSceneLoadOptions& options = {});

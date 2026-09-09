@@ -1,6 +1,7 @@
 #include "HalcyonVulkanRenderer.h"
 
 #include "Core/Profiler.h"
+#include "Core/Log.h"
 #include "DebugReadbackManager.h"
 #include "FrameRecorder.h"
 #include "FramePassContext.h"
@@ -265,6 +266,8 @@ struct Renderer::Impl
     VkDevice& device = deviceState.device;
     VkQueue& graphicsQueue = deviceState.graphicsQueue;
     VkQueue& presentQueue = deviceState.presentQueue;
+    PFN_vkCmdDrawMeshTasksIndirectCountEXT& cmdDrawMeshTasksIndirectCount =
+        deviceState.cmdDrawMeshTasksIndirectCount;
     std::uint32_t& graphicsQueueFamily = deviceState.graphicsQueueFamily;
     std::uint32_t& presentQueueFamily = deviceState.presentQueueFamily;
     Capabilities& caps = deviceState.capabilities;
@@ -311,6 +314,9 @@ struct Renderer::Impl
     VulkanPipeline& occlusionPhase2Pipeline = pipelines.occlusionPhase2Pipeline;
     VulkanPipeline& meshletCullPipeline = pipelines.meshletCullPipeline;
     VulkanPipeline& meshletIndirectPipeline = pipelines.meshletIndirectPipeline;
+    VulkanPipeline& meshletMeshIndirectPipeline = pipelines.meshletMeshIndirectPipeline;
+    VulkanPipeline& virtualGeometryMeshPipeline = pipelines.virtualGeometryMeshPipeline;
+    VulkanPipeline& lodSelectPipeline = pipelines.lodSelectPipeline;
     VulkanPipeline& visibilityPipeline = pipelines.visibilityPipeline;
     VulkanPipeline& materialClassifyPipeline = pipelines.materialClassifyPipeline;
     VulkanPipeline& computeShadingPipeline = pipelines.computeShadingPipeline;
@@ -323,6 +329,9 @@ struct Renderer::Impl
     VkDescriptorSetLayout& occlusionPhase2Layout = pipelines.occlusionPhase2Layout;
     VkDescriptorSetLayout& meshletCullLayout = pipelines.meshletCullLayout;
     VkDescriptorSetLayout& meshletIndirectLayout = pipelines.meshletIndirectLayout;
+    VkDescriptorSetLayout& meshletMeshIndirectLayout = pipelines.meshletMeshIndirectLayout;
+    VkDescriptorSetLayout& virtualGeometryMeshLayout = pipelines.virtualGeometryMeshLayout;
+    VkDescriptorSetLayout& lodSelectLayout = pipelines.lodSelectLayout;
     VkDescriptorSetLayout& visibilityLayout = pipelines.visibilityLayout;
     VkDescriptorSetLayout& materialClassifyLayout = pipelines.materialClassifyLayout;
     VkDescriptorSetLayout& computeShadingLayout = pipelines.computeShadingLayout;
@@ -386,6 +395,7 @@ struct Renderer::Impl
     // packet or transient resource is incompatible. Keep statistics tied to
     // the path actually recorded into the command buffer.
     bool virtualGeometryActive = false;
+    std::string meshShaderFallbackReason;
     Halcyon::Renderer::Scene::RenderPathMode activeRenderPath =
         Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
     std::uint32_t gpuFallbackInstanceCount = 0;
@@ -535,6 +545,7 @@ struct Renderer::Impl
         virtualHiZImageInitialized = false;
         virtualVisibilityValid = false;
         virtualGeometryActive = false;
+        meshShaderFallbackReason.clear();
         activeRenderPath = Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
         hasRenderedFrame = false;
         lastFrameIndex = 0;
@@ -628,9 +639,9 @@ struct Renderer::Impl
                 return visibility.error();
             }
             gpuVisibilityReadbacks.push_back(visibility.value());
-            // visible meshlets, actual indirect commands, invalid visibility
-            // records produced by material classification.
-            info.size = sizeof(std::uint32_t) * 3u;
+            // Visible meshlets, actual indirect commands, invalid visibility
+            // records, selected DAG nodes, and completed LOD transitions.
+            info.size = sizeof(std::uint32_t) * 5u;
             const auto virtualCounters = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
             if (!virtualCounters)
             {
@@ -656,16 +667,39 @@ struct Renderer::Impl
         if (!graphicsResult)
             return graphicsResult;
         const auto gpuResult = createGpuDrivenPipelines();
-        if (gpuResult || config.renderPath !=
-                Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        if (gpuResult)
             return gpuResult;
 
-        // M5 is optional at runtime.  A missing/invalid M5 shader package
-        // must leave the established indexed renderer usable.  Tear down the
-        // partially-created swapchain pipelines before retrying the fallback
-        // path so no descriptor layout or pipeline handle is leaked.
+        const bool meshPath = config.renderPath ==
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
+        const bool indexedPath = config.renderPath ==
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+        if (!meshPath && !indexedPath)
+            return gpuResult;
+        if (meshPath && config.meshShader == FeatureMode::Required)
+            return gpuResult;
+
+        // Virtual Geometry backends are optional in Auto mode. Tear down a
+        // partially-created registry before retrying the next supported path.
         pipelines.destroySwapchainResources(device);
         gpuDrivenBindless = false;
+        if (meshPath)
+        {
+            const std::string meshFailure = gpuResult.error().describe();
+            config.renderPath = Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+            meshShaderFallbackReason =
+                "Mesh Shader pipeline creation failed (" + meshFailure +
+                "); using VirtualGeometryIndexed";
+            setError(meshShaderFallbackReason);
+            const auto fallbackGraphics = createGraphicsPipeline();
+            if (!fallbackGraphics)
+                return fallbackGraphics;
+            const auto indexedResult = createGpuDrivenPipelines();
+            if (indexedResult)
+                return indexedResult;
+            pipelines.destroySwapchainResources(device);
+            gpuDrivenBindless = false;
+        }
         const bool gpuFallback = config.enableGpuDrivenScene;
         config.renderPath = gpuFallback
             ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
@@ -899,7 +933,8 @@ struct Renderer::Impl
         // caller selects it directly without also setting the legacy GPU
         // driven toggle.
         const bool virtualGeometryPath =
-            config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+            config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed ||
+            config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
         if (!config.enableGpuDrivenScene && !virtualGeometryPath)
             return ok();
         const auto makeLayout = [&](std::span<const VkDescriptorSetLayoutBinding> bindings,
@@ -1144,22 +1179,36 @@ struct Renderer::Impl
         if (!virtualGeometryPath)
             return ok();
 
-        const std::array<VkDescriptorSetLayoutBinding, 6> meshletCullBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 13> meshletCullBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(meshletCullBindings, meshletCullLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 6> meshletCullAbi = {
+        const std::array<DescriptorBindingDesc, 13> meshletCullAbi = {
             DescriptorBindingDesc{0, meshletCullBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
             DescriptorBindingDesc{0, meshletCullBindings[1], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, meshletCullBindings[2], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, meshletCullBindings[3]},
             DescriptorBindingDesc{0, meshletCullBindings[4], sizeof(Halcyon::Renderer::Scene::TransformRow)},
-            DescriptorBindingDesc{0, meshletCullBindings[5]}};
+            DescriptorBindingDesc{0, meshletCullBindings[5]},
+            DescriptorBindingDesc{0, meshletCullBindings[6], sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode)},
+            DescriptorBindingDesc{0, meshletCullBindings[7], sizeof(VulkanSceneResources::VirtualGeometryGpuCluster)},
+            DescriptorBindingDesc{0, meshletCullBindings[8], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletCullBindings[9], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletCullBindings[10], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletCullBindings[11], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletCullBindings[12], 16u}};
         ComputePipelineDesc meshletCullDesc{};
         meshletCullDesc.shader = "meshlet_cull.comp.spv";
         meshletCullDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&meshletCullLayout, 1};
@@ -1167,6 +1216,35 @@ struct Renderer::Impl
         const std::array<VkPushConstantRange, 1> meshletCullPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128}}};
         meshletCullDesc.pushConstants = meshletCullPush;
         result = meshletCullPipeline.createCompute(device, meshletCullDesc);
+        if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 8> lodSelectBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        result = makeLayout(lodSelectBindings, lodSelectLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 8> lodSelectAbi = {
+            DescriptorBindingDesc{0, lodSelectBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode)},
+            DescriptorBindingDesc{0, lodSelectBindings[1], sizeof(Halcyon::Renderer::Scene::VirtualGeometryDagEdge)},
+            DescriptorBindingDesc{0, lodSelectBindings[2], 16},
+            DescriptorBindingDesc{0, lodSelectBindings[3], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[4], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[5], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[6], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[7], sizeof(std::uint32_t)}};
+        ComputePipelineDesc lodSelectDesc{};
+        lodSelectDesc.shader = "lod_select.comp.spv";
+        lodSelectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&lodSelectLayout, 1};
+        lodSelectDesc.descriptorBindings = lodSelectAbi;
+        const std::array<VkPushConstantRange, 1> lodSelectPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128}}};
+        lodSelectDesc.pushConstants = lodSelectPush;
+        result = lodSelectPipeline.createCompute(device, lodSelectDesc);
         if (!result) return result;
 
         const std::array<VkDescriptorSetLayoutBinding, 5> meshletIndirectBindings = {
@@ -1191,6 +1269,67 @@ struct Renderer::Impl
         meshletIndirectDesc.pushConstants = meshletIndirectPush;
         result = meshletIndirectPipeline.createCompute(device, meshletIndirectDesc);
         if (!result) return result;
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> meshMeshIndirectBindings = {
+            VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+        result = makeLayout(meshMeshIndirectBindings, meshletMeshIndirectLayout);
+        if (!result) return result;
+        const std::array<DescriptorBindingDesc, 4> meshMeshIndirectAbi = {
+            DescriptorBindingDesc{0, meshMeshIndirectBindings[0], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshMeshIndirectBindings[1], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshMeshIndirectBindings[2], 12u},
+            DescriptorBindingDesc{0, meshMeshIndirectBindings[3], sizeof(std::uint32_t)}};
+        ComputePipelineDesc meshMeshIndirectDesc{};
+        meshMeshIndirectDesc.shader = "meshlet_build_mesh_indirect.comp.spv";
+        meshMeshIndirectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&meshletMeshIndirectLayout, 1};
+        meshMeshIndirectDesc.descriptorBindings = meshMeshIndirectAbi;
+        const std::array<VkPushConstantRange, 1> meshMeshIndirectPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16}}};
+        meshMeshIndirectDesc.pushConstants = meshMeshIndirectPush;
+        result = meshletMeshIndirectPipeline.createCompute(device, meshMeshIndirectDesc);
+        if (!result) return result;
+
+        if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader &&
+            caps.meshShader)
+        {
+            const std::array<VkDescriptorSetLayoutBinding, 8> meshBindings = {
+                VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+                VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr}};
+            result = makeLayout(meshBindings, virtualGeometryMeshLayout);
+            if (!result) return result;
+            const std::array<DescriptorBindingDesc, 8> meshAbi = {
+                DescriptorBindingDesc{0, meshBindings[0], sizeof(std::uint32_t)},
+                DescriptorBindingDesc{0, meshBindings[1], sizeof(std::uint32_t)},
+                DescriptorBindingDesc{0, meshBindings[2], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
+                DescriptorBindingDesc{0, meshBindings[3], sizeof(std::uint32_t)},
+                DescriptorBindingDesc{0, meshBindings[4]},
+                DescriptorBindingDesc{0, meshBindings[5], sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)},
+                DescriptorBindingDesc{0, meshBindings[6], sizeof(Halcyon::Renderer::Scene::TransformRow)},
+                DescriptorBindingDesc{0, meshBindings[7], sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)}};
+            GraphicsPipelineDesc meshDesc{};
+            const std::array<VkFormat, 3> meshFormats = {
+                VK_FORMAT_R32_UINT, VK_FORMAT_R32_UINT, VK_FORMAT_R32_UINT};
+            meshDesc.colorFormats = meshFormats;
+            meshDesc.depthFormat = depthFormat;
+            meshDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&virtualGeometryMeshLayout, 1};
+            meshDesc.descriptorBindings = meshAbi;
+            meshDesc.meshShader = "virtual_geometry_mesh.ms.spv";
+            meshDesc.fragmentShader = "visibility_mesh.frag.spv";
+            meshDesc.cullMode = VK_CULL_MODE_BACK_BIT;
+            meshDesc.depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+            const std::array<VkPushConstantRange, 1> meshPush = {{{VK_SHADER_STAGE_MESH_BIT_EXT, 0, 80}}};
+            meshDesc.pushConstants = meshPush;
+            result = virtualGeometryMeshPipeline.createGraphics(device, meshDesc);
+            if (!result) return result;
+        }
 
         const std::array<VkDescriptorSetLayoutBinding, 6> visibilityBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
@@ -1520,7 +1659,13 @@ struct Renderer::Impl
         case Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed:
             stats.renderPath = "VirtualGeometryIndexed";
             break;
+        case Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader:
+            stats.renderPath = "VirtualGeometryMeshShader";
+            break;
         }
+        stats.meshShaderActive = activeRenderPath ==
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
+        stats.meshShaderFallbackReason = meshShaderFallbackReason;
         // SceneManager resolves stable handles before submission. Rendering
         // only consumes contiguous resource-table indices.
         for (const auto& drawInstance : packet.instances)
@@ -1528,6 +1673,14 @@ struct Renderer::Impl
             if (const MeshResource* mesh = sceneResources.mesh(drawInstance.meshId); mesh != nullptr)
             {
                 stats.primitiveCount += mesh->indexCount / 3u;
+                if (const auto* virtualAsset = sceneResources.virtualGeometry(drawInstance.meshId))
+                {
+                    stats.virtualDagNodeCount = static_cast<std::uint32_t>(virtualAsset->dagNodes.size());
+                    stats.virtualSelectedNodeCount = 0u;
+                    for (const auto& node : virtualAsset->dagNodes)
+                        if (node.parentIndex == std::numeric_limits<std::uint32_t>::max())
+                            ++stats.virtualSelectedNodeCount;
+                }
             }
         }
         stats.taaHistoryValid = config.enableTaa && taaHistoryValid && hasRenderedFrame &&
@@ -1692,8 +1845,8 @@ struct Renderer::Impl
             currentFrame < virtualGeometryValid.size() && virtualGeometryValid[currentFrame])
         {
             const auto counters = gpuAllocator.readBuffer(
-                virtualGeometryReadbacks[currentFrame], 0, sizeof(std::uint32_t) * 3u);
-            if (counters && counters.value().size() >= sizeof(std::uint32_t) * 3u)
+                virtualGeometryReadbacks[currentFrame], 0, sizeof(std::uint32_t) * 5u);
+            if (counters && counters.value().size() >= sizeof(std::uint32_t) * 5u)
             {
                 std::memcpy(&stats.virtualVisibleMeshletCount, counters.value().data(),
                     sizeof(std::uint32_t));
@@ -1701,6 +1854,10 @@ struct Renderer::Impl
                     counters.value().data() + sizeof(std::uint32_t), sizeof(std::uint32_t));
                 std::memcpy(&stats.virtualInvalidVisibilityCount,
                     counters.value().data() + sizeof(std::uint32_t) * 2u, sizeof(std::uint32_t));
+                std::memcpy(&stats.virtualSelectedNodeCount,
+                    counters.value().data() + sizeof(std::uint32_t) * 3u, sizeof(std::uint32_t));
+                std::memcpy(&stats.virtualLodSwitchCount,
+                    counters.value().data() + sizeof(std::uint32_t) * 4u, sizeof(std::uint32_t));
             }
         }
         if (frame.submitted && config.enableGpuDrivenScene &&
@@ -2009,6 +2166,9 @@ struct Renderer::Impl
         case Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed:
             stats.renderPath = "VirtualGeometryIndexed";
             break;
+        case Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader:
+            stats.renderPath = "VirtualGeometryMeshShader";
+            break;
         }
         stats.materialDescriptorBindCount = materialDescriptorBindCount;
         stats.gpuDrivenActive = gpuDrivenActive;
@@ -2183,7 +2343,8 @@ VoidResult Renderer::Impl::recordFrame(
         return fail("GPU scene upload frame slot is out of range");
 
     RendererConfig passConfig = config;
-    if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed ||
+        config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader)
     {
         constexpr std::uint32_t unsupportedFlags =
             static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
@@ -2213,6 +2374,11 @@ VoidResult Renderer::Impl::recordFrame(
             ? 0u
             : static_cast<std::uint64_t>(firstVirtualAsset->meshlets.size()) *
                 static_cast<std::uint64_t>(packet.instances.size());
+        const bool meshShaderPath = config.renderPath ==
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
+        const std::uint64_t backendMeshletCapacity = meshShaderPath
+            ? static_cast<std::uint64_t>(caps.maxMeshWorkGroupCountX)
+            : static_cast<std::uint64_t>(physicalProperties.limits.maxDrawIndirectCount);
         const bool allVirtualAssets = !packet.instances.empty() &&
             packet.instances.size() <= VulkanFrameResources::MaxVirtualGeometryInstances &&
             firstVirtualAsset != nullptr &&
@@ -2223,6 +2389,8 @@ VoidResult Renderer::Impl::recordFrame(
             firstVirtualAsset->meshletTriangles.size() <= std::numeric_limits<std::uint32_t>::max() &&
             firstVirtualAsset->indices.size() <= std::numeric_limits<std::uint32_t>::max() &&
             firstVirtualAsset->lods.size() <= std::numeric_limits<std::uint32_t>::max() &&
+            firstVirtualAsset->dagNodes.size() <=
+                VulkanFrameResources::MaxVirtualGeometryMeshlets &&
             fitsStorageRange(firstVirtualAsset->meshlets.size(),
                 sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)) &&
             fitsStorageRange(firstVirtualAsset->vertices.size(),
@@ -2232,8 +2400,11 @@ VoidResult Renderer::Impl::recordFrame(
                 sizeof(std::uint8_t)) &&
             fitsStorageRange(firstVirtualAsset->indices.size(), sizeof(std::uint32_t)) &&
             fitsStorageRange(firstVirtualAsset->lods.size(), sizeof(Halcyon::Renderer::Scene::VirtualGeometryLod)) &&
+            fitsStorageRange(firstVirtualAsset->dagNodes.size(),
+                sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode)) &&
+            fitsStorageRange(firstVirtualAsset->dagNodes.size(), sizeof(std::uint32_t) * 4u) &&
             possibleMeshletDraws <= VulkanFrameResources::MaxVirtualGeometryMeshlets &&
-            possibleMeshletDraws <= physicalProperties.limits.maxDrawIndirectCount &&
+            possibleMeshletDraws <= backendMeshletCapacity &&
             std::all_of(packet.instances.begin(), packet.instances.end(),
                 [&](const InstanceData& instance)
                 {
@@ -2254,7 +2425,7 @@ VoidResult Renderer::Impl::recordFrame(
                         // fixed winding. Mirrored transforms would invert
                         // that winding, so keep them on the established
                         // indexed fallback path for correctness.
-                        std::isfinite(determinant) && determinant > 1.0e-8f &&
+                        std::isfinite(determinant) && determinant > 1.0e-12f &&
                         gpu->meshlets.buffer != VK_NULL_HANDLE &&
                         gpu->meshletVertices.buffer != VK_NULL_HANDLE &&
                         gpu->vertices.buffer != VK_NULL_HANDLE &&
@@ -2262,11 +2433,54 @@ VoidResult Renderer::Impl::recordFrame(
                 });
         if (!allVirtualAssets)
         {
+            std::string fallbackReason =
+                "Virtual Geometry packet is incompatible with the selected backend";
+            if (packet.instances.empty())
+                fallbackReason = "Virtual Geometry packet has no instances";
+            else if (firstVirtualAsset == nullptr)
+                fallbackReason = "Virtual Geometry sidecar/runtime asset is unavailable";
+            else if (possibleMeshletDraws > VulkanFrameResources::MaxVirtualGeometryMeshlets ||
+                possibleMeshletDraws > backendMeshletCapacity)
+                fallbackReason = "Virtual Geometry meshlet command capacity is insufficient";
+            else
+            {
+                for (const auto& instance : packet.instances)
+                {
+                    const auto* asset = sceneResources.virtualGeometryDense(instance.meshId);
+                    const auto* gpu = sceneResources.virtualGeometryBuffersDense(instance.meshId);
+                    if ((instance.flags & unsupportedFlags) != 0u)
+                        fallbackReason = "Virtual Geometry instance uses unsupported material/render flags";
+                    else if (instance.meshId != sharedVirtualMeshId || asset != firstVirtualAsset)
+                        fallbackReason = "Virtual Geometry packet references more than one mesh table";
+                    else if (asset == nullptr || !asset->hasUniformPrimitiveMaterial() ||
+                        !sceneResources.virtualGeometryMaterialCompatible(instance.materialId))
+                        fallbackReason = "Virtual Geometry material ABI is incompatible";
+                    else if (gpu == nullptr || gpu->meshlets.buffer == VK_NULL_HANDLE ||
+                        gpu->meshletVertices.buffer == VK_NULL_HANDLE ||
+                        gpu->vertices.buffer == VK_NULL_HANDLE || gpu->indices.buffer == VK_NULL_HANDLE)
+                        fallbackReason = "Virtual Geometry GPU buffers are unavailable";
+                    else
+                    {
+                        const glm::mat4 model = glm::make_mat4(instance.transform.data());
+                        const float determinant = glm::determinant(glm::mat3(model));
+                        if (!std::isfinite(determinant) || determinant <= 1.0e-12f)
+                            fallbackReason = "Virtual Geometry instance transform is singular or mirrored";
+                        else
+                            continue;
+                    }
+                    break;
+                }
+            }
             passConfig.renderPath = config.enableGpuDrivenScene
                 ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
                 : Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
-            setError("VirtualGeometryIndexed requires a fully compatible static packet; "
-                "using the established indexed fallback");
+            fallbackReason += "; using the established indexed fallback";
+            if (meshShaderPath && meshShaderFallbackReason != fallbackReason)
+            {
+                meshShaderFallbackReason = fallbackReason;
+                HALCYON_LOG_WARN(meshShaderFallbackReason);
+            }
+            setError(std::move(fallbackReason));
         }
     }
     activeRenderPath = passConfig.renderPath ==
@@ -2275,10 +2489,14 @@ VoidResult Renderer::Impl::recordFrame(
         ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
         : passConfig.renderPath;
     virtualGeometryActive = passConfig.renderPath ==
-        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed ||
+        passConfig.renderPath ==
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
     virtualVisibilityValid = false;
     if (passConfig.renderPath !=
-        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+        passConfig.renderPath !=
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader)
         virtualHiZInitialized = false;
     const auto sceneUpload = gpuSceneBuffers.recordPendingUploads(
         frame.commandBuffer, gpuAllocator, frameUploadBuffers[currentFrame]);
@@ -2311,7 +2529,9 @@ VoidResult Renderer::Impl::recordFrame(
     const VkBuffer gpuIndexBuffer = sceneResources.gpuDrivenIndexBuffer();
     const VkBuffer gpuMeshDrawBuffer = sceneResources.meshDrawBuffer();
     const bool legacyGpuDrivenPath = passConfig.renderPath !=
-        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+        passConfig.renderPath !=
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
     bool gpuIndirectCompatible = legacyGpuDrivenPath && config.enableGpuDrivenScene &&
         gpuSceneInstanceCount != 0 &&
         gpuVertexBuffer != VK_NULL_HANDLE && gpuIndexBuffer != VK_NULL_HANDLE &&
@@ -2327,6 +2547,7 @@ VoidResult Renderer::Impl::recordFrame(
 
     FramePassContext ctx{};
     ctx.device = device;
+    ctx.cmdDrawMeshTasksIndirectCount = cmdDrawMeshTasksIndirectCount;
     ctx.frame = &frame;
     ctx.packet = &packet;
     ctx.config = &passConfig;
@@ -2352,6 +2573,7 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.virtualIndirectDrawCapacity = std::min<std::uint32_t>(
         VulkanFrameResources::MaxVirtualGeometryMeshlets,
         physicalProperties.limits.maxDrawIndirectCount);
+    ctx.virtualMeshWorkGroupCapacity = caps.maxMeshWorkGroupCountX;
     // GpuDrivenIndexed is also selected by enableGpuDrivenScene while the
     // public renderPath remains DeferredIndexed. Keep the bindless ABI for
     // that established path; when GPU-driven rendering is disabled (including
@@ -2481,8 +2703,13 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.virtualCullFrame = m3.virtualCullFrame;
     ctx.visibleMeshlets = m3.visibleMeshlets;
     ctx.visibleMeshletCount = m3.visibleMeshletCount;
+    ctx.selectedLodNodes = m3.selectedLodNodes;
+    ctx.selectedLodCount = m3.selectedLodCount;
+    ctx.lodBalanceDepth = m3.lodBalanceDepth;
     ctx.meshletIndirect = m3.meshletIndirect;
     ctx.meshletIndirectCount = m3.meshletIndirectCount;
+    ctx.meshletMeshIndirect = m3.meshletMeshIndirect;
+    ctx.meshletMeshIndirectCount = m3.meshletMeshIndirectCount;
     ctx.virtualValidation = m3.virtualValidation;
     // M5 visibility resources remain declared for ABI stability; unsupported
     // devices continue through the established deferred/GPU-driven passes.
@@ -2527,19 +2754,22 @@ VoidResult Renderer::Impl::recordFrame(
     swapchainBeginDependency.pImageMemoryBarriers = &swapchainBeginBarrier;
     vkCmdPipelineBarrier2(frame.commandBuffer, &swapchainBeginDependency);
 
-    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    const bool virtualGeometryPath =
+        passConfig.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed ||
+        passConfig.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
+    if (!virtualGeometryPath)
         addCsmShadowPasses(graph, ctx);
     addVirtualGeometryPasses(graph, ctx);
-    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (!virtualGeometryPath)
         addGBufferPass(graph, ctx);
-    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (!virtualGeometryPath)
     {
         addHiZOcclusionPass(graph, ctx);
         addClusterBuildPass(graph, ctx);
     }
-    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (!virtualGeometryPath)
         addDeferredLightingPass(graph, ctx);
-    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (!virtualGeometryPath)
         addTransparencyPass(graph, ctx);
     // M5 writes HDR and camera motion directly, then participates in the same
     // temporal resolve, tonemap and present chain as indexed rendering.
@@ -2759,8 +2989,34 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             descriptorLimits.maxColorAttachments >= 3u &&
             descriptorLimits.maxFragmentOutputAttachments >= 3u &&
             descriptorLimits.maxPushConstantsSize >= 128u;
+        // The mesh shader pipeline is optional. Auto mode falls back before
+        // swapchain creation when the extension/feature cannot be enabled;
+        // Required mode reports a startup error.
+        if (impl_->config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader)
+        {
+            const bool meshAvailable = impl_->caps.meshShader &&
+                impl_->config.meshShader != FeatureMode::Disabled;
+            if (!meshAvailable && impl_->config.meshShader == FeatureMode::Required)
+            {
+                impl_->setError("VirtualGeometryMeshShader is required but VK_EXT_mesh_shader "
+                    "or its meshShader feature is unavailable");
+                impl_->cleanup();
+                return Halcyon::Result<void>::failure({Halcyon::ErrorCode::Unsupported,
+                    impl_->lastError, "Vulkan renderer initialization"});
+            }
+            if (!meshAvailable)
+            {
+                impl_->config.renderPath =
+                    Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+                impl_->meshShaderFallbackReason =
+                    "VK_EXT_mesh_shader or its meshShader feature is unavailable";
+                impl_->setError("VirtualGeometryMeshShader unavailable; fell back to "
+                    "VirtualGeometryIndexed");
+            }
+        }
         if (impl_->config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
             (!impl_->caps.descriptorIndexing || !impl_->caps.indirectCount ||
+                !impl_->caps.scalarBlockLayout || !impl_->caps.geometryShader ||
                 !impl_->caps.fragmentBarycentric || !visibilityIntegerAttachment ||
                 !hdrStorageImage || !motionStorageImage || !hizImageSupport ||
                 !virtualDescriptorSupport))

@@ -72,12 +72,183 @@ struct VirtualGeometrySelection
 
 void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
 {
-    if (ctx.config == nullptr || ctx.config->renderPath !=
-            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (ctx.config == nullptr ||
+        (ctx.config->renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+         ctx.config->renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader))
         return;
     auto* passCtx = &ctx;
+    const auto previousHiZHandle = ctx.hiz;
+    const bool meshShaderPath = ctx.config->renderPath ==
+        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryMeshShader;
+    graph.addPass<Graph::FrameGraph::Empty>("M6 GPU LOD selection",
+        [passCtx](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+        {
+            passCtx->selectedLodNodes = builder.write(passCtx->selectedLodNodes,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination);
+            passCtx->selectedLodCount = builder.write(passCtx->selectedLodCount,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::Indirect |
+                    Graph::ResourceUsage::TransferDestination);
+            passCtx->lodBalanceDepth = builder.write(passCtx->lodBalanceDepth,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination);
+            builder.sideEffect();
+        },
+        [passCtx](const Graph::FrameGraphResources& resources,
+            const Graph::FrameGraph::Empty&, Graph::CommandContext&)
+        {
+            auto& ctx = *passCtx;
+            const auto selection = selectVirtualGeometry(ctx);
+            if (!selection || ctx.pipelines == nullptr || ctx.sceneResources == nullptr ||
+                ctx.frameGraphProvider == nullptr ||
+                ctx.pipelines->lodSelectPipeline.computePipeline() == VK_NULL_HANDLE)
+                return;
+            const auto* asset = selection.asset;
+            const auto* gpu = ctx.sceneResources->virtualGeometryBuffersDense(selection.meshId);
+            if (gpu == nullptr || gpu->dagNodes.buffer == VK_NULL_HANDLE ||
+                gpu->dagEdges.buffer == VK_NULL_HANDLE || gpu->lodStates.buffer == VK_NULL_HANDLE)
+                return;
+            const auto& selectedNodes = resources.get<Graph::FrameGraphBuffer>(ctx.selectedLodNodes);
+            const auto& selectedCount = resources.get<Graph::FrameGraphBuffer>(ctx.selectedLodCount);
+            const auto& balanceDepth = resources.get<Graph::FrameGraphBuffer>(ctx.lodBalanceDepth);
+            const VkBuffer statesBuffer = gpu->lodStates.buffer;
+            const VkBuffer selectedBuffer = ctx.frameGraphProvider->buffer(selectedNodes.native);
+            const VkBuffer countBuffer = ctx.frameGraphProvider->buffer(selectedCount.native);
+            const VkBuffer balanceBuffer = ctx.frameGraphProvider->buffer(balanceDepth.native);
+            if (statesBuffer == VK_NULL_HANDLE || selectedBuffer == VK_NULL_HANDLE ||
+                countBuffer == VK_NULL_HANDLE || balanceBuffer == VK_NULL_HANDLE)
+                return;
+            vkCmdFillBuffer(ctx.commandBuffer(), selectedBuffer, 0, VK_WHOLE_SIZE, 0u);
+            vkCmdFillBuffer(ctx.commandBuffer(), countBuffer, 0,
+                sizeof(std::uint32_t) * 2u, 0u);
+            vkCmdFillBuffer(ctx.commandBuffer(), balanceBuffer, 0, sizeof(std::uint32_t),
+                0u);
+            VkBufferMemoryBarrier2 reset[3]{};
+            for (auto& barrier : reset)
+            {
+                barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            }
+            reset[0].buffer = selectedBuffer; reset[0].size = VK_WHOLE_SIZE;
+            reset[1].buffer = countBuffer; reset[1].size = sizeof(std::uint32_t) * 2u;
+            reset[2].buffer = balanceBuffer; reset[2].size = sizeof(std::uint32_t);
+            VkBufferMemoryBarrier2 stateBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+            stateBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            stateBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            stateBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            stateBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            stateBarrier.buffer = statesBuffer;
+            stateBarrier.size = VK_WHOLE_SIZE;
+            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            std::array<VkBufferMemoryBarrier2, 4> barriers = {
+                reset[0], reset[1], reset[2], stateBarrier};
+            dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+            dependency.pBufferMemoryBarriers = barriers.data();
+            vkCmdPipelineBarrier2(ctx.commandBuffer(), &dependency);
+            const VkDescriptorSet set = ctx.allocateSet(ctx.pipelines->lodSelectLayout);
+            if (set == VK_NULL_HANDLE) return;
+            ctx.writeStorageBuffer(set, 0, gpu->dagNodes.buffer,
+                asset->dagNodes.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode));
+            ctx.writeStorageBuffer(set, 1, gpu->dagEdges.buffer,
+                std::max<VkDeviceSize>(sizeof(Halcyon::Renderer::Scene::VirtualGeometryDagEdge),
+                    asset->dagEdges.size() * sizeof(Halcyon::Renderer::Scene::VirtualGeometryDagEdge)));
+            ctx.writeStorageBuffer(set, 2, statesBuffer,
+                asset->dagNodes.size() * sizeof(std::uint32_t) * 4u);
+            ctx.writeStorageBuffer(set, 3, selectedBuffer, selectedNodes.descriptor.size);
+            ctx.writeStorageBuffer(set, 4, countBuffer, sizeof(std::uint32_t) * 2u);
+            ctx.writeStorageBuffer(set, 5, balanceBuffer, sizeof(std::uint32_t));
+            ctx.writeStorageBuffer(set, 6, gpu->clusterAdjacencyOffsets.buffer,
+                (asset->clusters.size() + 1u) * sizeof(std::uint32_t));
+            ctx.writeStorageBuffer(set, 7, gpu->clusterAdjacencyIndices.buffer,
+                std::max<VkDeviceSize>(sizeof(std::uint32_t),
+                    gpu->clusterAdjacencyIndices.size));
+            std::uint32_t rootNode = 0u;
+            for (std::uint32_t i = 0; i < asset->dagNodes.size(); ++i)
+                if (asset->dagNodes[i].parentIndex == std::numeric_limits<std::uint32_t>::max())
+                { rootNode = i; break; }
+            const float projectionY = std::abs(ctx.packet->camera.projection[1][1]);
+            struct alignas(16) LodFrame
+            {
+                glm::mat4 viewProjection;
+                glm::vec4 cameraAndFov;
+                glm::uvec4 counts;
+                glm::uvec4 outputAndRoot;
+                glm::vec4 thresholds;
+            } frame{};
+            frame.viewProjection = ctx.packet->camera.viewProjection;
+            const glm::mat4 firstModel = glm::make_mat4(selection.instance->transform.data());
+            const glm::vec4 cameraObject = glm::inverse(firstModel) *
+                glm::vec4(glm::vec3(ctx.packet->camera.positionAndNear), 1.0f);
+            frame.cameraAndFov = glm::vec4(glm::vec3(cameraObject),
+                projectionY > 1.0e-6f ? 2.0f * std::atan(1.0f / projectionY) : glm::radians(60.0f));
+            frame.counts = glm::uvec4(
+                static_cast<std::uint32_t>(std::max(1.0f, ctx.packet->camera.viewportAndInvViewport.y)),
+                static_cast<std::uint32_t>(asset->dagNodes.size()),
+                static_cast<std::uint32_t>(asset->dagEdges.size()),
+                static_cast<std::uint32_t>(asset->dagNodes.size()));
+            frame.outputAndRoot = glm::uvec4(
+                std::min<std::uint32_t>(VulkanFrameResources::MaxVirtualGeometryMeshlets,
+                    static_cast<std::uint32_t>(asset->dagNodes.size())), rootNode, 0u, 0u);
+            frame.thresholds = glm::vec4(1.0f, 0.75f, 0.0f, 0.0f);
+            static_assert(sizeof(LodFrame) == 128);
+            vkCmdBindPipeline(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE,
+                ctx.pipelines->lodSelectPipeline.computePipeline());
+            vkCmdBindDescriptorSets(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE,
+                ctx.pipelines->lodSelectPipeline.layout(), 0, 1, &set, 0, nullptr);
+            const std::uint32_t groupCount =
+                (static_cast<std::uint32_t>(asset->dagNodes.size()) + 63u) / 64u;
+            const auto dispatchPhase = [&](std::uint32_t phase)
+            {
+                frame.outputAndRoot.z = phase;
+                vkCmdPushConstants(ctx.commandBuffer(), ctx.pipelines->lodSelectPipeline.layout(),
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(frame), &frame);
+                vkCmdDispatch(ctx.commandBuffer(), groupCount, 1u, 1u);
+            };
+            const auto phaseBarrier = [&]()
+            {
+                std::array<VkBufferMemoryBarrier2, 4> phaseBarriers{};
+                for (auto& barrier : phaseBarriers)
+                {
+                    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
+                        VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+                }
+                phaseBarriers[0].buffer = statesBuffer;
+                phaseBarriers[0].size = VK_WHOLE_SIZE;
+                phaseBarriers[1].buffer = balanceBuffer;
+                phaseBarriers[1].size = sizeof(std::uint32_t);
+                phaseBarriers[2].buffer = countBuffer;
+                phaseBarriers[2].size = sizeof(std::uint32_t) * 2u;
+                phaseBarriers[3].buffer = selectedBuffer;
+                phaseBarriers[3].size = VK_WHOLE_SIZE;
+                VkDependencyInfo phaseDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                phaseDependency.bufferMemoryBarrierCount =
+                    static_cast<std::uint32_t>(phaseBarriers.size());
+                phaseDependency.pBufferMemoryBarriers = phaseBarriers.data();
+                vkCmdPipelineBarrier2(ctx.commandBuffer(), &phaseDependency);
+            };
+            dispatchPhase(0u);
+            phaseBarrier();
+            dispatchPhase(1u);
+            phaseBarrier();
+            std::uint32_t balanceIterations = 1u;
+            for (const auto& node : asset->dagNodes)
+                balanceIterations = std::max(balanceIterations, node.lodDepth + 1u);
+            for (std::uint32_t iteration = 0u; iteration < balanceIterations; ++iteration)
+            {
+                dispatchPhase(2u);
+                phaseBarrier();
+            }
+            dispatchPhase(3u);
+            phaseBarrier();
+        });
     graph.addPass<Graph::FrameGraph::Empty>("M5 meshlet cull and indirect",
-        [passCtx](Graph::FrameGraph::Builder& builder,
+        [passCtx, previousHiZHandle](Graph::FrameGraph::Builder& builder,
             Graph::FrameGraph::Empty&)
         {
             passCtx->virtualTransforms = builder.write(passCtx->virtualTransforms,
@@ -86,21 +257,29 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::Uniform);
             passCtx->virtualCullFrame = builder.write(passCtx->virtualCullFrame,
                 Graph::ResourceUsage::Uniform);
-            builder.read(passCtx->hiz, Graph::ResourceUsage::Sampled);
+            builder.read(previousHiZHandle, Graph::ResourceUsage::Sampled);
             passCtx->visibleMeshlets = builder.write(passCtx->visibleMeshlets,
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination);
             passCtx->visibleMeshletCount = builder.write(passCtx->visibleMeshletCount,
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::Indirect |
                     Graph::ResourceUsage::TransferDestination);
+            builder.read(passCtx->selectedLodNodes, Graph::ResourceUsage::Storage);
+            builder.read(passCtx->selectedLodCount, Graph::ResourceUsage::Storage);
             passCtx->meshletIndirect = builder.write(passCtx->meshletIndirect,
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::Indirect |
                     Graph::ResourceUsage::TransferDestination);
             passCtx->meshletIndirectCount = builder.write(passCtx->meshletIndirectCount,
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::Indirect |
                     Graph::ResourceUsage::TransferDestination);
+            passCtx->meshletMeshIndirect = builder.write(passCtx->meshletMeshIndirect,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::Indirect |
+                    Graph::ResourceUsage::TransferDestination);
+            passCtx->meshletMeshIndirectCount = builder.write(passCtx->meshletMeshIndirectCount,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::Indirect |
+                    Graph::ResourceUsage::TransferDestination);
             builder.sideEffect();
         },
-        [passCtx](const Graph::FrameGraphResources& resources,
+        [passCtx, meshShaderPath, previousHiZHandle](const Graph::FrameGraphResources& resources,
             const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
             auto& ctx = *passCtx;
@@ -118,15 +297,19 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             const auto& commands = resources.get<Graph::FrameGraphBuffer>(ctx.meshletIndirect);
             const auto& indirectCount =
                 resources.get<Graph::FrameGraphBuffer>(ctx.meshletIndirectCount);
+            const auto& meshCommands = resources.get<Graph::FrameGraphBuffer>(ctx.meshletMeshIndirect);
+            const auto& meshCommandCount = resources.get<Graph::FrameGraphBuffer>(ctx.meshletMeshIndirectCount);
             const auto& transformRows = resources.get<Graph::FrameGraphBuffer>(ctx.virtualTransforms);
             const auto& materialRows = resources.get<Graph::FrameGraphBuffer>(ctx.virtualMeshMaterials);
             const auto& cullFrame = resources.get<Graph::FrameGraphBuffer>(ctx.virtualCullFrame);
-            const auto& previousHiZ = resources.getTexture(ctx.hiz);
+            const auto& previousHiZ = resources.getTexture(previousHiZHandle);
             const VkBuffer visibleBuffer = ctx.frameGraphProvider->buffer(visible.native);
             const VkBuffer visibleCountBuffer = ctx.frameGraphProvider->buffer(visibleCount.native);
             const VkBuffer commandBuffer = ctx.frameGraphProvider->buffer(commands.native);
             const VkBuffer indirectCountBuffer =
                 ctx.frameGraphProvider->buffer(indirectCount.native);
+            const VkBuffer meshCommandBuffer = ctx.frameGraphProvider->buffer(meshCommands.native);
+            const VkBuffer meshCommandCountBuffer = ctx.frameGraphProvider->buffer(meshCommandCount.native);
             const auto* transformAllocation =
                 ctx.frameGraphProvider->nativeBufferAllocation(transformRows.native);
             const auto* materialAllocation =
@@ -182,7 +365,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 return;
             }
             if (visibleBuffer == VK_NULL_HANDLE || visibleCountBuffer == VK_NULL_HANDLE ||
-                commandBuffer == VK_NULL_HANDLE || indirectCountBuffer == VK_NULL_HANDLE)
+                commandBuffer == VK_NULL_HANDLE || indirectCountBuffer == VK_NULL_HANDLE ||
+                meshCommandBuffer == VK_NULL_HANDLE || meshCommandCountBuffer == VK_NULL_HANDLE)
             {
                 if (ctx.virtualHiZInitialized != nullptr)
                     *ctx.virtualHiZInitialized = false;
@@ -194,7 +378,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             const std::uint32_t meshId = selection.meshId;
             if (!selection || asset->meshlets.empty() ||
                 ctx.pipelines->meshletCullPipeline.computePipeline() == VK_NULL_HANDLE ||
-                ctx.pipelines->meshletIndirectPipeline.computePipeline() == VK_NULL_HANDLE)
+                (!meshShaderPath && ctx.pipelines->meshletIndirectPipeline.computePipeline() == VK_NULL_HANDLE) ||
+                (meshShaderPath && (ctx.pipelines->meshletMeshIndirectPipeline.computePipeline() == VK_NULL_HANDLE ||
+                    ctx.pipelines->virtualGeometryMeshPipeline.pipeline() == VK_NULL_HANDLE)))
             {
                 if (ctx.virtualHiZInitialized != nullptr)
                     *ctx.virtualHiZInitialized = false;
@@ -203,7 +389,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
 
             const std::uint32_t kVisibleCapacity = std::min(
                 VulkanFrameResources::MaxVirtualGeometryMeshlets,
-                ctx.virtualIndirectDrawCapacity);
+                meshShaderPath ? ctx.virtualMeshWorkGroupCapacity
+                               : ctx.virtualIndirectDrawCapacity);
             if (kVisibleCapacity == 0u)
             {
                 if (ctx.virtualHiZInitialized != nullptr)
@@ -240,7 +427,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             vkCmdFillBuffer(ctx.commandBuffer(), visibleBuffer, 0, VK_WHOLE_SIZE, 0);
             vkCmdFillBuffer(ctx.commandBuffer(), commandBuffer, 0, VK_WHOLE_SIZE, 0);
             vkCmdFillBuffer(ctx.commandBuffer(), indirectCountBuffer, 0, sizeof(std::uint32_t), 0);
-            VkBufferMemoryBarrier2 resetBarriers[4]{};
+            vkCmdFillBuffer(ctx.commandBuffer(), meshCommandBuffer, 0, VK_WHOLE_SIZE, 0);
+            vkCmdFillBuffer(ctx.commandBuffer(), meshCommandCountBuffer, 0, sizeof(std::uint32_t), 0);
+            VkBufferMemoryBarrier2 resetBarriers[6]{};
             for (auto& barrier : resetBarriers)
             {
                 barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -254,8 +443,10 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             resetBarriers[2].buffer = commandBuffer; resetBarriers[2].size = VK_WHOLE_SIZE;
             resetBarriers[3].buffer = indirectCountBuffer;
             resetBarriers[3].size = sizeof(std::uint32_t);
+            resetBarriers[4].buffer = meshCommandBuffer; resetBarriers[4].size = VK_WHOLE_SIZE;
+            resetBarriers[5].buffer = meshCommandCountBuffer; resetBarriers[5].size = sizeof(std::uint32_t);
             VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            dependency.bufferMemoryBarrierCount = 4;
+            dependency.bufferMemoryBarrierCount = 6;
             dependency.pBufferMemoryBarriers = resetBarriers;
             vkCmdPipelineBarrier2(ctx.commandBuffer(), &dependency);
 
@@ -308,6 +499,24 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 ctx.frameGraphProvider->buffer(transformRows.native), transformRows.descriptor.size);
             ctx.writeUniformBuffer(cullSet, 5,
                 ctx.frameGraphProvider->buffer(cullFrame.native), sizeof(CullFrameData));
+            ctx.writeStorageBuffer(cullSet, 6, gpu->dagNodes.buffer,
+                asset->dagNodes.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode));
+            ctx.writeStorageBuffer(cullSet, 7, gpu->clusters.buffer,
+                asset->clusters.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuCluster));
+            ctx.writeStorageBuffer(cullSet, 8, gpu->clusterMeshletIndices.buffer,
+                gpu->clusterMeshletIndices.size);
+            const auto& selectedNodes = resources.get<Graph::FrameGraphBuffer>(ctx.selectedLodNodes);
+            const auto& selectedCount = resources.get<Graph::FrameGraphBuffer>(ctx.selectedLodCount);
+            const VkBuffer selectionCounterBuffer =
+                ctx.frameGraphProvider->buffer(selectedCount.native);
+            ctx.writeStorageBuffer(cullSet, 9,
+                ctx.frameGraphProvider->buffer(selectedNodes.native), selectedNodes.descriptor.size);
+            ctx.writeStorageBuffer(cullSet, 10,
+                ctx.frameGraphProvider->buffer(selectedCount.native), sizeof(std::uint32_t));
+            ctx.writeStorageBuffer(cullSet, 11, gpu->meshletDagNodes.buffer,
+                asset->meshlets.size() * sizeof(std::uint32_t));
+            ctx.writeStorageBuffer(cullSet, 12, gpu->lodStates.buffer,
+                asset->dagNodes.size() * sizeof(std::uint32_t) * 4u);
             struct alignas(16) CullConstants
             {
                 glm::vec4 planes[6];
@@ -376,13 +585,33 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 constants.cameraPosition = glm::inverse(model) * cameraWorld;
                 constants.meshletCount = meshletCount;
                 constants.instanceIndex = candidateIndex;
-                const float distance = std::max(0.0f,
+                const float distance = std::max(1.0e-4f,
                     glm::length(glm::vec3(constants.cameraPosition) - boundsCenter) - boundsRadius);
+                // M6 uses projected geometric error instead of fixed distance
+                // bands. Derive the vertical FOV from the projection matrix
+                // so the CPU selection stays consistent with the camera ABI.
+                const float projectionY = std::abs(ctx.packet->camera.projection[1][1]);
+                const float verticalFov = projectionY > 1.0e-6f
+                    ? 2.0f * std::atan(1.0f / projectionY) : glm::radians(60.0f);
+                const float viewportHeight = std::max(1.0f, ctx.packet->camera.viewportAndInvViewport.y);
                 std::uint32_t lod = 0u;
-                if (lodLevelCount > 2u && distance > boundsRadius * 20.0f)
-                    lod = 2u;
-                else if (lodLevelCount > 1u && distance > boundsRadius * 8.0f)
-                    lod = 1u;
+                for (std::uint32_t candidateLod = lodLevelCount; candidateLod-- > 0u;)
+                {
+                    const std::size_t lodIndex = static_cast<std::size_t>(candidateLod);
+                    const std::size_t primitiveLodIndex = lodIndex;
+                    if (primitiveLodIndex >= asset->lods.size() ||
+                        asset->lods[primitiveLodIndex].primitiveIndex !=
+                            asset->lods.front().primitiveIndex)
+                        continue;
+                    const float screenError = Halcyon::Renderer::Scene::virtualGeometryScreenError(
+                        asset->lods[primitiveLodIndex].geometricError, distance,
+                        viewportHeight, verticalFov);
+                    if (screenError <= 1.0f || candidateLod == 0u)
+                    {
+                        lod = candidateLod;
+                        break;
+                    }
+                }
                 const bool sameInstance = previousInstances != nullptr &&
                     candidateIndex < previousInstances->size() &&
                     (*previousInstances)[candidateIndex].meshId == candidate.meshId &&
@@ -431,6 +660,68 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             dependency.pBufferMemoryBarriers = cullBarrier;
             vkCmdPipelineBarrier2(ctx.commandBuffer(), &dependency);
 
+            if (meshShaderPath)
+            {
+                const VkDescriptorSet meshSet = ctx.allocateSet(ctx.pipelines->meshletMeshIndirectLayout);
+                if (meshSet == VK_NULL_HANDLE) return;
+                ctx.writeStorageBuffer(meshSet, 0, visibleBuffer, visible.descriptor.size);
+                ctx.writeStorageBuffer(meshSet, 1, visibleCountBuffer, sizeof(std::uint32_t));
+                ctx.writeStorageBuffer(meshSet, 2, meshCommandBuffer, meshCommands.descriptor.size);
+                ctx.writeStorageBuffer(meshSet, 3, meshCommandCountBuffer, sizeof(std::uint32_t));
+                vkCmdBindPipeline(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE,
+                    ctx.pipelines->meshletMeshIndirectPipeline.computePipeline());
+                vkCmdBindDescriptorSets(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE,
+                    ctx.pipelines->meshletMeshIndirectPipeline.layout(), 0, 1, &meshSet, 0, nullptr);
+                const glm::uvec4 commandCapacity{visibleEntryCapacity, 0u, 0u, 0u};
+                vkCmdPushConstants(ctx.commandBuffer(),
+                    ctx.pipelines->meshletMeshIndirectPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                    0, sizeof(commandCapacity), &commandCapacity);
+                vkCmdDispatch(ctx.commandBuffer(), 1u, 1u, 1u);
+                std::array<VkBufferMemoryBarrier2, 3> meshBarriers{};
+                for (auto& barrier : meshBarriers)
+                {
+                    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                        VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT |
+                        VK_ACCESS_2_TRANSFER_READ_BIT;
+                }
+                meshBarriers[0].buffer = meshCommandBuffer; meshBarriers[0].size = VK_WHOLE_SIZE;
+                meshBarriers[1].buffer = meshCommandCountBuffer; meshBarriers[1].size = sizeof(std::uint32_t);
+                meshBarriers[2].buffer = selectionCounterBuffer;
+                meshBarriers[2].size = sizeof(std::uint32_t) * 2u;
+                dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(meshBarriers.size());
+                dependency.pBufferMemoryBarriers = meshBarriers.data();
+                vkCmdPipelineBarrier2(ctx.commandBuffer(), &dependency);
+                if (ctx.virtualVisibilityValid != nullptr)
+                {
+                    *ctx.virtualVisibilityValid = true;
+                }
+                if (ctx.debugReadbacks != nullptr &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualGeometryReadbacks.size())
+                {
+                    const VkBuffer readback =
+                        ctx.debugReadbacks->virtualGeometryReadbacks[ctx.currentFrame].buffer;
+                    if (readback != VK_NULL_HANDLE)
+                    {
+                        const VkBufferCopy visibleCopy{0, 0, sizeof(std::uint32_t)};
+                        const VkBufferCopy commandCopy{
+                            0, sizeof(std::uint32_t), sizeof(std::uint32_t)};
+                        const VkBufferCopy selectionCopy{
+                            0, sizeof(std::uint32_t) * 3u, sizeof(std::uint32_t) * 2u};
+                        vkCmdCopyBuffer(ctx.commandBuffer(), visibleCountBuffer,
+                            readback, 1, &visibleCopy);
+                        vkCmdCopyBuffer(ctx.commandBuffer(), meshCommandCountBuffer,
+                            readback, 1, &commandCopy);
+                        vkCmdCopyBuffer(ctx.commandBuffer(), selectionCounterBuffer,
+                            readback, 1, &selectionCopy);
+                    }
+                }
+                return;
+            }
+
             const VkDescriptorSet indirectSet = ctx.allocateSet(ctx.pipelines->meshletIndirectLayout);
             if (indirectSet == VK_NULL_HANDLE)
             {
@@ -465,7 +756,7 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 0, sizeof(indirectConstants), &indirectConstants);
             vkCmdDispatch(ctx.commandBuffer(), (visibleEntryCapacity + 63u) / 64u, 1, 1);
 
-            std::array<VkBufferMemoryBarrier2, 3> indirectBarriers{};
+            std::array<VkBufferMemoryBarrier2, 4> indirectBarriers{};
             for (auto& barrier : indirectBarriers)
             {
                 barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -482,7 +773,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             indirectBarriers[1].size = sizeof(std::uint32_t);
             indirectBarriers[2].buffer = indirectCountBuffer;
             indirectBarriers[2].size = sizeof(std::uint32_t);
-            dependency.bufferMemoryBarrierCount = 3;
+            indirectBarriers[3].buffer = selectionCounterBuffer;
+            indirectBarriers[3].size = sizeof(std::uint32_t) * 2u;
+            dependency.bufferMemoryBarrierCount = 4;
             dependency.pBufferMemoryBarriers = indirectBarriers.data();
             vkCmdPipelineBarrier2(ctx.commandBuffer(), &dependency);
             // Hand a fully initialized indirect stream to visibility. The
@@ -499,8 +792,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 {
                     const VkBufferCopy first{0, 0, sizeof(std::uint32_t)};
                     const VkBufferCopy second{0, sizeof(std::uint32_t), sizeof(std::uint32_t)};
+                    const VkBufferCopy selectionCopy{
+                        0, sizeof(std::uint32_t) * 3u, sizeof(std::uint32_t) * 2u};
                     vkCmdCopyBuffer(ctx.commandBuffer(), visibleCountBuffer, readback, 1, &first);
                     vkCmdCopyBuffer(ctx.commandBuffer(), indirectCountBuffer, readback, 1, &second);
+                    vkCmdCopyBuffer(ctx.commandBuffer(), selectionCounterBuffer,
+                        readback, 1, &selectionCopy);
                 }
             }
         });
@@ -511,10 +808,20 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
     // involved in the M5 path.
     const auto depth = ctx.depth;
     graph.addPass<Graph::FrameGraph::Empty>("M5 visibility rasterization",
-            [passCtx, depth](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
+            [passCtx, depth, meshShaderPath](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
         {
-            builder.read(passCtx->meshletIndirect, Graph::ResourceUsage::Indirect);
-            builder.read(passCtx->meshletIndirectCount, Graph::ResourceUsage::Indirect);
+            if (meshShaderPath)
+            {
+                builder.read(passCtx->meshletMeshIndirect, Graph::ResourceUsage::Indirect);
+                builder.read(passCtx->meshletMeshIndirectCount, Graph::ResourceUsage::Indirect);
+                builder.read(passCtx->visibleMeshlets, Graph::ResourceUsage::Storage);
+                builder.read(passCtx->visibleMeshletCount, Graph::ResourceUsage::Storage);
+            }
+            else
+            {
+                builder.read(passCtx->meshletIndirect, Graph::ResourceUsage::Indirect);
+                builder.read(passCtx->meshletIndirectCount, Graph::ResourceUsage::Indirect);
+            }
             builder.read(passCtx->virtualTransforms, Graph::ResourceUsage::Storage);
             builder.read(passCtx->virtualMeshMaterials, Graph::ResourceUsage::Storage);
             passCtx->visibility = builder.write(passCtx->visibility, Graph::ResourceUsage::ColorAttachment);
@@ -535,7 +842,7 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             builder.declareRenderPass("M5 visibility rasterization", descriptor);
             builder.sideEffect();
         },
-        [passCtx](const Graph::FrameGraphResources& resources,
+        [passCtx, meshShaderPath](const Graph::FrameGraphResources& resources,
             const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
             auto& ctx = *passCtx;
@@ -547,7 +854,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 return;
             if (ctx.frameGraphProvider == nullptr || ctx.pipelines == nullptr || ctx.gpuSceneBuffers == nullptr ||
                 ctx.sceneResources == nullptr || ctx.packet == nullptr ||
-                ctx.pipelines->visibilityPipeline.pipeline() == VK_NULL_HANDLE)
+                (!meshShaderPath && ctx.pipelines->visibilityPipeline.pipeline() == VK_NULL_HANDLE) ||
+                (meshShaderPath && (ctx.pipelines->virtualGeometryMeshPipeline.pipeline() == VK_NULL_HANDLE ||
+                    ctx.cmdDrawMeshTasksIndirectCount == nullptr)))
                 return;
             const auto info = resources.getRenderPassInfo(0);
             const auto* target = static_cast<const VulkanFrameGraphRenderTarget*>(info.target.token);
@@ -567,19 +876,28 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              const auto& visibilityResource = resources.getTexture(passCtx->visibility);
              const auto& primitiveResource = resources.getTexture(passCtx->visibilityPrimitive);
              const auto& barycentricResource = resources.getTexture(passCtx->visibilityBarycentrics);
-            const auto& depthResource = resources.getTexture(passCtx->depth);
+            const auto& transformsResource =
+                resources.get<Graph::FrameGraphBuffer>(ctx.virtualTransforms);
+            const auto& meshMaterialsResource =
+                resources.get<Graph::FrameGraphBuffer>(ctx.virtualMeshMaterials);
              const VkImage visibilityImage = ctx.frameGraphProvider->image(visibilityResource.native);
             const VkImage primitiveImage = ctx.frameGraphProvider->image(primitiveResource.native);
             const VkImage barycentricImage = ctx.frameGraphProvider->image(barycentricResource.native);
-            const VkImage depthImage = ctx.frameGraphProvider->image(depthResource.native);
+            const auto& depthResource = resources.getTexture(passCtx->depth);
+            (void)depthResource;
+            const VkImage depthImage = ctx.frameGraphProvider->image(
+                target->resources[Graph::FrameGraphRenderPass::MAX_COLOR_ATTACHMENTS]);
             const VkImageView visibilityView = ctx.frameGraphProvider->view(visibilityResource.native);
             const VkImageView primitiveView = ctx.frameGraphProvider->view(primitiveResource.native);
             const VkImageView barycentricView = ctx.frameGraphProvider->view(barycentricResource.native);
-            const auto& indirectResources = resources.get<Graph::FrameGraphBuffer>(ctx.meshletIndirect);
-            const auto& countResources =
-                resources.get<Graph::FrameGraphBuffer>(ctx.meshletIndirectCount);
-            const VkBuffer indirectBuffer = ctx.frameGraphProvider->buffer(indirectResources.native);
-            const VkBuffer countBuffer = ctx.frameGraphProvider->buffer(countResources.native);
+            const auto* indirectResources = meshShaderPath
+                ? &resources.get<Graph::FrameGraphBuffer>(ctx.meshletMeshIndirect)
+                : &resources.get<Graph::FrameGraphBuffer>(ctx.meshletIndirect);
+            const auto* countResources = meshShaderPath
+                ? &resources.get<Graph::FrameGraphBuffer>(ctx.meshletMeshIndirectCount)
+                : &resources.get<Graph::FrameGraphBuffer>(ctx.meshletIndirectCount);
+            const VkBuffer indirectBuffer = ctx.frameGraphProvider->buffer(indirectResources->native);
+            const VkBuffer countBuffer = ctx.frameGraphProvider->buffer(countResources->native);
             if (visibilityImage == VK_NULL_HANDLE || primitiveImage == VK_NULL_HANDLE ||
                 barycentricImage == VK_NULL_HANDLE || depthImage == VK_NULL_HANDLE ||
                 target->views[0] == VK_NULL_HANDLE || target->views[1] == VK_NULL_HANDLE ||
@@ -626,8 +944,10 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              rendering.pColorAttachments = colors.data(); rendering.pDepthAttachment = &z;
             vkCmdBeginRendering(ctx.commandBuffer(), &rendering);
             vkCmdBindPipeline(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                ctx.pipelines->visibilityPipeline.pipeline());
-            const VkDescriptorSet set = ctx.allocateSet(ctx.pipelines->visibilityLayout);
+                meshShaderPath ? ctx.pipelines->virtualGeometryMeshPipeline.pipeline()
+                                : ctx.pipelines->visibilityPipeline.pipeline());
+            const VkDescriptorSet set = ctx.allocateSet(meshShaderPath
+                ? ctx.pipelines->virtualGeometryMeshLayout : ctx.pipelines->visibilityLayout);
             if (set == VK_NULL_HANDLE)
             {
                 vkCmdEndRendering(ctx.commandBuffer());
@@ -651,23 +971,47 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 return;
             }
-            ctx.writeStorageBuffer(set, 0, gpu->meshlets.buffer,
-                asset->meshlets.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet));
-            ctx.writeStorageBuffer(set, 1, gpu->meshletVertices.buffer,
-                asset->meshletVertices.size() * sizeof(std::uint32_t));
-            ctx.writeStorageBuffer(set, 2, gpu->vertices.buffer,
-                asset->vertices.size() * sizeof(asset->vertices[0]));
-            ctx.writeStorageBuffer(set, 3, gpu->indices.buffer,
-                asset->indices.size() * sizeof(std::uint32_t));
-            const auto& transforms = resources.get<Graph::FrameGraphBuffer>(ctx.virtualTransforms);
-            const auto& meshMaterials =
-                resources.get<Graph::FrameGraphBuffer>(ctx.virtualMeshMaterials);
-            ctx.writeStorageBuffer(set, 4, ctx.frameGraphProvider->buffer(transforms.native),
-                transforms.descriptor.size);
-            ctx.writeStorageBuffer(set, 5,
-                ctx.frameGraphProvider->buffer(meshMaterials.native), meshMaterials.descriptor.size);
+            if (meshShaderPath)
+            {
+                const auto& visible = resources.get<Graph::FrameGraphBuffer>(ctx.visibleMeshlets);
+                const auto& visibleCount = resources.get<Graph::FrameGraphBuffer>(ctx.visibleMeshletCount);
+                ctx.writeStorageBuffer(set, 0, ctx.frameGraphProvider->buffer(visible.native), visible.descriptor.size);
+                ctx.writeStorageBuffer(set, 1, ctx.frameGraphProvider->buffer(visibleCount.native), sizeof(std::uint32_t));
+                ctx.writeStorageBuffer(set, 2, gpu->meshlets.buffer,
+                    asset->meshlets.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet));
+                ctx.writeStorageBuffer(set, 3, gpu->meshletVertices.buffer,
+                    asset->meshletVertices.size() * sizeof(std::uint32_t));
+                ctx.writeStorageBuffer(set, 4, gpu->meshletTriangles.buffer,
+                    gpu->meshletTriangles.size);
+                ctx.writeStorageBuffer(set, 5, gpu->vertices.buffer,
+                    asset->vertices.size() * sizeof(asset->vertices[0]));
+                ctx.writeStorageBuffer(set, 6,
+                    ctx.frameGraphProvider->buffer(transformsResource.native),
+                    transformsResource.descriptor.size);
+                ctx.writeStorageBuffer(set, 7,
+                    ctx.frameGraphProvider->buffer(meshMaterialsResource.native),
+                    meshMaterialsResource.descriptor.size);
+            }
+            else
+            {
+                ctx.writeStorageBuffer(set, 0, gpu->meshlets.buffer,
+                    asset->meshlets.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet));
+                ctx.writeStorageBuffer(set, 1, gpu->meshletVertices.buffer,
+                    asset->meshletVertices.size() * sizeof(std::uint32_t));
+                ctx.writeStorageBuffer(set, 2, gpu->vertices.buffer,
+                    asset->vertices.size() * sizeof(asset->vertices[0]));
+                ctx.writeStorageBuffer(set, 3, gpu->indices.buffer,
+                    asset->indices.size() * sizeof(std::uint32_t));
+                ctx.writeStorageBuffer(set, 4,
+                    ctx.frameGraphProvider->buffer(transformsResource.native),
+                    transformsResource.descriptor.size);
+                ctx.writeStorageBuffer(set, 5,
+                    ctx.frameGraphProvider->buffer(meshMaterialsResource.native),
+                    meshMaterialsResource.descriptor.size);
+            }
             vkCmdBindDescriptorSets(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                ctx.pipelines->visibilityPipeline.layout(), 0, 1, &set, 0, nullptr);
+                meshShaderPath ? ctx.pipelines->virtualGeometryMeshPipeline.layout()
+                                : ctx.pipelines->visibilityPipeline.layout(), 0, 1, &set, 0, nullptr);
              struct alignas(16) VisibilityConstants
              {
                  glm::mat4 viewProjection{1.0f};
@@ -681,23 +1025,38 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                  static_cast<std::uint32_t>(asset->vertices.size()),
                  static_cast<std::uint32_t>(ctx.packet->instances.size()),
                  static_cast<std::uint32_t>(asset->meshletVertices.size())};
-            vkCmdPushConstants(ctx.commandBuffer(), ctx.pipelines->visibilityPipeline.layout(),
-                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(constants), &constants);
+            vkCmdPushConstants(ctx.commandBuffer(), meshShaderPath
+                ? ctx.pipelines->virtualGeometryMeshPipeline.layout()
+                : ctx.pipelines->visibilityPipeline.layout(),
+                meshShaderPath ? VK_SHADER_STAGE_MESH_BIT_EXT : VK_SHADER_STAGE_VERTEX_BIT,
+                0, sizeof(constants), &constants);
             VkViewport viewport{0.0f, 0.0f, static_cast<float>(ctx.width), static_cast<float>(ctx.height), 0.0f, 1.0f};
             VkRect2D scissor{{0, 0}, ctx.swapchainExtent};
             vkCmdSetViewport(ctx.commandBuffer(), 0, 1, &viewport);
             vkCmdSetScissor(ctx.commandBuffer(), 0, 1, &scissor);
-            vkCmdBindIndexBuffer(ctx.commandBuffer(), gpu->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-             vkCmdDrawIndexedIndirectCount(ctx.commandBuffer(),
-                 indirectBuffer, 0, countBuffer, 0,
-                 std::min<std::uint32_t>(
-                     ctx.virtualIndirectDrawCapacity,
-                     static_cast<std::uint32_t>(indirectResources.descriptor.size /
-                         sizeof(VkDrawIndexedIndirectCommand))),
-                 sizeof(VkDrawIndexedIndirectCommand));
+             if (meshShaderPath)
+             {
+                 ctx.cmdDrawMeshTasksIndirectCount(ctx.commandBuffer(), indirectBuffer, 0,
+                     countBuffer, 0, 1u,
+                     sizeof(VkDrawMeshTasksIndirectCommandEXT));
+             }
+             else
+             {
+                 vkCmdBindIndexBuffer(ctx.commandBuffer(), gpu->indices.buffer, 0,
+                     VK_INDEX_TYPE_UINT32);
+                 vkCmdDrawIndexedIndirectCount(ctx.commandBuffer(),
+                     indirectBuffer, 0, countBuffer, 0,
+                     std::min<std::uint32_t>(
+                         ctx.virtualIndirectDrawCapacity,
+                         static_cast<std::uint32_t>(indirectResources->descriptor.size /
+                             sizeof(VkDrawIndexedIndirectCommand))),
+                     sizeof(VkDrawIndexedIndirectCommand));
+             }
              vkCmdEndRendering(ctx.commandBuffer());
              if (ctx.virtualVisibilityValid != nullptr)
+             {
                  *ctx.virtualVisibilityValid = true;
+             }
              ctx.transitionImage(visibilityImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                  VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1053,10 +1412,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             // the visibility buffer, keeping the established TAA chain live.
             // Transfer usage remains available for deterministic failure
             // clears before a compute dispatch can be recorded.
-            passCtx->motion = builder.write(passCtx->motion,
+            passCtx->virtualShadingMotion = builder.write(passCtx->motion,
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination);
-             passCtx->hdr = builder.write(passCtx->hdr,
+             passCtx->virtualShadingHdr = builder.write(passCtx->hdr,
                  Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination);
+            passCtx->motion = passCtx->virtualShadingMotion;
+            passCtx->hdr = passCtx->virtualShadingHdr;
             builder.sideEffect();
         },
         [passCtx](const Graph::FrameGraphResources& resources,
@@ -1069,12 +1430,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              const auto& primitive = resources.getTexture(ctx.visibilityPrimitive);
              const auto& barycentric = resources.getTexture(ctx.visibilityBarycentrics);
              const auto& ids = resources.get<Graph::FrameGraphBuffer>(ctx.materialClassification);
-             const auto& output = resources.getTexture(ctx.hdr);
+             const auto& output = resources.getTexture(ctx.virtualShadingHdr);
              const auto& irradiance = resources.getTexture(ctx.irradiance);
              const auto& prefiltered = resources.getTexture(ctx.prefiltered);
             const auto& brdf = resources.getTexture(ctx.brdfLut);
             const auto& lights = resources.get<Graph::FrameGraphBuffer>(ctx.lightBuffer);
-            const auto& motion = resources.getTexture(ctx.motion);
+            const auto& motion = resources.getTexture(ctx.virtualShadingMotion);
             const VkImage hdrImage = ctx.frameGraphProvider->image(output.native);
             const VkImage motionImage = ctx.frameGraphProvider->image(motion.native);
             if (hdrImage == VK_NULL_HANDLE || motionImage == VK_NULL_HANDLE)
@@ -1373,7 +1734,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             if (ctx.debugReadbacks != nullptr &&
                 ctx.currentFrame < ctx.debugReadbacks->virtualGeometryValid.size())
+            {
                 ctx.debugReadbacks->virtualGeometryValid[ctx.currentFrame] = true;
+            }
         });
 }
 

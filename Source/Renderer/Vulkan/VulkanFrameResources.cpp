@@ -102,9 +102,16 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     result.visibleMeshlets = graph.createBuffer({"VisibleMeshlets",
         static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 4u, 4u, true});
     result.visibleMeshletCount = graph.createBuffer({"VisibleMeshletCount", 4u, 4u, true});
+    result.selectedLodNodes = graph.createBuffer({"VirtualGeometrySelectedLodNodes",
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 4u, 4u, true});
+    result.selectedLodCount = graph.createBuffer({"VirtualGeometrySelectionCounters", 8u, 4u, true});
+    result.lodBalanceDepth = graph.createBuffer({"VirtualGeometryLodBalanceDepth", 4u, 4u, true});
     result.meshletIndirect = graph.createBuffer({"MeshletIndirect",
         static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 20u, 20u, true});
     result.meshletIndirectCount = graph.createBuffer({"MeshletIndirectCount", 4u, 4u, true});
+    result.meshletMeshIndirect = graph.createBuffer({"MeshletMeshIndirect",
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 12u, 12u, true});
+    result.meshletMeshIndirectCount = graph.createBuffer({"MeshletMeshIndirectCount", 4u, 4u, true});
     result.virtualValidation = graph.createBuffer({"VirtualGeometryValidation", 4u, 4u, true});
 
     result.clusterCount = clusterCount();

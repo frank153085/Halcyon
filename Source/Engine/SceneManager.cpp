@@ -57,10 +57,9 @@ struct InstanceRecord
     std::string extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
         [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    // M5's runtime cooker is intentionally enabled for the PLY fixture. glTF
-    // and GLB continue through the established fastgltf/GPU-driven path; they
-    // do not require a sidecar cache to remain compatible with existing loads.
-    return extension == ".ply";
+    // M6 accepts every static scene format understood by the cooker. Missing
+    // or stale sidecars remain non-fatal and fall back to the source mesh.
+    return extension == ".ply" || extension == ".gltf" || extension == ".glb";
 }
 
 [[nodiscard]] bool isPlySourcePath(const std::filesystem::path& path)
@@ -263,10 +262,10 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             importedResult.error().withContext("SceneManager::createAsset " + name));
     }
     SceneImportResult imported = importedResult.value();
-    // File-backed static assets opt into the M5 sidecar when it is present and
-    // valid. A missing or stale cache is deliberately non-fatal: build it in
-    // memory so the established indexed renderer can still display the source
-    // mesh if virtual cooking is unavailable.
+    // File-backed static assets use only validated cooker output. Rebuilding a
+    // stale cache during startup can consume several copies of a large source
+    // mesh and would implicitly migrate older cache ABIs. Keep startup
+    // deterministic and let the established indexed renderer remain usable.
     std::shared_ptr<const Renderer::Scene::VirtualGeometryAsset> virtualGeometry;
     const std::filesystem::path sourcePath = sceneAsset.sourcePath;
     if (isVirtualGeometrySourcePath(sourcePath))
@@ -284,20 +283,7 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
                 {
                     HALCYON_LOG_WARN("Virtual Geometry cache unavailable for ",
                         sourcePath.string(), ": ", cached.error().describe(),
-                        "; rebuilding at runtime");
-                    const auto rebuilt = Renderer::Scene::buildVirtualGeometry(sceneAsset);
-                    if (rebuilt)
-                    {
-                        (void)Renderer::Scene::writeVirtualGeometryCache(sidecar, rebuilt.value(),
-                            sourceHash.value());
-                        cached = std::move(rebuilt);
-                    }
-                    else
-                    {
-                        HALCYON_LOG_WARN("Virtual Geometry rebuild failed for ",
-                            sourcePath.string(), ": ", rebuilt.error().describe(),
-                            "; using indexed fallback");
-                    }
+                        "; run HalcyonCooker to generate a v4 sidecar; using indexed fallback");
                 }
                 if (cached)
                     virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
@@ -307,15 +293,7 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             {
                 HALCYON_LOG_WARN("Virtual Geometry source hash failed for ",
                     sourcePath.string(), ": ", sourceHash.error().describe(),
-                    "; rebuilding without a sidecar cache");
-                const auto rebuilt = Renderer::Scene::buildVirtualGeometry(sceneAsset);
-                if (rebuilt)
-                    virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
-                        std::move(rebuilt).value());
-                else
-                    HALCYON_LOG_WARN("Virtual Geometry rebuild failed for ",
-                        sourcePath.string(), ": ", rebuilt.error().describe(),
-                        "; using indexed fallback");
+                    "; cannot validate a v4 sidecar; using indexed fallback");
             }
         }
         catch (const std::bad_alloc&)
@@ -325,6 +303,20 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             // the source scene has already been imported.
             virtualGeometry.reset();
         }
+    }
+    else if (sourcePath.empty() || sourcePath.extension().empty() ||
+        sourcePath.generic_string().find("://") != std::string::npos)
+    {
+        // Procedural static fixtures have no sidecar location and therefore no
+        // stable cache key. Build their virtual representation in memory so
+        // they can exercise the same runtime path as cooked file assets.
+        const auto rebuilt = Renderer::Scene::buildVirtualGeometry(sceneAsset);
+        if (rebuilt)
+            virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
+                std::move(rebuilt).value());
+        else
+            HALCYON_LOG_WARN("Virtual Geometry build failed for procedural asset ", name,
+                ": ", rebuilt.error().describe(), "; using indexed fallback");
     }
     if (virtualGeometry)
     {

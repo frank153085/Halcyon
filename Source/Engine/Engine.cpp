@@ -23,6 +23,7 @@ struct Engine::Impl
     Capabilities capabilities{};
     bool initialized = false;
     bool enableTransparency = true;
+    bool virtualGeometryRequested = false;
 };
 
 namespace
@@ -47,6 +48,8 @@ namespace
     result.bindlessTable = source.bindlessTable;
     result.bufferDeviceAddress = source.bufferDeviceAddress;
     result.indirectCount = source.indirectCount;
+    result.scalarBlockLayout = source.scalarBlockLayout;
+    result.geometryShader = source.geometryShader;
     result.fragmentBarycentric = source.fragmentBarycentric;
     result.rayQuery = source.rayQuery;
     result.depthD32 = source.depthD32;
@@ -71,6 +74,11 @@ namespace
     result.indirectDrawCount = source.indirectDrawCount;
     result.virtualVisibleMeshletCount = source.virtualVisibleMeshletCount;
     result.virtualIndirectCommandCount = source.virtualIndirectCommandCount;
+    result.virtualDagNodeCount = source.virtualDagNodeCount;
+    result.virtualSelectedNodeCount = source.virtualSelectedNodeCount;
+    result.virtualLodSwitchCount = source.virtualLodSwitchCount;
+    result.meshShaderActive = source.meshShaderActive;
+    result.meshShaderFallbackReason = source.meshShaderFallbackReason;
     result.virtualInvalidVisibilityCount = source.virtualInvalidVisibilityCount;
     result.frustumVisibleInstanceCount = source.frustumVisibleInstanceCount;
     result.occludedInstanceCount = source.occludedInstanceCount;
@@ -156,6 +164,7 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.framesInFlight = config.framesInFlight;
     backendConfig.enableValidation = config.enableValidation;
     backendConfig.rayQuery = static_cast<Vulkan::FeatureMode>(config.rayQuery);
+    backendConfig.meshShader = static_cast<Vulkan::FeatureMode>(config.meshShader);
     backendConfig.exposure = config.exposure;
     backendConfig.enableTaa = config.enableTaa;
     backendConfig.enableClusteredLighting = config.enableClusteredLighting;
@@ -168,6 +177,9 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.instanceIdReportPath = config.instanceIdReportPath;
 
     impl->enableTransparency = config.enableTransparency;
+    impl->virtualGeometryRequested =
+        config.renderPath == RenderPathMode::VirtualGeometryIndexed ||
+        config.renderPath == RenderPathMode::VirtualGeometryMeshShader;
     impl->window = &window;
     const auto initializeResult = impl->renderer.initialize(
         Platform::Internal::WindowAccess::nativeHandle(window), backendConfig);
@@ -297,7 +309,8 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         }
         const double cpuVisibilityMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - visibilityBegin).count();
-        auto packet = impl_->renderer.gpuDrivenSceneEnabled() &&
+        auto packet = !impl_->virtualGeometryRequested &&
+                impl_->renderer.gpuDrivenSceneEnabled() &&
                 impl_->renderer.gpuDrivenBindlessEnabled()
             ? impl_->sceneManager.extractGpuDrivenCpu(impl_->view.camera().data(), frameIndex,
                   impl_->enableTransparency)

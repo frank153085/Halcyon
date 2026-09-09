@@ -163,6 +163,8 @@ VulkanSceneResources::uploadVirtualGeometry(
     // a malformed asset cannot create descriptors whose shader-visible range
     // disagrees with its meshlet metadata.
     if (asset.vertices.empty() || asset.meshlets.empty() || asset.lods.empty() ||
+        asset.clusters.empty() || asset.dagNodes.empty() ||
+        (asset.dagNodes.size() > 1u && asset.dagEdges.empty()) ||
         asset.meshlets.size() > (1u << 20u) - 1u)
     {
         return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
@@ -320,6 +322,140 @@ VulkanSceneResources::uploadVirtualGeometry(
     upload = createAndUpload(asset.lods.data(), bytes,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.lods);
     if (!upload) return fail(std::move(upload));
+    std::vector<VirtualGeometryGpuCluster> gpuClusters;
+    std::vector<VirtualGeometryGpuDagNode> gpuDagNodes;
+    std::vector<std::uint32_t> boundaryVertices;
+    std::vector<std::uint32_t> clusterMeshletIndices;
+    std::vector<std::uint32_t> meshletDagNodes;
+    std::vector<std::uint32_t> clusterAdjacencyOffsets;
+    std::vector<std::uint32_t> clusterAdjacencyIndices;
+    try
+    {
+        meshletDagNodes.assign(asset.meshlets.size(), std::numeric_limits<std::uint32_t>::max());
+        clusterAdjacencyOffsets.reserve(asset.clusters.size() + 1u);
+        clusterAdjacencyOffsets.push_back(0u);
+        for (const auto& cluster : asset.clusters)
+        {
+            VirtualGeometryGpuCluster packed{};
+            packed.meshletOffset = static_cast<std::uint32_t>(clusterMeshletIndices.size());
+            packed.meshletCount = cluster.meshletCount;
+            packed.vertexOffset = cluster.vertexOffset;
+            packed.vertexCount = cluster.vertexCount;
+            packed.triangleCount = cluster.triangleCount;
+            packed.lodDepth = cluster.lodDepth;
+            packed.primitiveIndex = cluster.primitiveIndex;
+            packed.sphere = cluster.sphere;
+            packed.geometricError = cluster.geometricError;
+            gpuClusters.push_back(packed);
+            clusterMeshletIndices.insert(clusterMeshletIndices.end(),
+                cluster.meshletIndices.begin(), cluster.meshletIndices.end());
+            boundaryVertices.insert(boundaryVertices.end(), cluster.boundaryVertices.begin(),
+                cluster.boundaryVertices.end());
+            if (clusterAdjacencyIndices.size() >
+                std::numeric_limits<std::uint32_t>::max() - cluster.adjacentClusters.size())
+                return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+                    "virtual geometry adjacency table exceeds the GPU integer range"}));
+            clusterAdjacencyIndices.insert(clusterAdjacencyIndices.end(),
+                cluster.adjacentClusters.begin(), cluster.adjacentClusters.end());
+            clusterAdjacencyOffsets.push_back(
+                static_cast<std::uint32_t>(clusterAdjacencyIndices.size()));
+        }
+        for (const auto& node : asset.dagNodes)
+        {
+            VirtualGeometryGpuDagNode packed{};
+            packed.clusterIndex = node.clusterIndex;
+            packed.parentIndex = node.parentIndex;
+            packed.firstChild = node.firstChild;
+            packed.childCount = node.childCount;
+            packed.lodDepth = node.lodDepth;
+            packed.flags = node.flags;
+            packed.sphere = node.sphere;
+            packed.geometricError = node.geometricError;
+            gpuDagNodes.push_back(packed);
+        }
+        for (std::uint32_t nodeIndex = 0; nodeIndex < asset.dagNodes.size(); ++nodeIndex)
+        {
+            const auto clusterIndex = asset.dagNodes[nodeIndex].clusterIndex;
+            if (clusterIndex >= asset.clusters.size())
+                return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+                    "virtual geometry DAG cluster reference is outside the cluster table"}));
+            for (const auto meshletIndex : asset.clusters[clusterIndex].meshletIndices)
+            {
+                if (meshletIndex >= meshletDagNodes.size() ||
+                    meshletDagNodes[meshletIndex] != std::numeric_limits<std::uint32_t>::max())
+                    return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+                        "virtual geometry meshlet belongs to multiple DAG nodes"}));
+                meshletDagNodes[meshletIndex] = nodeIndex;
+            }
+        }
+        for (const auto nodeIndex : meshletDagNodes)
+            if (nodeIndex == std::numeric_limits<std::uint32_t>::max())
+                return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+                    "virtual geometry meshlet has no DAG node mapping"}));
+    }
+    catch (const std::bad_alloc&)
+    {
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "failed to pack virtual geometry M6 tables"}));
+    }
+    if (!byteSize(gpuClusters.size(), sizeof(gpuClusters[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry cluster byte size overflow"}));
+    upload = createAndUpload(gpuClusters.data(), bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.clusters);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(gpuDagNodes.size(), sizeof(gpuDagNodes[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry DAG node byte size overflow"}));
+    upload = createAndUpload(gpuDagNodes.data(), bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.dagNodes);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(asset.dagEdges.size(), sizeof(asset.dagEdges[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry DAG edge byte size overflow"}));
+    Halcyon::Renderer::Scene::VirtualGeometryDagEdge dummyEdge{};
+    const void* dagEdgeData = asset.dagEdges.empty() ? static_cast<const void*>(&dummyEdge)
+                                                     : static_cast<const void*>(asset.dagEdges.data());
+    const std::size_t dagEdgeBytes = asset.dagEdges.empty() ? sizeof(dummyEdge) : bytes;
+    upload = createAndUpload(dagEdgeData, dagEdgeBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.dagEdges);
+    if (!upload) return fail(std::move(upload));
+    // One persistent hysteresis state per DAG node. A zero current decision
+    // starts every node coarse; roots therefore form the initial frontier.
+    std::vector<std::array<std::uint32_t, 4>> initialLodStates(asset.dagNodes.size());
+    upload = createAndUpload(initialLodStates.data(),
+        initialLodStates.size() * sizeof(initialLodStates[0]),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.lodStates);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(boundaryVertices.size(), sizeof(boundaryVertices[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry boundary byte size overflow"}));
+    upload = createAndUpload(boundaryVertices.data(), bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.boundaryVertices);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(clusterMeshletIndices.size(), sizeof(clusterMeshletIndices[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry cluster index byte size overflow"}));
+    upload = createAndUpload(clusterMeshletIndices.data(), bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.clusterMeshletIndices);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(meshletDagNodes.size(), sizeof(meshletDagNodes[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry meshlet DAG mapping byte size overflow"}));
+    upload = createAndUpload(meshletDagNodes.data(), bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        result.meshletDagNodes);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(clusterAdjacencyOffsets.size(), sizeof(clusterAdjacencyOffsets[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry adjacency offset byte size overflow"}));
+    upload = createAndUpload(clusterAdjacencyOffsets.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.clusterAdjacencyOffsets);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(clusterAdjacencyIndices.size(), sizeof(std::uint32_t), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry adjacency index byte size overflow"}));
+    const std::uint32_t emptyAdjacency = 0u;
+    upload = createAndUpload(clusterAdjacencyIndices.empty()
+            ? static_cast<const void*>(&emptyAdjacency)
+            : static_cast<const void*>(clusterAdjacencyIndices.data()),
+        clusterAdjacencyIndices.empty() ? sizeof(emptyAdjacency) : bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.clusterAdjacencyIndices);
+    if (!upload) return fail(std::move(upload));
     return Halcyon::Result<VirtualGeometryGpuBuffers>::success(std::move(result));
 }
 
@@ -329,6 +465,13 @@ void VulkanSceneResources::destroyVirtualGeometry(VirtualGeometryGpuBuffers& buf
     allocator_->destroy(buffers.vertices); allocator_->destroy(buffers.indices);
     allocator_->destroy(buffers.meshletVertices); allocator_->destroy(buffers.meshletTriangles);
     allocator_->destroy(buffers.meshlets); allocator_->destroy(buffers.lods);
+    allocator_->destroy(buffers.clusters); allocator_->destroy(buffers.dagNodes);
+    allocator_->destroy(buffers.dagEdges); allocator_->destroy(buffers.boundaryVertices);
+    allocator_->destroy(buffers.lodStates);
+    allocator_->destroy(buffers.clusterMeshletIndices);
+    allocator_->destroy(buffers.meshletDagNodes);
+    allocator_->destroy(buffers.clusterAdjacencyOffsets);
+    allocator_->destroy(buffers.clusterAdjacencyIndices);
     buffers = {};
 }
 

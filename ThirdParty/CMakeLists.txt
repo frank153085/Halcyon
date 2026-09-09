@@ -3,6 +3,23 @@ cmake_minimum_required(VERSION 3.28)
 # Halcyon owns these wrapper targets.  The vendored projects remain untouched so
 # their upstream build systems and license files stay intact.
 
+option(HALCYON_ENABLE_METIS "Build the pinned METIS graph partitioner for M6" ON)
+if(HALCYON_ENABLE_METIS)
+    set(GKLIB_BUILD_APPS OFF CACHE BOOL "" FORCE)
+    set(GKLIB_LIBRARY_TYPE STATIC CACHE STRING "" FORCE)
+    add_subdirectory(metis/GKlib EXCLUDE_FROM_ALL)
+    file(GLOB HALCYON_METIS_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/metis/libmetis/*.c")
+    add_library(HalcyonMetis STATIC ${HALCYON_METIS_SOURCES})
+    target_include_directories(HalcyonMetis
+        PUBLIC "${CMAKE_CURRENT_LIST_DIR}/metis/include"
+        PRIVATE "${CMAKE_CURRENT_LIST_DIR}/metis/libmetis"
+                "${CMAKE_CURRENT_LIST_DIR}/metis/GKlib/include")
+    target_compile_definitions(HalcyonMetis PRIVATE IDXTYPEWIDTH=32 REALTYPEWIDTH=32)
+    target_link_libraries(HalcyonMetis PRIVATE GKlib)
+    add_library(Halcyon::METIS ALIAS HalcyonMetis)
+endif()
+
 function(halcyon_add_header_only name include_dir)
     add_library(${name} INTERFACE)
     target_include_directories(${name} SYSTEM INTERFACE

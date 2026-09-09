@@ -21,6 +21,7 @@ option(HALCYON_ENABLE_SPIRV_TOOLS "Build SPIR-V validation and optimization tool
 option(HALCYON_ENABLE_TRACY "Enable optional Tracy CPU instrumentation" OFF)
 option(HALCYON_ENABLE_BASISU "Build Basis Universal texture tooling" OFF)
 option(HALCYON_ENABLE_MESHOPTIMIZER "Build meshoptimizer" ON)
+option(HALCYON_ENABLE_METIS "Build METIS for M6 virtualized geometry" ON)
 option(HALCYON_ENABLE_DRACO "Build Draco geometry compression" OFF)
 option(HALCYON_ENABLE_BENCHMARK "Build Google Benchmark" OFF)
 option(HALCYON_ENABLE_ZSTD "Build Zstandard" ON)
@@ -98,6 +99,9 @@ target_compile_definitions(HalcyonCore INTERFACE
 if(NOT TARGET Halcyon::Meshoptimizer OR NOT TARGET Halcyon::Zstd)
     message(FATAL_ERROR "M5 requires HALCYON_ENABLE_MESHOPTIMIZER=ON and HALCYON_ENABLE_ZSTD=ON")
 endif()
+if(NOT TARGET Halcyon::METIS)
+    message(FATAL_ERROR "M6 requires HALCYON_ENABLE_METIS=ON and the vendored METIS/GKlib sources")
+endif()
 
 add_library(HalcyonAssetPipeline STATIC
     Source/Renderer/Scene/StaticSceneLoader.cpp
@@ -115,7 +119,8 @@ target_include_directories(HalcyonAssetPipeline PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Include")
 target_link_libraries(HalcyonAssetPipeline
     PUBLIC HalcyonCore glm::glm
-    PRIVATE Halcyon::FastGltf Halcyon::Meshoptimizer Halcyon::TinyPly Halcyon::Zstd)
+    PRIVATE Halcyon::FastGltf Halcyon::Meshoptimizer Halcyon::TinyPly Halcyon::Zstd Halcyon::METIS)
+target_compile_definitions(HalcyonAssetPipeline PUBLIC IDXTYPEWIDTH=32 REALTYPEWIDTH=32)
 halcyon_enable_warnings(HalcyonAssetPipeline)
 
 add_library(HalcyonRenderer STATIC
@@ -346,6 +351,9 @@ if(HALCYON_DXC_EXECUTABLE)
     set(HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/gpu_driven.frag.spv")
     set(HALCYON_OCCLUSION_PHASE1_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/occlusion_phase1.comp.spv")
     set(HALCYON_OCCLUSION_PHASE2_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/occlusion_phase2.comp.spv")
+    set(HALCYON_LOD_SELECT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/lod_select.comp.spv")
+    set(HALCYON_VG_MESH_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/virtual_geometry_mesh.ms.spv")
+    set(HALCYON_MESH_INDIRECT_SPIRV "${HALCYON_SHADER_OUTPUT_DIR}/meshlet_build_mesh_indirect.comp.spv")
     set(HALCYON_M5_SHADER_OUTPUTS)
     function(halcyon_add_m5_shader stem profile)
         set(output "${HALCYON_SHADER_OUTPUT_DIR}/${stem}.spv")
@@ -355,9 +363,13 @@ if(HALCYON_DXC_EXECUTABLE)
             # keep the extension opt-in to this fragment module.
             list(APPEND extra_args -fspv-extension=SPV_KHR_fragment_shader_barycentric)
         endif()
+        if(stem STREQUAL "virtual_geometry_task.as" OR stem STREQUAL "virtual_geometry_mesh.ms")
+            list(APPEND extra_args -fspv-extension=SPV_EXT_mesh_shader)
+        endif()
         add_custom_command(OUTPUT "${output}"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
-            COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc
+            COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3
+                    -fvk-use-dx-layout -Zpc
                     ${extra_args} -T "${profile}" -E main -Fo "${output}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/${stem}.hlsl"
             DEPENDS
@@ -372,6 +384,10 @@ if(HALCYON_DXC_EXECUTABLE)
     halcyon_add_m5_shader(visibility.frag ps_6_6)
     halcyon_add_m5_shader(material_classify.comp cs_6_6)
     halcyon_add_m5_shader(compute_shading.comp cs_6_6)
+    halcyon_add_m5_shader(lod_select.comp cs_6_6)
+    halcyon_add_m5_shader(virtual_geometry_mesh.ms ms_6_6)
+    halcyon_add_m5_shader(visibility_mesh.frag ps_6_6)
+    halcyon_add_m5_shader(meshlet_build_mesh_indirect.comp cs_6_6)
     add_custom_command(OUTPUT "${HALCYON_PBR_VERTEX_SPIRV}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
         COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc -T vs_6_6 -E main
@@ -471,8 +487,12 @@ if(HALCYON_DXC_EXECUTABLE)
             "${HALCYON_GPU_DRIVEN_VERTEX_SPIRV}" "${HALCYON_GPU_DRIVEN_FRAGMENT_SPIRV}"
             "${HALCYON_GPU_DRIVEN_CSM_VERTEX_SPIRV}"
             "${HALCYON_OCCLUSION_PHASE1_SPIRV}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
+            "${HALCYON_LOD_SELECT_SPIRV}"
             ${HALCYON_M5_SHADER_OUTPUTS}
     )
+    add_custom_target(HalcyonM6Shaders ALL DEPENDS "${HALCYON_LOD_SELECT_SPIRV}"
+        "${HALCYON_VG_MESH_SPIRV}"
+        "${HALCYON_MESH_INDIRECT_SPIRV}")
     if(HALCYON_SPIRV_VAL_EXECUTABLE)
         add_custom_target(HalcyonShaderValidation ALL
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_FULLSCREEN_VERTEX_SPIRV}"
@@ -493,6 +513,9 @@ if(HALCYON_DXC_EXECUTABLE)
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_GPU_DRIVEN_CSM_VERTEX_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE1_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_LOD_SELECT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_VG_MESH_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_MESH_INDIRECT_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/meshlet_cull.comp.spv"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/meshlet_build_indirect.comp.spv"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/visibility.vert.spv"
@@ -501,6 +524,14 @@ if(HALCYON_DXC_EXECUTABLE)
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/compute_shading.comp.spv"
             DEPENDS HalcyonShaders
             COMMENT "Validating generated SPIR-V modules"
+            VERBATIM
+        )
+        add_custom_target(HalcyonM6ShaderValidation ALL
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_LOD_SELECT_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_VG_MESH_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_MESH_INDIRECT_SPIRV}"
+            DEPENDS HalcyonM6Shaders
+            COMMENT "Validating M6 SPIR-V modules"
             VERBATIM
         )
         add_dependencies(HalcyonRenderer HalcyonShaderValidation)

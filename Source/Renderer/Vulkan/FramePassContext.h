@@ -31,6 +31,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 struct FramePassContext
 {
     VkDevice device = VK_NULL_HANDLE;
+    PFN_vkCmdDrawMeshTasksIndirectCountEXT cmdDrawMeshTasksIndirectCount = nullptr;
     VulkanFrame* frame = nullptr;
     const FramePacket* packet = nullptr;
     const RendererConfig* config = nullptr;
@@ -56,6 +57,7 @@ struct FramePassContext
     std::uint32_t currentFrame = 0;
     std::uint32_t imageIndex = 0;
     std::uint32_t virtualIndirectDrawCapacity = 0;
+    std::uint32_t virtualMeshWorkGroupCapacity = 0;
 
     bool gpuDrivenBindless = false;
     bool timestampsEnabled = false;
@@ -106,8 +108,13 @@ struct FramePassContext
     Graph::BufferHandle virtualCullFrame{};
     Graph::BufferHandle visibleMeshlets{};
     Graph::BufferHandle visibleMeshletCount{};
+    Graph::BufferHandle selectedLodNodes{};
+    Graph::BufferHandle selectedLodCount{};
+    Graph::BufferHandle lodBalanceDepth{};
     Graph::BufferHandle meshletIndirect{};
     Graph::BufferHandle meshletIndirectCount{};
+    Graph::BufferHandle meshletMeshIndirect{};
+    Graph::BufferHandle meshletMeshIndirectCount{};
     Graph::BufferHandle virtualValidation{};
     Graph::BufferHandle clusterRanges{};
     Graph::BufferHandle clusterIndices{};
@@ -116,6 +123,11 @@ struct FramePassContext
     Graph::BufferHandle clusterCamera{};
     Graph::BufferHandle shadowConstants{};
     Graph::TextureHandle output{};
+    // Handles produced by the virtual-geometry shading pass. Later temporal
+    // passes advance ctx.hdr/ctx.motion to new logical versions, so M6 keeps
+    // the exact versions it owns for execution-time resource lookup.
+    Graph::TextureHandle virtualShadingHdr{};
+    Graph::TextureHandle virtualShadingMotion{};
     Graph::PassHandle gbufferPassHandle{};
     std::uint32_t tileCount = 0;
 

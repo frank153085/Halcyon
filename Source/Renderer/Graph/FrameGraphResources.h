@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace Halcyon::Renderer::Graph
@@ -45,7 +46,9 @@ public:
             static_cast<const Resource*>(getRaw(id, ResourceKindOf<Resource>::value));
         if (value == nullptr)
         {
-            throw std::out_of_range("FrameGraph resource was not declared by this pass");
+            throw std::out_of_range(std::string("FrameGraph resource ") +
+                std::to_string(id.index()) + "/" + std::to_string(id.version()) +
+                " was not declared by pass '" + std::string(passName()) + "'");
         }
         return *value;
     }
@@ -72,7 +75,9 @@ public:
     {
         if (!declared(id))
         {
-            throw std::out_of_range("FrameGraph resource was not declared by this pass");
+            throw std::out_of_range(std::string("FrameGraph resource ") +
+                std::to_string(id.index()) + "/" + std::to_string(id.version()) +
+                " was not declared by pass '" + std::string(passName()) + "'");
         }
         usage_ = usageRaw(id);
         return usage_;

@@ -55,3 +55,6 @@
 [submodule "ThirdParty/tinyply"]
 	path = ThirdParty/tinyply
 	url = https://github.com/ddiakopoulos/tinyply.git
+[submodule "ThirdParty/metis"]
+	path = ThirdParty/metis
+	url = https://github.com/KarypisLab/METIS.git
