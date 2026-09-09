@@ -532,16 +532,17 @@ VoidResult VulkanDevice::pickPhysicalDevice()
                 lastUnsupportedReason = "required ray-query features are unavailable";
                 continue;
             }
-            // Cluster build uses RWStructuredBuffer atomics.  Vulkan exposes
-            // the corresponding capability through the core
-            // fragmentStoresAndAtomics feature bit; require it up front so a
-            // device can never enter a graph path whose atomic writes are
+            // Cluster build uses RWStructuredBuffer atomics, while both
+            // indirect render paths use firstInstance as a compact token.
+            // Require both core features up front so a device can never enter
+            // a graph path whose atomic writes or instance-token reads are
             // silently unsupported.
             if (candidate.features13.dynamicRendering == VK_FALSE ||
                 candidate.features13.synchronization2 == VK_FALSE ||
                 candidate.features13.shaderDemoteToHelperInvocation == VK_FALSE ||
                 candidate.features12.timelineSemaphore == VK_FALSE ||
-                candidate.coreFeatures.fragmentStoresAndAtomics == VK_FALSE)
+                candidate.coreFeatures.fragmentStoresAndAtomics == VK_FALSE ||
+                candidate.coreFeatures.drawIndirectFirstInstance == VK_FALSE)
             {
                 if (candidate.features13.dynamicRendering == VK_FALSE)
                     lastUnsupportedReason = "dynamicRendering is unavailable";
@@ -551,6 +552,8 @@ VoidResult VulkanDevice::pickPhysicalDevice()
                     lastUnsupportedReason = "timelineSemaphore is unavailable";
                 else if (candidate.features13.shaderDemoteToHelperInvocation == VK_FALSE)
                     lastUnsupportedReason = "shaderDemoteToHelperInvocation is unavailable";
+                else if (candidate.coreFeatures.drawIndirectFirstInstance == VK_FALSE)
+                    lastUnsupportedReason = "drawIndirectFirstInstance is unavailable";
                 else
                     lastUnsupportedReason = "fragmentStoresAndAtomics is unavailable";
                 continue;
@@ -796,6 +799,10 @@ VoidResult VulkanDevice::createDevice()
         // silently creating modules without this feature produces validation
         // errors and undefined alpha-test behaviour.
         enabled13.shaderDemoteToHelperInvocation = VK_TRUE;
+        // GPU-driven and VirtualGeometry indirect commands use firstInstance
+        // as their compact instance/meshlet token. Enable the core feature so
+        // non-zero firstInstance values reach SV_InstanceID.
+        enabledFeatures.features.drawIndirectFirstInstance = VK_TRUE;
         enabledFeatures.features.fragmentStoresAndAtomics = VK_TRUE;
         enabledFeatures.pNext = &enabled12;
         enabled12.pNext = &enabled13;

@@ -35,13 +35,15 @@ out\build\windows-msvc-debug\Examples\HalcyonExample03PbrScenes\HalcyonExample03
 ```
 
 The first two programs accept `--width`, `--height`, `--frames`, `--no-validation`,
-and `--help`. Example 03 also accepts `--scene damaged-helmet|sponza|stress`,
-`--instance-count`, `--gpu-driven`, and `--two-phase-occlusion`.
+and `--help`. Example 03 also accepts `--scene damaged-helmet|sponza|lucy|stress`,
+`--instance-count`, `--gpu-driven`, `--virtual-geometry`, and
+`--two-phase-occlusion`.
 
 Example 01 supplies an in-memory `StaticScene`, Example 02 references
 `models/monkey/monkey.gltf` relative to the shared asset root, and Example 03
 loads `models/damaged_helmet/DamagedHelmet.glb`, `models/sponza/Sponza.gltf`,
-or a procedural stress scene.
+`models/lucy/lucy.ply`, or a procedural stress scene. The Lucy fixture is
+prepared by `scripts/fetch_m5_assets.ps1` and is ignored by Git.
 All three use the same SceneDatabase registration, instancing, and GPU upload
 path.
 

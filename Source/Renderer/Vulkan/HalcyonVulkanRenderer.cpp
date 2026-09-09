@@ -349,6 +349,8 @@ struct Renderer::Impl
     std::vector<BufferAllocation>& clusterOverflowReadbacks = debugReadbacks.clusterOverflowReadbacks;
     std::vector<BufferAllocation>& gpuVisibilityReadbacks = debugReadbacks.gpuVisibilityReadbacks;
     std::vector<bool>& gpuVisibilityValid = debugReadbacks.gpuVisibilityValid;
+    std::vector<BufferAllocation>& virtualGeometryReadbacks = debugReadbacks.virtualGeometryReadbacks;
+    std::vector<bool>& virtualGeometryValid = debugReadbacks.virtualGeometryValid;
     std::vector<std::vector<std::uint32_t>>& gpuReferenceVisible = debugReadbacks.gpuReferenceVisible;
     std::vector<BufferAllocation>& instanceIdReadbacks = debugReadbacks.instanceIdReadbacks;
     std::vector<bool>& instanceIdReadbackValid = debugReadbacks.instanceIdReadbackValid;
@@ -366,6 +368,10 @@ struct Renderer::Impl
     bool taaHistoryInitializedA = false;
     bool taaHistoryInitializedB = false;
     bool iblInitialized = false;
+    bool iblImageInitialized = false;
+    bool virtualHiZInitialized = false;
+    bool virtualHiZImageInitialized = false;
+    bool virtualVisibilityValid = false;
     bool hasRenderedFrame = false;
     std::uint64_t lastFrameIndex = 0;
     std::uint64_t renderSerial = 0;
@@ -376,6 +382,12 @@ struct Renderer::Impl
     std::uint64_t gpuSceneContentHash = 0;
     std::uint32_t gpuSceneInstanceCount = 0;
     bool gpuDrivenActive = false;
+    // The configured path may be downgraded for an individual frame when a
+    // packet or transient resource is incompatible. Keep statistics tied to
+    // the path actually recorded into the command buffer.
+    bool virtualGeometryActive = false;
+    Halcyon::Renderer::Scene::RenderPathMode activeRenderPath =
+        Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
     std::uint32_t gpuFallbackInstanceCount = 0;
     std::uint32_t gpuMaterialCount = 0;
     std::uint32_t materialDescriptorBindCount = 0;
@@ -396,49 +408,55 @@ struct Renderer::Impl
 
     [[nodiscard]] VoidResult synchronizeBindlessMaterials()
     {
-        if (!bindlessTable.initialized()) return ok();
         const auto sampledType = Resources::DescriptorType::SampledImage;
-        bindlessTextureHandles.resize(sceneResources.textureCount());
-        for (std::uint32_t dense = 0; dense < sceneResources.textureCount(); ++dense)
+        const bool hasBindlessTextures = bindlessTable.initialized();
+        if (hasBindlessTextures)
         {
-            const TextureResource* texture = sceneResources.textureDense(dense);
-            if (texture == nullptr) continue;
-            auto& handle = bindlessTextureHandles[dense];
-            if (!handle.valid())
+            bindlessTextureHandles.resize(sceneResources.textureCount());
+            for (std::uint32_t dense = 0; dense < sceneResources.textureCount(); ++dense)
             {
-                const auto allocated = bindlessTable.allocate(sampledType);
-                if (!allocated) return fail(allocated.error().describe());
-                handle = allocated.value();
+                const TextureResource* texture = sceneResources.textureDense(dense);
+                if (texture == nullptr) continue;
+                auto& handle = bindlessTextureHandles[dense];
+                if (!handle.valid())
+                {
+                    const auto allocated = bindlessTable.allocate(sampledType);
+                    if (!allocated) return fail(allocated.error().describe());
+                    handle = allocated.value();
+                }
+                const VkDescriptorImageInfo image{VK_NULL_HANDLE, texture->view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                const auto write = bindlessTable.writeImage(sampledType, handle, image);
+                if (!write) return fail(write.error().describe());
             }
-            const VkDescriptorImageInfo image{VK_NULL_HANDLE, texture->view,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            const auto write = bindlessTable.writeImage(sampledType, handle, image);
-            if (!write) return fail(write.error().describe());
-        }
-        if (const TextureResource* texture = sceneResources.textureDense(0); texture != nullptr)
-        {
-            const VkDescriptorImageInfo image{VK_NULL_HANDLE, texture->view,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            const auto write = bindlessTable.writeImage(sampledType,
-                bindlessTable.table().defaultHandle(sampledType), image);
-            if (!write) return fail(write.error().describe());
-            const VkDescriptorImageInfo sampler{texture->sampler, VK_NULL_HANDLE,
-                VK_IMAGE_LAYOUT_UNDEFINED};
-            const auto samplerWrite = bindlessTable.writeImage(Resources::DescriptorType::Sampler,
-                bindlessTable.table().defaultHandle(Resources::DescriptorType::Sampler), sampler);
-            if (!samplerWrite) return fail(samplerWrite.error().describe());
+            if (const TextureResource* texture = sceneResources.textureDense(0); texture != nullptr)
+            {
+                const VkDescriptorImageInfo image{VK_NULL_HANDLE, texture->view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                const auto write = bindlessTable.writeImage(sampledType,
+                    bindlessTable.table().defaultHandle(sampledType), image);
+                if (!write) return fail(write.error().describe());
+                const VkDescriptorImageInfo sampler{texture->sampler, VK_NULL_HANDLE,
+                    VK_IMAGE_LAYOUT_UNDEFINED};
+                const auto samplerWrite = bindlessTable.writeImage(Resources::DescriptorType::Sampler,
+                    bindlessTable.table().defaultHandle(Resources::DescriptorType::Sampler), sampler);
+                if (!samplerWrite) return fail(samplerWrite.error().describe());
+            }
         }
         bindlessMaterialRows.resize(sceneResources.materialCount());
         for (std::uint32_t dense = 0; dense < sceneResources.materialCount(); ++dense)
         {
             auto row = sceneResources.materialRow(dense);
-            for (std::size_t texture = 0; texture < 5; ++texture)
+            if (hasBindlessTextures)
             {
-                const auto denseTexture = row.textureIndices[texture];
-                row.textureIndices[texture] = denseTexture < bindlessTextureHandles.size() &&
-                        bindlessTextureHandles[denseTexture].valid()
-                    ? bindlessTextureHandles[denseTexture].index()
-                    : bindlessTable.table().defaultHandle(sampledType).index();
+                for (std::size_t texture = 0; texture < 5; ++texture)
+                {
+                    const auto denseTexture = row.textureIndices[texture];
+                    row.textureIndices[texture] = denseTexture < bindlessTextureHandles.size() &&
+                            bindlessTextureHandles[denseTexture].valid()
+                        ? bindlessTextureHandles[denseTexture].index()
+                        : bindlessTable.table().defaultHandle(sampledType).index();
+                }
             }
             bindlessMaterialRows[dense] = row;
         }
@@ -512,6 +530,12 @@ struct Renderer::Impl
         taaHistoryInitializedA = false;
         taaHistoryInitializedB = false;
         iblInitialized = false;
+        iblImageInitialized = false;
+        virtualHiZInitialized = false;
+        virtualHiZImageInitialized = false;
+        virtualVisibilityValid = false;
+        virtualGeometryActive = false;
+        activeRenderPath = Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
         hasRenderedFrame = false;
         lastFrameIndex = 0;
         renderSerial = 0;
@@ -540,11 +564,20 @@ struct Renderer::Impl
             device, physicalDevice, physicalProperties, graphicsQueueFamily, config.framesInFlight);
         timestampsEnabled = result && physicalProperties.limits.timestampPeriod > 0.0f;
         if (!result) return result;
+        for (auto& readback : clusterOverflowReadbacks)
+            gpuAllocator.destroy(readback);
+        for (auto& readback : gpuVisibilityReadbacks)
+            gpuAllocator.destroy(readback);
+        for (auto& readback : virtualGeometryReadbacks)
+            gpuAllocator.destroy(readback);
         clusterOverflowReadbacks.clear();
         clusterOverflowReadbacks.reserve(frames.size());
         gpuVisibilityReadbacks.clear();
         gpuVisibilityReadbacks.reserve(frames.size());
         gpuVisibilityValid.assign(frames.size(), false);
+        virtualGeometryReadbacks.clear();
+        virtualGeometryReadbacks.reserve(frames.size());
+        virtualGeometryValid.assign(frames.size(), false);
         gpuReferenceVisible.assign(frames.size(), {});
         instanceIdReadbacks.assign(frames.size(), {});
         instanceIdReadbackValid.assign(frames.size(), false);
@@ -567,6 +600,9 @@ struct Renderer::Impl
                 for (auto& readback : gpuVisibilityReadbacks)
                     gpuAllocator.destroy(readback);
                 gpuVisibilityReadbacks.clear();
+                for (auto& readback : virtualGeometryReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualGeometryReadbacks.clear();
                 return allocation.error();
             }
             clusterOverflowReadbacks.push_back(allocation.value());
@@ -586,11 +622,61 @@ struct Renderer::Impl
                 for (auto& readback : gpuVisibilityReadbacks)
                     gpuAllocator.destroy(readback);
                 gpuVisibilityReadbacks.clear();
+                for (auto& readback : virtualGeometryReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualGeometryReadbacks.clear();
                 return visibility.error();
             }
             gpuVisibilityReadbacks.push_back(visibility.value());
+            // visible meshlets, actual indirect commands, invalid visibility
+            // records produced by material classification.
+            info.size = sizeof(std::uint32_t) * 3u;
+            const auto virtualCounters = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
+            if (!virtualCounters)
+            {
+                for (auto& readback : clusterOverflowReadbacks)
+                    gpuAllocator.destroy(readback);
+                clusterOverflowReadbacks.clear();
+                for (auto& readback : gpuVisibilityReadbacks)
+                    gpuAllocator.destroy(readback);
+                gpuVisibilityReadbacks.clear();
+                for (auto& readback : virtualGeometryReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualGeometryReadbacks.clear();
+                return virtualCounters.error();
+            }
+            virtualGeometryReadbacks.push_back(virtualCounters.value());
         }
         return ok();
+    }
+
+    [[nodiscard]] VoidResult createRenderPipelines()
+    {
+        const auto graphicsResult = createGraphicsPipeline();
+        if (!graphicsResult)
+            return graphicsResult;
+        const auto gpuResult = createGpuDrivenPipelines();
+        if (gpuResult || config.renderPath !=
+                Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+            return gpuResult;
+
+        // M5 is optional at runtime.  A missing/invalid M5 shader package
+        // must leave the established indexed renderer usable.  Tear down the
+        // partially-created swapchain pipelines before retrying the fallback
+        // path so no descriptor layout or pipeline handle is leaked.
+        pipelines.destroySwapchainResources(device);
+        gpuDrivenBindless = false;
+        const bool gpuFallback = config.enableGpuDrivenScene;
+        config.renderPath = gpuFallback
+            ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
+            : Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
+        setError(gpuFallback
+            ? "VirtualGeometryIndexed pipeline creation failed; fell back to GpuDrivenIndexed"
+            : "VirtualGeometryIndexed pipeline creation failed; fell back to DeferredIndexed");
+        const auto fallbackGraphics = createGraphicsPipeline();
+        if (!fallbackGraphics)
+            return fallbackGraphics;
+        return createGpuDrivenPipelines();
     }
 
     [[nodiscard]] VoidResult createSwapchain()
@@ -605,12 +691,7 @@ struct Renderer::Impl
         {
             return resourceResult;
         }
-        const VoidResult pipelineResult = createGraphicsPipeline();
-        if (pipelineResult)
-        {
-            const VoidResult gpuResult = createGpuDrivenPipelines();
-            if (!gpuResult) return gpuResult;
-        }
+        const VoidResult pipelineResult = createRenderPipelines();
         deviceMemoryBytes = gpuAllocator.allocatedBytes();
         return pipelineResult;
     }
@@ -635,12 +716,7 @@ struct Renderer::Impl
         {
             return resourceResult;
         }
-        const VoidResult pipelineResult = createGraphicsPipeline();
-        if (pipelineResult)
-        {
-            const VoidResult gpuResult = createGpuDrivenPipelines();
-            if (!gpuResult) return gpuResult;
-        }
+        const VoidResult pipelineResult = createRenderPipelines();
         deviceMemoryBytes = gpuAllocator.allocatedBytes();
         // A swapchain resize changes the sampling footprint, so any temporal
         // history must be discarded before the next rendered frame.
@@ -648,6 +724,10 @@ struct Renderer::Impl
         taaHistoryInitializedA = false;
         taaHistoryInitializedB = false;
         iblInitialized = false;
+        iblImageInitialized = false;
+        virtualHiZInitialized = false;
+        virtualHiZImageInitialized = false;
+        virtualVisibilityValid = false;
         hasRenderedFrame = false;
         previousPacketValid = false;
         previousInstances.clear();
@@ -814,7 +894,13 @@ struct Renderer::Impl
 
     [[nodiscard]] VoidResult createGpuDrivenPipelines()
     {
-        if (!config.enableGpuDrivenScene)
+        // Virtual Geometry shares the GPU scene descriptor/pipeline lifetime,
+        // but it is a distinct render path.  Keep the renderer usable when a
+        // caller selects it directly without also setting the legacy GPU
+        // driven toggle.
+        const bool virtualGeometryPath =
+            config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+        if (!config.enableGpuDrivenScene && !virtualGeometryPath)
             return ok();
         const auto makeLayout = [&](std::span<const VkDescriptorSetLayoutBinding> bindings,
                                     VkDescriptorSetLayout& output) -> VoidResult
@@ -1052,34 +1138,51 @@ struct Renderer::Impl
         result = occlusionPhase2Pipeline.createCompute(device, phase2Desc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 3> meshletCullBindings = {
+        // The visibility/material/shading ABI is only needed by the M5 path.
+        // Keep it out of legacy GPU-driven initialization so an unavailable
+        // M5 shader or attachment capability cannot break GpuDrivenIndexed.
+        if (!virtualGeometryPath)
+            return ok();
+
+        const std::array<VkDescriptorSetLayoutBinding, 6> meshletCullBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(meshletCullBindings, meshletCullLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 3> meshletCullAbi = {
-            DescriptorBindingDesc{0, meshletCullBindings[0]}, DescriptorBindingDesc{0, meshletCullBindings[1]},
-            DescriptorBindingDesc{0, meshletCullBindings[2]}};
+        const std::array<DescriptorBindingDesc, 6> meshletCullAbi = {
+            DescriptorBindingDesc{0, meshletCullBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
+            DescriptorBindingDesc{0, meshletCullBindings[1], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletCullBindings[2], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletCullBindings[3]},
+            DescriptorBindingDesc{0, meshletCullBindings[4], sizeof(Halcyon::Renderer::Scene::TransformRow)},
+            DescriptorBindingDesc{0, meshletCullBindings[5]}};
         ComputePipelineDesc meshletCullDesc{};
         meshletCullDesc.shader = "meshlet_cull.comp.spv";
         meshletCullDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&meshletCullLayout, 1};
         meshletCullDesc.descriptorBindings = meshletCullAbi;
-        const std::array<VkPushConstantRange, 1> meshletCullPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 112}}};
+        const std::array<VkPushConstantRange, 1> meshletCullPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128}}};
         meshletCullDesc.pushConstants = meshletCullPush;
         result = meshletCullPipeline.createCompute(device, meshletCullDesc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 4> meshletIndirectBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 5> meshletIndirectBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(meshletIndirectBindings, meshletIndirectLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 4> meshletIndirectAbi = {
-            DescriptorBindingDesc{0, meshletIndirectBindings[0]}, DescriptorBindingDesc{0, meshletIndirectBindings[1]},
-            DescriptorBindingDesc{0, meshletIndirectBindings[2]}, DescriptorBindingDesc{0, meshletIndirectBindings[3]}};
+        const std::array<DescriptorBindingDesc, 5> meshletIndirectAbi = {
+            DescriptorBindingDesc{0, meshletIndirectBindings[0], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletIndirectBindings[1], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
+            DescriptorBindingDesc{0, meshletIndirectBindings[2], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, meshletIndirectBindings[3], sizeof(VkDrawIndexedIndirectCommand)},
+            DescriptorBindingDesc{0, meshletIndirectBindings[4], sizeof(std::uint32_t)}};
         ComputePipelineDesc meshletIndirectDesc{};
         meshletIndirectDesc.shader = "meshlet_build_indirect.comp.spv";
         meshletIndirectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&meshletIndirectLayout, 1};
@@ -1089,62 +1192,112 @@ struct Renderer::Impl
         result = meshletIndirectPipeline.createCompute(device, meshletIndirectDesc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 4> visibilityBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 6> visibilityBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}};
         result = makeLayout(visibilityBindings, visibilityLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 4> visibilityAbi = {
-            DescriptorBindingDesc{0, visibilityBindings[0]}, DescriptorBindingDesc{0, visibilityBindings[1]},
-            DescriptorBindingDesc{0, visibilityBindings[2]}, DescriptorBindingDesc{0, visibilityBindings[3]}};
+        const std::array<DescriptorBindingDesc, 6> visibilityAbi = {
+            DescriptorBindingDesc{0, visibilityBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
+            DescriptorBindingDesc{0, visibilityBindings[1], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, visibilityBindings[2], sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)},
+            DescriptorBindingDesc{0, visibilityBindings[3], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, visibilityBindings[4], sizeof(Halcyon::Renderer::Scene::TransformRow)},
+            DescriptorBindingDesc{0, visibilityBindings[5], sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)}};
         GraphicsPipelineDesc visibilityDesc{};
-        const std::array<VkFormat, 1> visibilityFormats = {VK_FORMAT_R32_UINT};
+        const std::array<VkFormat, 3> visibilityFormats = {
+            VK_FORMAT_R32_UINT, VK_FORMAT_R32_UINT, VK_FORMAT_R32_UINT};
         visibilityDesc.colorFormats = visibilityFormats;
         visibilityDesc.depthFormat = depthFormat;
         visibilityDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&visibilityLayout, 1};
         visibilityDesc.descriptorBindings = visibilityAbi;
         visibilityDesc.vertexShader = "visibility.vert.spv";
         visibilityDesc.fragmentShader = "visibility.frag.spv";
-        visibilityDesc.cullMode = VK_CULL_MODE_NONE;
-        visibilityDesc.depthCompare = VK_COMPARE_OP_ALWAYS;
+        // M5 accepts only static, single-sided materials. Keep the raster
+        // state aligned with that classification so back-facing triangles do
+        // not compete for visibility IDs or produce inverted normals.
+        visibilityDesc.cullMode = VK_CULL_MODE_BACK_BIT;
+        // Reversed-Z depth keeps the nearest meshlet/triangle and gives the
+        // visibility buffer a deterministic front-most primitive.
+        visibilityDesc.depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
         const std::array<VkPushConstantRange, 1> visibilityPush = {{
-            {VK_SHADER_STAGE_VERTEX_BIT, 0, 208}}};
+            {VK_SHADER_STAGE_VERTEX_BIT, 0, 80}}};
         visibilityDesc.pushConstants = visibilityPush;
-        result = visibilityPipeline.createGraphics(device, visibilityDesc);
-        if (!result) return result;
+        if (caps.fragmentBarycentric)
+        {
+            result = visibilityPipeline.createGraphics(device, visibilityDesc);
+            if (!result) return result;
+        }
 
-        const std::array<VkDescriptorSetLayoutBinding, 2> classifyBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 7> classifyBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(classifyBindings, materialClassifyLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 2> classifyAbi = {
-            DescriptorBindingDesc{0, classifyBindings[0]}, DescriptorBindingDesc{0, classifyBindings[1]}};
+        const std::array<DescriptorBindingDesc, 7> classifyAbi = {
+            DescriptorBindingDesc{0, classifyBindings[0]}, DescriptorBindingDesc{0, classifyBindings[1]},
+            DescriptorBindingDesc{0, classifyBindings[2], sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)},
+            DescriptorBindingDesc{0, classifyBindings[3], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, classifyBindings[4], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, classifyBindings[5], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
+            DescriptorBindingDesc{0, classifyBindings[6]}};
         ComputePipelineDesc classifyDesc{};
         classifyDesc.shader = "material_classify.comp.spv";
         classifyDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&materialClassifyLayout, 1};
         classifyDesc.descriptorBindings = classifyAbi;
-        const std::array<VkPushConstantRange, 1> classifyPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16}}};
+        const std::array<VkPushConstantRange, 1> classifyPush = {{{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32}}};
         classifyDesc.pushConstants = classifyPush;
         result = materialClassifyPipeline.createCompute(device, classifyDesc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 3> shadingBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 16> shadingBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(shadingBindings, computeShadingLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 3> shadingAbi = {
+        const std::array<DescriptorBindingDesc, 16> shadingAbi = {
             DescriptorBindingDesc{0, shadingBindings[0]}, DescriptorBindingDesc{0, shadingBindings[1]},
-            DescriptorBindingDesc{0, shadingBindings[2]}};
+            DescriptorBindingDesc{0, shadingBindings[2]}, DescriptorBindingDesc{0, shadingBindings[3], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, shadingBindings[4]},
+            DescriptorBindingDesc{0, shadingBindings[5], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
+            DescriptorBindingDesc{0, shadingBindings[6], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, shadingBindings[7], sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)},
+            DescriptorBindingDesc{0, shadingBindings[8]}, DescriptorBindingDesc{0, shadingBindings[9]},
+            DescriptorBindingDesc{0, shadingBindings[10]}, DescriptorBindingDesc{0, shadingBindings[11]},
+            DescriptorBindingDesc{0, shadingBindings[12], sizeof(Halcyon::Renderer::Scene::MaterialGpuData)},
+            DescriptorBindingDesc{0, shadingBindings[13], sizeof(Halcyon::Renderer::Scene::LightData)},
+            DescriptorBindingDesc{0, shadingBindings[14], sizeof(Halcyon::Renderer::Scene::TransformRow)},
+            DescriptorBindingDesc{0, shadingBindings[15]}};
         ComputePipelineDesc shadingDesc{};
         shadingDesc.shader = "compute_shading.comp.spv";
         shadingDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&computeShadingLayout, 1};
         shadingDesc.descriptorBindings = shadingAbi;
-        shadingDesc.pushConstants = classifyPush;
+        const std::array<VkPushConstantRange, 1> shadingPush = {{
+            {VK_SHADER_STAGE_COMPUTE_BIT, 0, 128}}};
+        shadingDesc.pushConstants = shadingPush;
         return computeShadingPipeline.createCompute(device, shadingDesc);
     }
 
@@ -1356,6 +1509,18 @@ struct Renderer::Impl
         stats.quality.taaEnabled = config.enableTaa;
         stats.quality.clusteredLightingEnabled = config.enableClusteredLighting;
         stats.quality.transparencyEnabled = config.enableTransparency;
+        switch (activeRenderPath)
+        {
+        case Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed:
+            stats.renderPath = "DeferredIndexed";
+            break;
+        case Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed:
+            stats.renderPath = "GpuDrivenIndexed";
+            break;
+        case Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed:
+            stats.renderPath = "VirtualGeometryIndexed";
+            break;
+        }
         // SceneManager resolves stable handles before submission. Rendering
         // only consumes contiguous resource-table indices.
         for (const auto& drawInstance : packet.instances)
@@ -1520,6 +1685,22 @@ struct Renderer::Impl
                 std::uint32_t overflow = 0;
                 std::memcpy(&overflow, overflowBytes.value().data(), sizeof(overflow));
                 stats.clusterOverflowCount = overflow;
+            }
+        }
+        if (frame.submitted &&
+            currentFrame < virtualGeometryReadbacks.size() &&
+            currentFrame < virtualGeometryValid.size() && virtualGeometryValid[currentFrame])
+        {
+            const auto counters = gpuAllocator.readBuffer(
+                virtualGeometryReadbacks[currentFrame], 0, sizeof(std::uint32_t) * 3u);
+            if (counters && counters.value().size() >= sizeof(std::uint32_t) * 3u)
+            {
+                std::memcpy(&stats.virtualVisibleMeshletCount, counters.value().data(),
+                    sizeof(std::uint32_t));
+                std::memcpy(&stats.virtualIndirectCommandCount,
+                    counters.value().data() + sizeof(std::uint32_t), sizeof(std::uint32_t));
+                std::memcpy(&stats.virtualInvalidVisibilityCount,
+                    counters.value().data() + sizeof(std::uint32_t) * 2u, sizeof(std::uint32_t));
             }
         }
         if (frame.submitted && config.enableGpuDrivenScene &&
@@ -1764,7 +1945,8 @@ struct Renderer::Impl
         // Present pass. Allocate it lazily per frame slot because its size is
         // swapchain-dependent and keep it alive until that slot's fence has
         // completed on a later frame.
-        if (config.enableGpuDrivenScene && currentFrame < instanceIdReadbacks.size())
+        if (config.enableGpuDrivenScene &&
+            currentFrame < instanceIdReadbacks.size())
         {
             const VkDeviceSize instanceIdBytes = static_cast<VkDeviceSize>(swapchainExtent.width) *
                 static_cast<VkDeviceSize>(swapchainExtent.height) * sizeof(std::uint32_t);
@@ -1791,7 +1973,17 @@ struct Renderer::Impl
             }
             instanceIdReadbackValid[currentFrame] = false;
         }
+        else if (currentFrame < instanceIdReadbackValid.size())
+        {
+            // Virtual Geometry has its own visibility ID attachments and does
+            // not populate the legacy GBuffer InstanceId texture. Clear a
+            // stale slot when switching paths so a later indexed frame cannot
+            // consume an old readback as if it belonged to the current frame.
+            instanceIdReadbackValid[currentFrame] = false;
+        }
 
+        if (currentFrame < virtualGeometryValid.size())
+            virtualGeometryValid[currentFrame] = false;
         const VoidResult recordResult = recordFrame(frame, stats.swapchainImageIndex, packet,
             screenshotReadback.buffer);
         if (!recordResult)
@@ -1806,6 +1998,18 @@ struct Renderer::Impl
             return stats;
         }
         stats.executedPasses = frame.passNames;
+        switch (activeRenderPath)
+        {
+        case Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed:
+            stats.renderPath = "DeferredIndexed";
+            break;
+        case Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed:
+            stats.renderPath = "GpuDrivenIndexed";
+            break;
+        case Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed:
+            stats.renderPath = "VirtualGeometryIndexed";
+            break;
+        }
         stats.materialDescriptorBindCount = materialDescriptorBindCount;
         stats.gpuDrivenActive = gpuDrivenActive;
         stats.gpuFallbackInstanceCount = gpuFallbackInstanceCount;
@@ -1950,6 +2154,11 @@ VoidResult Renderer::Impl::recordFrame(
 {
     HALCYON_PROFILE_SCOPE("Renderer::recordFrame");
     materialDescriptorBindCount = 0;
+    // These are per-recording-frame facts. Clear them before any early
+    // validation failure so counters from the previous render cannot be
+    // reported as belonging to a failed VirtualGeometry frame.
+    virtualGeometryActive = false;
+    virtualVisibilityValid = false;
     if (imageIndex >= swapchainImages.size() || imageIndex >= swapchainImageViews.size())
     {
         return fail("Acquired swapchain image index is out of range");
@@ -1972,6 +2181,105 @@ VoidResult Renderer::Impl::recordFrame(
     }
     if (currentFrame >= frameUploadBuffers.size())
         return fail("GPU scene upload frame slot is out of range");
+
+    RendererConfig passConfig = config;
+    if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    {
+        constexpr std::uint32_t unsupportedFlags =
+            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::Transparent) |
+            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::DoubleSided) |
+            static_cast<std::uint32_t>(Halcyon::Renderer::Scene::Ecs::RenderableFlags::AlphaMasked) |
+            Halcyon::Renderer::Scene::kGpuSceneCpuFallbackFlag;
+        // M5 V1 supports multiple instances that share one virtual mesh table.
+        // Mixed assets need separate index-buffer streams, so the whole packet
+        // falls back instead of silently dropping incompatible draws.
+        const auto* firstVirtualAsset = packet.instances.empty() ? nullptr :
+            sceneResources.virtualGeometryDense(packet.instances.front().meshId);
+        const std::uint32_t sharedVirtualMeshId = packet.instances.empty()
+            ? std::numeric_limits<std::uint32_t>::max() : packet.instances.front().meshId;
+        const auto fitsStorageRange = [&](std::size_t count, std::size_t elementSize)
+        {
+            return count <= std::numeric_limits<VkDeviceSize>::max() / elementSize &&
+                static_cast<VkDeviceSize>(count * elementSize) <=
+                    physicalProperties.limits.maxStorageBufferRange;
+        };
+        const auto paddedByteCount = [](std::size_t count) noexcept
+        {
+            return count > std::numeric_limits<std::size_t>::max() - 3u
+                ? std::numeric_limits<std::size_t>::max()
+                : (count + 3u) & ~std::size_t(3u);
+        };
+        const std::uint64_t possibleMeshletDraws = firstVirtualAsset == nullptr
+            ? 0u
+            : static_cast<std::uint64_t>(firstVirtualAsset->meshlets.size()) *
+                static_cast<std::uint64_t>(packet.instances.size());
+        const bool allVirtualAssets = !packet.instances.empty() &&
+            packet.instances.size() <= VulkanFrameResources::MaxVirtualGeometryInstances &&
+            firstVirtualAsset != nullptr &&
+            firstVirtualAsset->meshlets.size() <=
+                VulkanFrameResources::MaxVirtualGeometryMeshlets &&
+            firstVirtualAsset->vertices.size() <= std::numeric_limits<std::uint32_t>::max() &&
+            firstVirtualAsset->meshletVertices.size() <= std::numeric_limits<std::uint32_t>::max() &&
+            firstVirtualAsset->meshletTriangles.size() <= std::numeric_limits<std::uint32_t>::max() &&
+            firstVirtualAsset->indices.size() <= std::numeric_limits<std::uint32_t>::max() &&
+            firstVirtualAsset->lods.size() <= std::numeric_limits<std::uint32_t>::max() &&
+            fitsStorageRange(firstVirtualAsset->meshlets.size(),
+                sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)) &&
+            fitsStorageRange(firstVirtualAsset->vertices.size(),
+                sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)) &&
+            fitsStorageRange(firstVirtualAsset->meshletVertices.size(), sizeof(std::uint32_t)) &&
+            fitsStorageRange(paddedByteCount(firstVirtualAsset->meshletTriangles.size()),
+                sizeof(std::uint8_t)) &&
+            fitsStorageRange(firstVirtualAsset->indices.size(), sizeof(std::uint32_t)) &&
+            fitsStorageRange(firstVirtualAsset->lods.size(), sizeof(Halcyon::Renderer::Scene::VirtualGeometryLod)) &&
+            possibleMeshletDraws <= VulkanFrameResources::MaxVirtualGeometryMeshlets &&
+            possibleMeshletDraws <= physicalProperties.limits.maxDrawIndirectCount &&
+            std::all_of(packet.instances.begin(), packet.instances.end(),
+                [&](const InstanceData& instance)
+                {
+                    const auto* asset = sceneResources.virtualGeometryDense(instance.meshId);
+                    const auto* gpu = sceneResources.virtualGeometryBuffersDense(instance.meshId);
+                    const bool finiteTransform = std::all_of(instance.transform.begin(),
+                        instance.transform.end(), [](float value) { return std::isfinite(value); });
+                    const glm::mat4 model = glm::make_mat4(instance.transform.data());
+                    const float determinant = glm::determinant(glm::mat3(model));
+                    return (instance.flags & unsupportedFlags) == 0 && asset != nullptr &&
+                        instance.meshId == sharedVirtualMeshId && asset == firstVirtualAsset &&
+                        asset->hasUniformPrimitiveMaterial() &&
+                        sceneResources.virtualGeometryMaterialCompatible(instance.materialId) &&
+                        instance.materialId <=
+                            Halcyon::Renderer::Scene::kVirtualVisibilityMaterialIndexMask &&
+                        gpu != nullptr && !asset->meshlets.empty() && finiteTransform &&
+                        // The visibility pipeline culls back faces with a
+                        // fixed winding. Mirrored transforms would invert
+                        // that winding, so keep them on the established
+                        // indexed fallback path for correctness.
+                        std::isfinite(determinant) && determinant > 1.0e-8f &&
+                        gpu->meshlets.buffer != VK_NULL_HANDLE &&
+                        gpu->meshletVertices.buffer != VK_NULL_HANDLE &&
+                        gpu->vertices.buffer != VK_NULL_HANDLE &&
+                        gpu->indices.buffer != VK_NULL_HANDLE;
+                });
+        if (!allVirtualAssets)
+        {
+            passConfig.renderPath = config.enableGpuDrivenScene
+                ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
+                : Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
+            setError("VirtualGeometryIndexed requires a fully compatible static packet; "
+                "using the established indexed fallback");
+        }
+    }
+    activeRenderPath = passConfig.renderPath ==
+            Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed &&
+            config.enableGpuDrivenScene
+        ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
+        : passConfig.renderPath;
+    virtualGeometryActive = passConfig.renderPath ==
+        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+    virtualVisibilityValid = false;
+    if (passConfig.renderPath !=
+        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+        virtualHiZInitialized = false;
     const auto sceneUpload = gpuSceneBuffers.recordPendingUploads(
         frame.commandBuffer, gpuAllocator, frameUploadBuffers[currentFrame]);
     if (!sceneUpload) return sceneUpload;
@@ -2002,10 +2310,12 @@ VoidResult Renderer::Impl::recordFrame(
     const VkBuffer gpuVertexBuffer = sceneResources.gpuDrivenVertexBuffer();
     const VkBuffer gpuIndexBuffer = sceneResources.gpuDrivenIndexBuffer();
     const VkBuffer gpuMeshDrawBuffer = sceneResources.meshDrawBuffer();
-    bool gpuIndirectCompatible = config.enableGpuDrivenScene && gpuSceneInstanceCount != 0 &&
+    const bool legacyGpuDrivenPath = passConfig.renderPath !=
+        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+    bool gpuIndirectCompatible = legacyGpuDrivenPath && config.enableGpuDrivenScene &&
+        gpuSceneInstanceCount != 0 &&
         gpuVertexBuffer != VK_NULL_HANDLE && gpuIndexBuffer != VK_NULL_HANDLE &&
         gpuMeshDrawBuffer != VK_NULL_HANDLE;
-    std::uint32_t gpuDrivenInstanceCount = gpuIndirectCompatible ? gpuSceneInstanceCount : 0;
     std::uint32_t cpuFallbackInstanceCount = 0;
     if (gpuIndirectCompatible && !packet.instances.empty())
     {
@@ -2019,7 +2329,7 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.device = device;
     ctx.frame = &frame;
     ctx.packet = &packet;
-    ctx.config = &config;
+    ctx.config = &passConfig;
     ctx.pipelines = &pipelines;
     ctx.gpuSceneBuffers = &gpuSceneBuffers;
     ctx.sceneResources = &sceneResources;
@@ -2039,7 +2349,16 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.height = swapchainExtent.height;
     ctx.currentFrame = currentFrame;
     ctx.imageIndex = imageIndex;
-    ctx.gpuDrivenBindless = gpuDrivenBindless;
+    ctx.virtualIndirectDrawCapacity = std::min<std::uint32_t>(
+        VulkanFrameResources::MaxVirtualGeometryMeshlets,
+        physicalProperties.limits.maxDrawIndirectCount);
+    // GpuDrivenIndexed is also selected by enableGpuDrivenScene while the
+    // public renderPath remains DeferredIndexed. Keep the bindless ABI for
+    // that established path; when GPU-driven rendering is disabled (including
+    // a VirtualGeometry-to-Deferred fallback), do not leak the optional M5
+    // pipeline capability into legacy CPU draw state.
+    ctx.gpuDrivenBindless = legacyGpuDrivenPath && config.enableGpuDrivenScene
+        ? gpuDrivenBindless : false;
     ctx.timestampsEnabled = timestampsEnabled;
     ctx.previousPacketValid = previousPacketValid;
     ctx.hasRenderedFrame = hasRenderedFrame;
@@ -2051,7 +2370,7 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.cpuDraw.previousInstances = &previousInstances;
     ctx.cpuDraw.previousPacketValid = previousPacketValid;
     ctx.cpuDraw.previousViewProjection = previousViewProjection;
-    ctx.cpuDraw.gpuDrivenBindless = gpuDrivenBindless;
+    ctx.cpuDraw.gpuDrivenBindless = ctx.gpuDrivenBindless;
     ctx.gpuSceneInstanceCount = gpuSceneInstanceCount;
     ctx.gpuMaterialCount = gpuMaterialCount;
     ctx.gpuMaterialId = gpuMaterialId;
@@ -2065,6 +2384,10 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.swapchainImageInitialized = &swapchainImageInitialized;
     ctx.frameUploadBuffers = &frameUploadBuffers;
     ctx.iblInitialized = &iblInitialized;
+    ctx.iblImageInitialized = &iblImageInitialized;
+    ctx.virtualHiZInitialized = &virtualHiZInitialized;
+    ctx.virtualHiZImageInitialized = &virtualHiZImageInitialized;
+    ctx.virtualVisibilityValid = &virtualVisibilityValid;
     ctx.taaHistoryFlip = &taaHistoryFlip;
     ctx.taaHistoryInitializedA = &taaHistoryInitializedA;
     ctx.taaHistoryInitializedB = &taaHistoryInitializedB;
@@ -2072,17 +2395,27 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.deviceLost = &deviceLost;
     ctx.lastError = &lastError;
 
-    const auto cullResult = recordGpuDrivenCulling(ctx);
-    if (!cullResult) return cullResult;
-    gpuIndirectCompatible = ctx.gpuIndirectCompatible;
-    gpuCullSet = ctx.gpuCullSet;
-    gpuIndirectSet = ctx.gpuIndirectSet;
-    gpuGraphicsSet = ctx.gpuGraphicsSet;
-    gpuPhase2GraphicsSet = ctx.gpuPhase2GraphicsSet;
+    // Virtual Geometry owns its meshlet cull and indirect stream. Do not
+    // record the legacy GPU-driven culling commands when both features are
+    // enabled; the virtual path still uses the uploaded GPU scene material
+    // table and transforms, but has no consumer for these command buffers.
+    if (passConfig.renderPath !=
+        Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    {
+        const auto cullResult = recordGpuDrivenCulling(ctx);
+        if (!cullResult) return cullResult;
+        gpuIndirectCompatible = ctx.gpuIndirectCompatible;
+        gpuCullSet = ctx.gpuCullSet;
+        gpuIndirectSet = ctx.gpuIndirectSet;
+        gpuGraphicsSet = ctx.gpuGraphicsSet;
+        gpuPhase2GraphicsSet = ctx.gpuPhase2GraphicsSet;
+    }
 
     const std::uint32_t width = swapchainExtent.width;
     const std::uint32_t height = swapchainExtent.height;
-    if (config.enableGpuDrivenScene && currentFrame < gpuReferenceVisible.size())
+    if (passConfig.renderPath !=
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+        config.enableGpuDrivenScene && currentFrame < gpuReferenceVisible.size())
     {
         const glm::mat4& vp = packet.camera.viewProjection;
         const glm::vec4 rows[4] = {
@@ -2140,10 +2473,17 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.prefiltered = m3.prefiltered;
     ctx.brdfLut = m3.brdfLut;
     ctx.visibility = m3.visibility;
+    ctx.visibilityPrimitive = m3.visibilityPrimitive;
+    ctx.visibilityBarycentrics = m3.visibilityBarycentrics;
     ctx.materialClassification = m3.materialClassification;
+    ctx.virtualTransforms = m3.virtualTransforms;
+    ctx.virtualMeshMaterials = m3.virtualMeshMaterials;
+    ctx.virtualCullFrame = m3.virtualCullFrame;
     ctx.visibleMeshlets = m3.visibleMeshlets;
     ctx.visibleMeshletCount = m3.visibleMeshletCount;
     ctx.meshletIndirect = m3.meshletIndirect;
+    ctx.meshletIndirectCount = m3.meshletIndirectCount;
+    ctx.virtualValidation = m3.virtualValidation;
     // M5 visibility resources remain declared for ABI stability; unsupported
     // devices continue through the established deferred/GPU-driven passes.
     ctx.clusterRanges = m3.clusterRanges;
@@ -2187,22 +2527,23 @@ VoidResult Renderer::Impl::recordFrame(
     swapchainBeginDependency.pImageMemoryBarriers = &swapchainBeginBarrier;
     vkCmdPipelineBarrier2(frame.commandBuffer, &swapchainBeginDependency);
 
-    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
         addCsmShadowPasses(graph, ctx);
     addVirtualGeometryPasses(graph, ctx);
-    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
         addGBufferPass(graph, ctx);
-    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
     {
         addHiZOcclusionPass(graph, ctx);
         addClusterBuildPass(graph, ctx);
     }
-    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
         addDeferredLightingPass(graph, ctx);
-    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+    if (passConfig.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
         addTransparencyPass(graph, ctx);
-    if (config.renderPath != Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
-        addTaaResolvePass(graph, ctx);
+    // M5 writes HDR and camera motion directly, then participates in the same
+    // temporal resolve, tonemap and present chain as indexed rendering.
+    addTaaResolvePass(graph, ctx);
     addTonemapPass(graph, ctx);
     addPresentPass(graph, ctx);
 
@@ -2366,15 +2707,72 @@ Halcyon::Result<void> Renderer::initialize(GLFWwindow* window, const RendererCon
             impl_->caps.bindlessTable = static_cast<bool>(bindlessResult);
         }
 #endif
-        // M5 is additive: devices without descriptor indexing cannot execute
-        // the visibility/material ABI, so keep the requested scene live on
-        // the existing indexed GPU path. The Engine already enables GPU
-        // driving for VirtualGeometryIndexed; this only changes the effective
-        // renderer mode after capabilities are known.
+        // M5 is additive: the visibility/material ABI needs descriptor
+        // indexing, indirect-count draws, and fragment barycentrics. Keep the
+        // requested scene live on the established indexed GPU path when any
+        // one of those capabilities is absent.
+        VkFormatProperties visibilityFormatProperties{};
+        vkGetPhysicalDeviceFormatProperties(impl_->physicalDevice, VK_FORMAT_R32_UINT,
+            &visibilityFormatProperties);
+        const bool visibilityIntegerAttachment =
+            (visibilityFormatProperties.optimalTilingFeatures &
+                (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+                 VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) ==
+            (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+             VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+        VkFormatProperties hdrFormatProperties{};
+        vkGetPhysicalDeviceFormatProperties(impl_->physicalDevice,
+            VK_FORMAT_R32G32B32A32_SFLOAT, &hdrFormatProperties);
+        constexpr VkFormatFeatureFlags virtualOutputFeatures =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+            VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+        const bool hdrStorageImage =
+            (hdrFormatProperties.optimalTilingFeatures & virtualOutputFeatures) ==
+            virtualOutputFeatures;
+        VkFormatProperties motionFormatProperties{};
+        vkGetPhysicalDeviceFormatProperties(impl_->physicalDevice,
+            VK_FORMAT_R16G16_SFLOAT, &motionFormatProperties);
+        const bool motionStorageImage =
+            (motionFormatProperties.optimalTilingFeatures & virtualOutputFeatures) ==
+            virtualOutputFeatures;
+        VkFormatProperties hizFormatProperties{};
+        vkGetPhysicalDeviceFormatProperties(impl_->physicalDevice,
+            VK_FORMAT_R32_SFLOAT, &hizFormatProperties);
+        const auto hizFeatures = hizFormatProperties.optimalTilingFeatures;
+        const bool hizImageSupport =
+            (hizFeatures & (VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) ==
+            (VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
+        const auto& descriptorLimits = impl_->physicalProperties.limits;
+        const bool virtualDescriptorSupport =
+            descriptorLimits.maxPerStageDescriptorStorageBuffers >= 7u &&
+            descriptorLimits.maxPerStageDescriptorSampledImages >= 6u &&
+            descriptorLimits.maxPerStageDescriptorStorageImages >= 2u &&
+            descriptorLimits.maxPerStageDescriptorSamplers >= 1u &&
+            descriptorLimits.maxDescriptorSetStorageBuffers >= 7u &&
+            descriptorLimits.maxDescriptorSetSampledImages >= 6u &&
+            descriptorLimits.maxDescriptorSetStorageImages >= 2u &&
+            descriptorLimits.maxDescriptorSetSamplers >= 1u &&
+            descriptorLimits.maxPerStageResources >= 16u &&
+            descriptorLimits.maxColorAttachments >= 3u &&
+            descriptorLimits.maxFragmentOutputAttachments >= 3u &&
+            descriptorLimits.maxPushConstantsSize >= 128u;
         if (impl_->config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
-            (!impl_->caps.descriptorIndexing || !impl_->caps.indirectCount))
+            (!impl_->caps.descriptorIndexing || !impl_->caps.indirectCount ||
+                !impl_->caps.fragmentBarycentric || !visibilityIntegerAttachment ||
+                !hdrStorageImage || !motionStorageImage || !hizImageSupport ||
+                !virtualDescriptorSupport))
         {
-            impl_->config.renderPath = Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed;
+            impl_->config.renderPath = impl_->config.enableGpuDrivenScene
+                ? Halcyon::Renderer::Scene::RenderPathMode::GpuDrivenIndexed
+                : Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
+            impl_->setError(impl_->config.enableGpuDrivenScene
+                ? "VirtualGeometryIndexed unavailable; fell back to GpuDrivenIndexed "
+                  "(descriptor limits/indexing, indirect count, barycentrics, integer attachment, Hi-Z format, or HDR/motion storage missing)"
+                : "VirtualGeometryIndexed unavailable; fell back to DeferredIndexed "
+                  "(descriptor limits/indexing, indirect count, barycentrics, integer attachment, Hi-Z format, or HDR/motion storage missing)");
         }
         impl_->swapchainState.enableVsync = impl_->config.enableVsync;
         result = impl_->swapchainState.initialize(impl_->physicalDevice,
@@ -2627,7 +3025,7 @@ Halcyon::Result<void> Renderer::updateGpuScene(
     auto result = impl_->gpuSceneBuffers.ensureCapacity(requiredCapacity);
     if (!result) return result;
     impl_->gpuSceneInstanceCount = static_cast<std::uint32_t>(instances.size());
-    if (impl_->gpuDrivenBindless && !impl_->bindlessMaterialRows.empty())
+    if (!impl_->bindlessMaterialRows.empty())
     {
         result = impl_->gpuSceneBuffers.uploadMaterials(impl_->bindlessMaterialRows);
         if (!result) return result;
@@ -2714,7 +3112,7 @@ Halcyon::Result<void> Renderer::updateGpuSceneDelta(
     const bool requiresFullUpload = required > impl_->gpuSceneBuffers.capacity();
     auto result = impl_->gpuSceneBuffers.ensureCapacity(required);
     if (!result) return result;
-    if (impl_->gpuDrivenBindless && !impl_->bindlessMaterialRows.empty())
+    if (!impl_->bindlessMaterialRows.empty())
     {
         result = impl_->gpuSceneBuffers.uploadMaterials(impl_->bindlessMaterialRows);
         if (!result) return result;
@@ -2733,7 +3131,14 @@ bool Renderer::gpuDrivenSceneEnabled() const noexcept
 
 bool Renderer::gpuDrivenBindlessEnabled() const noexcept
 {
-    return impl_ != nullptr && impl_->initialized && impl_->gpuDrivenBindless;
+    // The bindless GPU-driven path only needs a CPU packet for fallback and
+    // transparent draws. Virtual Geometry still consumes the complete,
+    // densely-remapped instance list for meshlet culling, visibility IDs and
+    // attribute reconstruction, even though it shares the bindless material
+    // table with GPU-driven rendering.
+    return impl_ != nullptr && impl_->initialized && impl_->gpuDrivenBindless &&
+        impl_->config.renderPath !=
+            Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
 }
 
 void Renderer::invalidateTaaHistory() noexcept
@@ -2744,6 +3149,8 @@ void Renderer::invalidateTaaHistory() noexcept
         impl_->hasRenderedFrame = false;
         impl_->previousPacketValid = false;
         impl_->previousInstances.clear();
+        impl_->virtualHiZInitialized = false;
+        impl_->virtualVisibilityValid = false;
     }
 }
 

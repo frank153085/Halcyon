@@ -1,10 +1,11 @@
 #include "Sha256.h"
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-#include <vector>
 
 namespace Halcyon::Renderer::Scene
 {
@@ -61,47 +62,96 @@ void processBlock(std::array<std::uint32_t, 8>& state, const std::uint8_t* block
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
 }
 
+struct Sha256Accumulator
+{
+    std::array<std::uint32_t, 8> state{0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u,
+        0xa54ff53au, 0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
+    std::array<std::uint8_t, 64> pending{};
+    std::size_t pendingSize = 0;
+    std::uint64_t byteCount = 0;
+
+    void update(std::span<const std::byte> bytes) noexcept
+    {
+        byteCount += static_cast<std::uint64_t>(bytes.size());
+        const auto* source = reinterpret_cast<const std::uint8_t*>(bytes.data());
+        std::size_t remaining = bytes.size();
+        if (pendingSize != 0u)
+        {
+            const std::size_t copied = std::min<std::size_t>(64u - pendingSize, remaining);
+            if (copied != 0u)
+                std::memcpy(pending.data() + pendingSize, source, copied);
+            pendingSize += copied;
+            source += copied;
+            remaining -= copied;
+            if (pendingSize == 64u)
+            {
+                processBlock(state, pending.data());
+                pendingSize = 0u;
+            }
+        }
+        while (remaining >= 64u)
+        {
+            processBlock(state, source);
+            source += 64u;
+            remaining -= 64u;
+        }
+        if (remaining != 0u)
+        {
+            std::memcpy(pending.data(), source, remaining);
+            pendingSize = remaining;
+        }
+    }
+
+    [[nodiscard]] Sha256Digest finish() noexcept
+    {
+        std::array<std::uint8_t, 128> tail{};
+        std::memcpy(tail.data(), pending.data(), pendingSize);
+        tail[pendingSize] = 0x80u;
+        const std::size_t tailSize = pendingSize < 56u ? 64u : 128u;
+        const std::uint64_t bitCount = byteCount * 8u;
+        for (std::size_t i = 0; i < 8u; ++i)
+            tail[tailSize - 1u - i] = static_cast<std::uint8_t>(bitCount >> (i * 8u));
+        processBlock(state, tail.data());
+        if (tailSize == 128u)
+            processBlock(state, tail.data() + 64u);
+        Sha256Digest result{};
+        for (std::size_t i = 0; i < state.size(); ++i)
+            for (std::size_t byte = 0; byte < 4u; ++byte)
+                result[i * 4u + byte] =
+                    static_cast<std::uint8_t>(state[i] >> (24u - byte * 8u));
+        return result;
+    }
+};
+
 } // namespace
 
 Sha256Digest sha256(std::span<const std::byte> bytes) noexcept
 {
-    std::array<std::uint32_t, 8> state{0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u,
-        0xa54ff53au, 0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
-    const std::size_t fullBlocks = bytes.size() / 64u;
-    for (std::size_t i = 0; i < fullBlocks; ++i)
-        processBlock(state, reinterpret_cast<const std::uint8_t*>(bytes.data()) + i * 64u);
-    std::array<std::uint8_t, 128> tail{};
-    const std::size_t remaining = bytes.size() % 64u;
-    for (std::size_t i = 0; i < remaining; ++i)
-        tail[i] = static_cast<std::uint8_t>(bytes[fullBlocks * 64u + i]);
-    tail[remaining] = 0x80u;
-    const std::size_t tailSize = remaining < 56u ? 64u : 128u;
-    const std::uint64_t bitCount = static_cast<std::uint64_t>(bytes.size()) * 8u;
-    for (std::size_t i = 0; i < 8; ++i)
-        tail[tailSize - 1u - i] = static_cast<std::uint8_t>(bitCount >> (i * 8u));
-    processBlock(state, tail.data());
-    if (tailSize == 128u) processBlock(state, tail.data() + 64u);
-    Sha256Digest result{};
-    for (std::size_t i = 0; i < state.size(); ++i)
-        for (std::size_t byte = 0; byte < 4; ++byte)
-            result[i * 4u + byte] = static_cast<std::uint8_t>(state[i] >> (24u - byte * 8u));
-    return result;
+    Sha256Accumulator accumulator;
+    accumulator.update(bytes);
+    return accumulator.finish();
 }
 
 Halcyon::Result<Sha256Digest> sha256File(const std::filesystem::path& path)
 {
-    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    std::ifstream stream(path, std::ios::binary);
     if (!stream) return Halcyon::Result<Sha256Digest>::failure(
         {Halcyon::ErrorCode::NotFound, "unable to open source for hashing", path.string()});
-    const auto size = stream.tellg();
-    if (size < 0) return Halcyon::Result<Sha256Digest>::failure(
-        {Halcyon::ErrorCode::Io, "unable to determine source size", path.string()});
-    std::vector<std::byte> data(static_cast<std::size_t>(size));
-    stream.seekg(0);
-    if (!data.empty()) stream.read(reinterpret_cast<char*>(data.data()), size);
-    if (!stream) return Halcyon::Result<Sha256Digest>::failure(
-        {Halcyon::ErrorCode::Io, "unable to read source for hashing", path.string()});
-    return Halcyon::Result<Sha256Digest>::success(sha256(data));
+    Sha256Accumulator accumulator;
+    std::array<char, 1024u * 1024u> chunk{};
+    while (stream)
+    {
+        stream.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+        const auto count = stream.gcount();
+        if (count > 0)
+            accumulator.update(std::span<const std::byte>{
+                reinterpret_cast<const std::byte*>(chunk.data()),
+                static_cast<std::size_t>(count)});
+    }
+    if (!stream.eof())
+        return Halcyon::Result<Sha256Digest>::failure(
+            {Halcyon::ErrorCode::Io, "unable to read source for hashing", path.string()});
+    return Halcyon::Result<Sha256Digest>::success(accumulator.finish());
 }
 
 std::string sha256Hex(const Sha256Digest& digest)

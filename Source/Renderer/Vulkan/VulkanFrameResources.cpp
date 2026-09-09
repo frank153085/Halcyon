@@ -1,6 +1,7 @@
 #include "VulkanFrameResources.h"
 
 #include "Renderer/Scene/FramePacket.h"
+#include "Renderer/Scene/GpuScene.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -82,11 +83,29 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
         Graph::TextureFormat::RG16Float, false});
     result.visibility = graph.createTexture({"VisibilityBuffer", extent_.width, extent_.height, 1, 1, 1,
         Graph::TextureFormat::R32Uint, true});
+    result.visibilityPrimitive = graph.createTexture({"VisibilityPrimitive", extent_.width, extent_.height, 1, 1, 1,
+        Graph::TextureFormat::R32Uint, true});
+    result.visibilityBarycentrics = graph.createTexture({"VisibilityBarycentrics", extent_.width, extent_.height, 1, 1, 1,
+        Graph::TextureFormat::R32Uint, true});
     result.materialClassification = graph.createBuffer({"MaterialClassification",
         std::max<std::size_t>(1, static_cast<std::size_t>(extent_.width) * extent_.height) * 4u, 4u, true});
-    result.visibleMeshlets = graph.createBuffer({"VisibleMeshlets", 131072u * 4u, 4u, true});
+    result.virtualTransforms = graph.createBuffer({"VirtualGeometryTransforms",
+        static_cast<std::size_t>(MaxVirtualGeometryInstances) *
+            sizeof(Halcyon::Renderer::Scene::TransformRow),
+        static_cast<std::uint32_t>(sizeof(Halcyon::Renderer::Scene::TransformRow)), true});
+    result.virtualMeshMaterials = graph.createBuffer({"VirtualGeometryMeshMaterials",
+        static_cast<std::size_t>(MaxVirtualGeometryInstances) *
+            sizeof(Halcyon::Renderer::Scene::MeshMaterialRow),
+        static_cast<std::uint32_t>(sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)), true});
+    result.virtualCullFrame = graph.createBuffer(
+        {"VirtualGeometryCullFrame", sizeof(float) * 20u, 16u, true});
+    result.visibleMeshlets = graph.createBuffer({"VisibleMeshlets",
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 4u, 4u, true});
     result.visibleMeshletCount = graph.createBuffer({"VisibleMeshletCount", 4u, 4u, true});
-    result.meshletIndirect = graph.createBuffer({"MeshletIndirect", 131072u * 20u, 20u, true});
+    result.meshletIndirect = graph.createBuffer({"MeshletIndirect",
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 20u, 20u, true});
+    result.meshletIndirectCount = graph.createBuffer({"MeshletIndirectCount", 4u, 4u, true});
+    result.virtualValidation = graph.createBuffer({"VirtualGeometryValidation", 4u, 4u, true});
 
     result.clusterCount = clusterCount();
     result.clusterRanges = graph.createBuffer(

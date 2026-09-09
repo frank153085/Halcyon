@@ -45,7 +45,7 @@ static_assert(alignof(InstanceData) == 16);
 static_assert(sizeof(InstanceData) % 16 == 0);
 static_assert(std::is_standard_layout_v<InstanceData>);
 static_assert(alignof(LightData) == 16);
-static_assert(sizeof(LightData) % 16 == 0);
+static_assert(sizeof(LightData) == 64);
 static_assert(std::is_standard_layout_v<LightData>);
 
 struct FramePacket

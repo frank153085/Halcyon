@@ -55,6 +55,7 @@ struct FramePassContext
     std::uint32_t height = 0;
     std::uint32_t currentFrame = 0;
     std::uint32_t imageIndex = 0;
+    std::uint32_t virtualIndirectDrawCapacity = 0;
 
     bool gpuDrivenBindless = false;
     bool timestampsEnabled = false;
@@ -97,10 +98,17 @@ struct FramePassContext
     Graph::TextureHandle prefiltered{};
     Graph::TextureHandle brdfLut{};
     Graph::TextureHandle visibility{};
+    Graph::TextureHandle visibilityPrimitive{};
+    Graph::TextureHandle visibilityBarycentrics{};
     Graph::BufferHandle materialClassification{};
+    Graph::BufferHandle virtualTransforms{};
+    Graph::BufferHandle virtualMeshMaterials{};
+    Graph::BufferHandle virtualCullFrame{};
     Graph::BufferHandle visibleMeshlets{};
     Graph::BufferHandle visibleMeshletCount{};
     Graph::BufferHandle meshletIndirect{};
+    Graph::BufferHandle meshletIndirectCount{};
+    Graph::BufferHandle virtualValidation{};
     Graph::BufferHandle clusterRanges{};
     Graph::BufferHandle clusterIndices{};
     Graph::BufferHandle clusterOverflow{};
@@ -118,6 +126,16 @@ struct FramePassContext
     std::vector<std::vector<BufferAllocation>>* frameUploadBuffers = nullptr;
 
     bool* iblInitialized = nullptr;
+    // Tracks the persistent IBL image layout independently from whether a
+    // complete payload has been uploaded. This lets a failed upload retry
+    // from SHADER_READ_ONLY_OPTIMAL without assuming UNDEFINED.
+    bool* iblImageInitialized = nullptr;
+    bool* virtualHiZInitialized = nullptr;
+    bool* virtualHiZImageInitialized = nullptr;
+    // Set by visibility rasterization only after its clear/render sequence
+    // completed. Later virtual passes use it to avoid consuming undefined
+    // attachments when a transient setup step fails.
+    bool* virtualVisibilityValid = nullptr;
     bool* taaHistoryFlip = nullptr;
     bool* taaHistoryInitializedA = nullptr;
     bool* taaHistoryInitializedB = nullptr;

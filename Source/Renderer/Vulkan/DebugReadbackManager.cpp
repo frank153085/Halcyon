@@ -16,6 +16,10 @@ void DebugReadbackManager::cleanup(GpuAllocator& allocator) noexcept
     }
     gpuVisibilityReadbacks.clear();
     gpuVisibilityValid.clear();
+    for (auto& readback : virtualGeometryReadbacks)
+        allocator.destroy(readback);
+    virtualGeometryReadbacks.clear();
+    virtualGeometryValid.clear();
     gpuReferenceVisible.clear();
     for (auto& readback : instanceIdReadbacks)
     {

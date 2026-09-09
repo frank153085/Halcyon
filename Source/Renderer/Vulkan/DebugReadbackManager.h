@@ -27,6 +27,8 @@ public:
     std::vector<BufferAllocation> clusterOverflowReadbacks;
     std::vector<BufferAllocation> gpuVisibilityReadbacks;
     std::vector<bool> gpuVisibilityValid;
+    std::vector<BufferAllocation> virtualGeometryReadbacks;
+    std::vector<bool> virtualGeometryValid;
     std::vector<std::vector<std::uint32_t>> gpuReferenceVisible;
     std::vector<BufferAllocation> instanceIdReadbacks;
     std::vector<bool> instanceIdReadbackValid;

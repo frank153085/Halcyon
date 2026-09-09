@@ -27,6 +27,9 @@ struct ResourceBinding
     std::uint32_t arraySize = 1;
     ResourceType type = ResourceType::Unknown;
     std::uint32_t variableId = 0;
+    // Non-zero for StructuredBuffer/RWStructuredBuffer resources backed by
+    // an OpTypeRuntimeArray carrying an ArrayStride decoration.
+    std::uint32_t elementStride = 0;
 };
 
 struct PushConstantRange

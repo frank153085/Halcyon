@@ -204,7 +204,7 @@ void printUsage() noexcept
                 "  --frames N       render N frames and exit (default: until close)\n"
                 "  --width N        initial window width (default: 1280)\n"
                 "  --height N       initial window height (default: 720)\n"
-                "  --scene NAME     scene name (damaged-helmet, sponza, or stress)\n"
+                "  --scene NAME     scene name (damaged-helmet, sponza, lucy, or stress)\n"
                 "  --fixed-dt S     fixed simulation timestep\n"
                 "  --exposure EV    HDR exposure\n"
                 "  --screenshot P   write a PNG after the final frame\n"
@@ -413,6 +413,21 @@ void printUsage() noexcept
         config.window.initialExtent = {640, 360};
     }
     return true;
+}
+
+[[nodiscard]] const char* renderPathName(RenderPathMode path, bool gpuDriven) noexcept
+{
+    switch (path)
+    {
+    case RenderPathMode::DeferredIndexed:
+        // The public compatibility mode remains DeferredIndexed when the
+        // caller enables GPU-driven rendering. Report the path selected by
+        // the compatibility flags in that case.
+        return gpuDriven ? "GpuDrivenIndexed" : "DeferredIndexed";
+    case RenderPathMode::GpuDrivenIndexed: return "GpuDrivenIndexed";
+    case RenderPathMode::VirtualGeometryIndexed: return "VirtualGeometryIndexed";
+    }
+    return "Unknown";
 }
 
 [[nodiscard]] double percentile(std::vector<double> values, double fraction) noexcept
@@ -782,12 +797,14 @@ int Application::run(
                     }
                     if (!performanceCsvHeaderWritten)
                     {
-                        csv << "frame,scene,width,height,device_name,vendor_id,device_id,"
+                        csv << "frame,scene,render_path,width,height,device_name,vendor_id,device_id,"
                                "driver_version,device_api_version,device_memory_bytes,"
                                "exposure,taa_enabled,clustered_lighting_enabled,"
                                "transparency_enabled,cpu_ms,cpu_visibility_ms,gpu_ms,"
                                "gpu_frustum_cull_ms,gpu_indirect_build_ms,gpu_hiz_build_ms,"
                                "gpu_two_phase_ms,visible_instance_count,indirect_draw_count,"
+                               "virtual_visible_meshlet_count,virtual_indirect_command_count,"
+                               "virtual_invalid_visibility_count,"
                                "frustum_visible_instance_count,occluded_instance_count,gpu_driven_active,"
                                "gpu_fallback_instance_count,"
                                "gpu_visibility_missing_count,gpu_visibility_validation_passed,"
@@ -813,7 +830,12 @@ int Application::run(
                         csv << '\n';
                         performanceCsvHeaderWritten = true;
                     }
+                    const std::string actualRenderPath = previousStats.renderPath.empty()
+                        ? renderPathName(config.engine.renderPath,
+                            config.engine.enableGpuDrivenScene)
+                        : previousStats.renderPath;
                     csv << frameIndex << ',' << config.sceneName << ','
+                        << actualRenderPath << ','
                         << config.window.initialExtent.width << ','
                         << config.window.initialExtent.height << ',' << deviceName << ','
                         << engine->capabilities().vendorId << ','
@@ -834,6 +856,9 @@ int Application::run(
                         << previousStats.gpuTwoPhaseMs << ','
                         << previousStats.visibleInstanceCount << ','
                         << previousStats.indirectDrawCount << ','
+                        << previousStats.virtualVisibleMeshletCount << ','
+                        << previousStats.virtualIndirectCommandCount << ','
+                        << previousStats.virtualInvalidVisibilityCount << ','
                         << previousStats.frustumVisibleInstanceCount << ','
                         << previousStats.occludedInstanceCount << ','
                         << (previousStats.gpuDrivenActive ? 1 : 0) << ','

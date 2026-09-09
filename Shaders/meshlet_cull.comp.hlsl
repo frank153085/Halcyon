@@ -1,25 +1,148 @@
-struct MeshletMeta { uint vertexOffset; uint vertexCount; uint triangleOffset; uint triangleCount; uint indexOffset; uint indexCount; uint primitiveIndex; uint lodIndex; float4 sphere; float4 cone; float geometricError; };
+#include "virtual_geometry_ids.hlsli"
+
 [[vk::binding(0, 0)]] StructuredBuffer<MeshletMeta> meshlets;
 [[vk::binding(1, 0)]] RWStructuredBuffer<uint> visibleMeshlets;
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> visibleCount;
-struct CullConstants { float4 planes[6]; uint meshletCount; uint instanceIndex; uint lod; uint pad; };
+[[vk::binding(3, 0)]] Texture2D<float> previousHiZ;
+[[vk::binding(4, 0)]] StructuredBuffer<TransformRow> transforms;
+struct CullFrame { float4x4 viewProjection; uint4 hiz; };
+[[vk::binding(5, 0)]] ConstantBuffer<CullFrame> frame;
+struct CullConstants { float4 planes[6]; float4 cameraPosition; uint meshletCount; uint instanceIndex; uint lodAndFlags; uint visibleCapacity; };
 [[vk::push_constant]] ConstantBuffer<CullConstants> constants;
+
+float meshletRadiusScale(float4x4 model)
+{
+    const float3 x = mul(model, float4(1.0, 0.0, 0.0, 0.0)).xyz;
+    const float3 y = mul(model, float4(0.0, 1.0, 0.0, 0.0)).xyz;
+    const float3 z = mul(model, float4(0.0, 0.0, 1.0, 0.0)).xyz;
+    const float3 squaredLengths = float3(dot(x, x), dot(y, y), dot(z, z));
+    const float maximumSquared = max(squaredLengths.x,
+        max(squaredLengths.y, squaredLengths.z));
+    const float crossAxisDot = max(abs(dot(x, y)),
+        max(abs(dot(x, z)), abs(dot(y, z))));
+    // For an orthogonal TRS basis the largest axis is the exact sphere scale.
+    // Under shear, the Frobenius norm is a conservative upper bound for the
+    // largest singular value and therefore for the transformed sphere.
+    return crossAxisDot <= max(maximumSquared, 1.0e-12) * 1.0e-4
+        ? sqrt(maximumSquared) : sqrt(dot(squaredLengths, 1.0.xxx));
+}
+
+bool survivesHiZ(MeshletMeta meshlet)
+{
+    const bool enabled = (constants.lodAndFlags & VG_CULL_HIZ_ENABLED_FLAG) != 0u && frame.hiz.w != 0u;
+    if (!enabled) return true;
+
+    const float4x4 model = transforms[constants.instanceIndex].model;
+    const float3 center = mul(model, float4(meshlet.sphere.xyz, 1.0)).xyz;
+    // Use the same conservative singular-value upper bound as the frustum
+    // path. The largest basis length is exact for orthogonal TRS, but can
+    // under-estimate a sheared transform and incorrectly reject a meshlet.
+    const float scale = meshletRadiusScale(model);
+    const float radius = meshlet.sphere.w * scale;
+    float2 uvMin = 1.0.xx;
+    float2 uvMax = 0.0.xx;
+    float nearestDepth = 0.0;
+    [unroll]
+    for (uint corner = 0u; corner < 8u; ++corner)
+    {
+        const float3 offset = float3((corner & 1u) != 0u ? radius : -radius,
+            (corner & 2u) != 0u ? radius : -radius,
+            (corner & 4u) != 0u ? radius : -radius);
+        const float4 clip = mul(frame.viewProjection, float4(center + offset, 1.0));
+        if (clip.w <= 1.0e-5) return true;
+        const float2 uv = clip.xy / clip.w * 0.5 + 0.5;
+        uvMin = min(uvMin, uv);
+        uvMax = max(uvMax, uv);
+        nearestDepth = max(nearestDepth, saturate(clip.z / clip.w));
+    }
+    if (any(uvMax <= 0.0) || any(uvMin >= 1.0)) return true;
+    uvMin = saturate(uvMin);
+    uvMax = saturate(uvMax);
+    const float footprint = max((uvMax.x - uvMin.x) * frame.hiz.x,
+        (uvMax.y - uvMin.y) * frame.hiz.y);
+    const uint mip = min(frame.hiz.z,
+        (uint)max(0.0, ceil(log2(max(footprint, 2.0))) - 1.0));
+    uint mipWidth, mipHeight, mipCount;
+    previousHiZ.GetDimensions(mip, mipWidth, mipHeight, mipCount);
+    const uint2 lastTexel = uint2(max(1u, mipWidth) - 1u, max(1u, mipHeight) - 1u);
+    const uint2 first = min((uint2)(uvMin * float2(mipWidth, mipHeight)), lastTexel);
+    const uint2 last = min((uint2)(uvMax * float2(mipWidth, mipHeight)), lastTexel);
+    const float pyramidDepth = min(min(previousHiZ.Load(int3(first, mip)),
+        previousHiZ.Load(int3(uint2(last.x, first.y), mip))),
+        min(previousHiZ.Load(int3(uint2(first.x, last.y), mip)),
+            previousHiZ.Load(int3(last, mip))));
+    return pyramidDepth <= 0.0 || nearestDepth >= pyramidDepth - 0.0005;
+}
+
+bool supportsObjectSpaceCone(float4x4 model)
+{
+    const float3 x = mul(model, float4(1.0, 0.0, 0.0, 0.0)).xyz;
+    const float3 y = mul(model, float4(0.0, 1.0, 0.0, 0.0)).xyz;
+    const float3 z = mul(model, float4(0.0, 0.0, 1.0, 0.0)).xyz;
+    const float sx = length(x);
+    const float sy = length(y);
+    const float sz = length(z);
+    const float maximum = max(sx, max(sy, sz));
+    const float minimum = min(sx, min(sy, sz));
+    // A normal cone remains valid in object space only for an approximately
+    // uniform, orthogonal scale. Skip it for non-uniform or sheared transforms
+    // to stay conservative.
+    const float orthogonality = max(abs(dot(x, y)),
+        max(abs(dot(x, z)), abs(dot(y, z))));
+    return maximum > 1.0e-5 && (maximum - minimum) <= maximum * 1.0e-3 &&
+        orthogonality <= maximum * maximum * 1.0e-4;
+}
+
 [numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= constants.meshletCount) return;
     MeshletMeta m = meshlets[id.x];
-    if (m.lodIndex != constants.lod) return;
-    // The first M5 fixture pass keeps the conservative frustum decision on
-    // the CPU-generated meshlet list.  Retaining the plane data in the ABI
-    // allows the Hi-Z/normal-cone tests to be enabled without changing the
-    // cache or indirect command format.
+    if (m.lodIndex != (constants.lodAndFlags & VG_CULL_LOD_MASK)) return;
+    const float4x4 model = transforms[constants.instanceIndex].model;
+    // Frustum planes stay in world space so non-uniform and sheared instance
+    // transforms can use a conservative transformed sphere radius.
+    const float3 worldCenter = mul(model, float4(m.sphere.xyz, 1.0)).xyz;
+    const float worldRadius = m.sphere.w * meshletRadiusScale(model);
+    bool inside = true;
+    [unroll]
+    for (uint planeIndex = 0u; planeIndex < 6u; ++planeIndex)
+    {
+        if (dot(constants.planes[planeIndex].xyz, worldCenter) +
+            constants.planes[planeIndex].w + worldRadius < 0.0)
+        {
+            inside = false;
+            break;
+        }
+    }
+    if (!inside) return;
+    if (!survivesHiZ(m)) return;
+    // meshopt stores a conservative normal cone as axis.xyz and cutoff.w.
+    // A cone with a negative cutoff is effectively two-sided and is retained.
+    const float coneAxisLength = length(m.cone.xyz);
+    if (supportsObjectSpaceCone(model) && coneAxisLength > 1.0e-5 && m.cone.w >= -0.9999)
+    {
+        // meshoptimizer's conservative no-apex test is:
+        // dot(center - camera, axis) >= cutoff * distance + radius.
+        // Keep the calculation in object space because both the cached
+        // bounds and the camera push constant are object-space values.
+        const float3 centerFromCamera = m.sphere.xyz - constants.cameraPosition.xyz;
+        const float distance = length(centerFromCamera);
+        if (distance > 1e-5 && dot(normalize(m.cone.xyz), centerFromCamera) >=
+            m.cone.w * distance + m.sphere.w)
+            return;
+    }
     uint dst = 0;
     uint observed = visibleCount[0];
-    while (observed < 131072u)
+    while (observed < constants.visibleCapacity)
     {
         uint previous = 0;
         InterlockedCompareExchange(visibleCount[0], observed, observed + 1u, previous);
         if (previous == observed) { dst = observed; break; }
         observed = previous;
     }
-    if (observed < 131072u && dst < 131072u) visibleMeshlets[dst] = id.x;
+    if (observed < constants.visibleCapacity && dst < constants.visibleCapacity)
+    {
+        // The upper byte identifies the instance; the low 20 bits identify
+        // the meshlet in the shared virtual asset table.
+        visibleMeshlets[dst] = vgPackDrawToken(constants.instanceIndex, id.x);
+    }
 }

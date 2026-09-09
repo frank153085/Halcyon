@@ -88,6 +88,9 @@ powershell -ExecutionPolicy Bypass -File scripts/configure_msvc.ps1 `
 
 The large sample assets are intentionally ignored by Git. The equivalent explicit download is
 `cmake --build out/build/demo-msvc-debug --target HalcyonFetchAssets`.
+The research-only Stanford Lucy fixture is fetched separately with
+`cmake --build out/build/demo-msvc-debug --target HalcyonFetchM5Assets` (or
+`scripts/fetch_m5_assets.ps1 -Offline` when the archive is already cached).
 
 Use the RelWithDebInfo preset for performance measurements:
 

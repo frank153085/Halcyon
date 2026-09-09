@@ -533,7 +533,7 @@ void addGBufferPass(Graph::FrameGraph& graph, FramePassContext& ctx)
                  {
                      sets[0] = bindlessTable.descriptorSet();
                  }
-                 else
+                 else if (!packet.instances.empty())
                  {
                      sets[0] = sceneResources.materialDescriptor(
                          packet.instances.front().materialId);

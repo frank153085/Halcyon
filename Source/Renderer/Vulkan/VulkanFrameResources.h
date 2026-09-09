@@ -3,6 +3,7 @@
 #include "Core/Result.h"
 #include "Renderer/Graph/FrameGraph.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <vulkan/vulkan.h>
 
@@ -15,6 +16,13 @@ namespace Halcyon::Vulkan
 class VulkanFrameResources final
 {
 public:
+    // Lucy's three fixed LODs fit below one million meshlets.  Keeping this
+    // cap explicit makes the indirect count ABI and shader saturation bound
+    // identical across frame resources and culling.
+    // Visibility IDs reserve zero for background and store meshletIndex + 1
+    // in 20 bits, so the representable meshlet count is 2^20 - 1.
+    static constexpr std::uint32_t MaxVirtualGeometryMeshlets = (1u << 20u) - 1u;
+    static constexpr std::uint32_t MaxVirtualGeometryInstances = 256u;
     static constexpr std::uint32_t CsmResolution = 2048;
     static constexpr std::uint32_t ClusterTileSize = 64;
     static constexpr std::uint32_t ClusterSlices = 24;
@@ -38,10 +46,17 @@ public:
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> prefiltered;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> brdfLut;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> visibility;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> visibilityPrimitive;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphTexture> visibilityBarycentrics;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> materialClassification;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualTransforms;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualMeshMaterials;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualCullFrame;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshlets;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> visibleMeshletCount;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirect;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirectCount;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualValidation;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterRanges;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterIndices;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> clusterOverflow;

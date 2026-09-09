@@ -124,6 +124,8 @@ public:
     }
     [[nodiscard]] Halcyon::Renderer::Scene::MaterialGpuData materialRow(
         std::uint32_t denseIndex) const noexcept;
+    [[nodiscard]] bool virtualGeometryMaterialCompatible(
+        std::uint32_t denseIndex) const noexcept;
     [[nodiscard]] const TextureResource* textureDense(
         std::uint32_t denseIndex) const noexcept;
     // Resolve a stable SceneDatabase slot to a dense GPU index. Frame packets
@@ -161,6 +163,7 @@ private:
         std::uint32_t occlusionTexture = 0;
         BufferAllocation factorsBuffer{};
         Halcyon::Renderer::Scene::MaterialGpuData bindlessRow{};
+        bool virtualGeometryCompatible = false;
     };
 
     // std140-compatible material constants consumed by gbuffer and forward

@@ -50,6 +50,8 @@ lib/
 # Runtime cache written when unpacking embedded glTF images.
 *.embedded_*.bin
 *.halcyon.vgcache
+# Stanford Lucy is a local research fixture and is never committed.
+assets/models/lucy/
 
 ### Operating-system files ###
 .DS_Store

@@ -49,6 +49,10 @@ struct FrameStats
     };
 
     double cpuFrameMs = 0.0;
+    // Render path actually recorded for this frame. This can differ from the
+    // configured path when a packet is incompatible with Virtual Geometry and
+    // the renderer selects its documented indexed fallback.
+    std::string renderPath;
     // Visibility timings are -1 until the GPU-driven path is enabled.
     double cpuVisibilityMs = -1.0;
     double gpuFrustumCullMs = -1.0;
@@ -57,6 +61,12 @@ struct FrameStats
     double gpuTwoPhaseMs = -1.0;
     std::uint32_t visibleInstanceCount = 0;
     std::uint32_t indirectDrawCount = 0;
+    // Virtual Geometry counters copied from the GPU meshlet submission path.
+    std::uint32_t virtualVisibleMeshletCount = 0;
+    std::uint32_t virtualIndirectCommandCount = 0;
+    // Number of malformed non-background visibility records rejected during
+    // material classification. A valid virtual-geometry frame must report 0.
+    std::uint32_t virtualInvalidVisibilityCount = 0;
     // Counts exposed by the GPU-driven audit. The frustum count is the
     // candidate list before Hi-Z; visible/indirect counts describe the final
     // submitted set. This makes an occlusion run distinguishable from a

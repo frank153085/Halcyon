@@ -60,6 +60,7 @@ namespace
 [[nodiscard]] FrameStats translateStats(const Vulkan::FrameStats& source) noexcept
 {
     FrameStats result{};
+    result.renderPath = source.renderPath;
     result.cpuFrameMs = source.cpuFrameMs;
     result.cpuVisibilityMs = source.cpuVisibilityMs;
     result.gpuFrustumCullMs = source.gpuFrustumCullMs;
@@ -68,6 +69,9 @@ namespace
     result.gpuTwoPhaseMs = source.gpuTwoPhaseMs;
     result.visibleInstanceCount = source.visibleInstanceCount;
     result.indirectDrawCount = source.indirectDrawCount;
+    result.virtualVisibleMeshletCount = source.virtualVisibleMeshletCount;
+    result.virtualIndirectCommandCount = source.virtualIndirectCommandCount;
+    result.virtualInvalidVisibilityCount = source.virtualInvalidVisibilityCount;
     result.frustumVisibleInstanceCount = source.frustumVisibleInstanceCount;
     result.occludedInstanceCount = source.occludedInstanceCount;
     result.gpuDrivenActive = source.gpuDrivenActive;

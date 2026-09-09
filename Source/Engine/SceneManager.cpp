@@ -1,6 +1,7 @@
 #include "Halcyon/SceneManager.h"
 
 #include "Core/HandlePool.h"
+#include "Core/Log.h"
 #include "Renderer/Scene/Ecs/RenderExtractor.h"
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.h"
 #include "Renderer/Scene/Sha256.h"
@@ -49,6 +50,25 @@ struct InstanceRecord
             return static_cast<char>(std::tolower(value));
         });
     return extension == ".gltf" || extension == ".glb";
+}
+
+[[nodiscard]] bool isVirtualGeometrySourcePath(const std::filesystem::path& path)
+{
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    // M5's runtime cooker is intentionally enabled for the PLY fixture. glTF
+    // and GLB continue through the established fastgltf/GPU-driven path; they
+    // do not require a sidecar cache to remain compatible with existing loads.
+    return extension == ".ply";
+}
+
+[[nodiscard]] bool isPlySourcePath(const std::filesystem::path& path)
+{
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    return extension == ".ply";
 }
 
 } // namespace
@@ -199,10 +219,10 @@ Result<SceneAssetHandle> SceneManager::loadAsset(
         return Result<SceneAssetHandle>::failure(sceneManagerError(
             ErrorCode::NotFound, "scene asset does not exist: " + resolved.string()));
     }
-    if (!isSupportedScenePath(resolved) && resolved.extension() != ".ply" && resolved.extension() != ".PLY")
+    if (!isSupportedScenePath(resolved) && !isPlySourcePath(resolved))
     {
         return Result<SceneAssetHandle>::failure(sceneManagerError(
-            ErrorCode::Unsupported, "scene assets must use .gltf or .glb: " + resolved.string()));
+            ErrorCode::Unsupported, "scene assets must use .gltf, .glb, or .ply: " + resolved.string()));
     }
     auto loaded = Renderer::Scene::loadGeometrySource(resolved);
     if (!loaded)
@@ -243,30 +263,67 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             importedResult.error().withContext("SceneManager::createAsset " + name));
     }
     SceneImportResult imported = importedResult.value();
-    // PLY assets opt into the M5 sidecar when it is present and valid. A
-    // missing or stale cache is deliberately non-fatal: build it in memory so
-    // the existing renderer can still display the source mesh.
+    // File-backed static assets opt into the M5 sidecar when it is present and
+    // valid. A missing or stale cache is deliberately non-fatal: build it in
+    // memory so the established indexed renderer can still display the source
+    // mesh if virtual cooking is unavailable.
     std::shared_ptr<const Renderer::Scene::VirtualGeometryAsset> virtualGeometry;
     const std::filesystem::path sourcePath = sceneAsset.sourcePath;
-    const auto extension = sourcePath.extension().string();
-    if (extension == ".ply" || extension == ".PLY")
+    if (isVirtualGeometrySourcePath(sourcePath))
     {
-        const auto sourceHash = Renderer::Scene::sha256File(sourcePath);
-        if (sourceHash)
+        try
         {
-            const auto sidecar = sourcePath.string() + ".halcyon.vgcache";
-            auto cached = Renderer::Scene::readVirtualGeometryCache(sidecar, &sourceHash.value());
-            if (!cached)
+            const auto sourceHash = Renderer::Scene::sha256File(sourcePath);
+            if (sourceHash)
             {
+                const auto sidecar = sourcePath.string() + ".halcyon.vgcache";
+                const Renderer::Scene::VirtualGeometryCacheOptions cacheOptions{};
+                auto cached = Renderer::Scene::readVirtualGeometryCache(
+                    sidecar, &sourceHash.value(), nullptr, &cacheOptions);
+                if (!cached)
+                {
+                    HALCYON_LOG_WARN("Virtual Geometry cache unavailable for ",
+                        sourcePath.string(), ": ", cached.error().describe(),
+                        "; rebuilding at runtime");
+                    const auto rebuilt = Renderer::Scene::buildVirtualGeometry(sceneAsset);
+                    if (rebuilt)
+                    {
+                        (void)Renderer::Scene::writeVirtualGeometryCache(sidecar, rebuilt.value(),
+                            sourceHash.value());
+                        cached = std::move(rebuilt);
+                    }
+                    else
+                    {
+                        HALCYON_LOG_WARN("Virtual Geometry rebuild failed for ",
+                            sourcePath.string(), ": ", rebuilt.error().describe(),
+                            "; using indexed fallback");
+                    }
+                }
+                if (cached)
+                    virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
+                        std::move(cached).value());
+            }
+            else
+            {
+                HALCYON_LOG_WARN("Virtual Geometry source hash failed for ",
+                    sourcePath.string(), ": ", sourceHash.error().describe(),
+                    "; rebuilding without a sidecar cache");
                 const auto rebuilt = Renderer::Scene::buildVirtualGeometry(sceneAsset);
                 if (rebuilt)
-                {
-                    (void)Renderer::Scene::writeVirtualGeometryCache(sidecar, rebuilt.value(),
-                        sourceHash.value());
-                    cached = std::move(rebuilt);
-                }
+                    virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
+                        std::move(rebuilt).value());
+                else
+                    HALCYON_LOG_WARN("Virtual Geometry rebuild failed for ",
+                        sourcePath.string(), ": ", rebuilt.error().describe(),
+                        "; using indexed fallback");
             }
-            if (cached) virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(std::move(cached).value());
+        }
+        catch (const std::bad_alloc&)
+        {
+            // Virtual cooking is optional for the established indexed path.
+            // An allocation failure must not escape the scene manager after
+            // the source scene has already been imported.
+            virtualGeometry.reset();
         }
     }
     if (virtualGeometry)

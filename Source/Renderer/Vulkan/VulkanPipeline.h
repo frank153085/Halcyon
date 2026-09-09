@@ -17,6 +17,9 @@ struct DescriptorBindingDesc
 {
     std::uint32_t set = 0;
     VkDescriptorSetLayoutBinding binding{};
+    // Optional host/shader StructuredBuffer element-stride contract. Zero
+    // keeps legacy descriptors type/count/stage-only.
+    std::uint32_t elementStride = 0;
 };
 
 struct GraphicsPipelineDesc

@@ -19,6 +19,8 @@ struct StaticSceneVertex
     glm::vec2 uv{0.0f};
     glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
 };
+static_assert(sizeof(StaticSceneVertex) == 48,
+    "StaticSceneVertex must match the Virtual Geometry storage-buffer ABI");
 
 struct StaticScenePrimitive
 {

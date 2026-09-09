@@ -77,6 +77,16 @@ namespace
                     std::to_string(resource.binding) + " has an incompatible type, count, or stage",
                 Halcyon::ErrorCode::InvalidArgument);
         }
+        if (declaration->elementStride != 0u &&
+            resource.elementStride != declaration->elementStride)
+        {
+            return fail("shader '" + std::string(shader) + "' descriptor set " +
+                    std::to_string(resource.set) + " binding " +
+                    std::to_string(resource.binding) + " has structured-buffer stride " +
+                    std::to_string(resource.elementStride) + ", expected " +
+                    std::to_string(declaration->elementStride),
+                Halcyon::ErrorCode::InvalidArgument);
+        }
     }
     for (const auto& reflected : reflection.pushConstants)
     {
@@ -216,13 +226,18 @@ Halcyon::Result<void> VulkanPipeline::createGraphicsInternal(
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     const bool fullscreen = desc.vertexShader.find("fullscreen") != std::string_view::npos;
+    // The M5 visibility vertex shader fetches indexed vertices from storage
+    // buffers using SV_VertexID. Do not expose the legacy MeshVertex binding
+    // on that pipeline: the command buffer intentionally has no vertex-buffer
+    // bind, and an empty vertex-input state makes that contract explicit.
+    const bool storageVertex = desc.vertexShader.find("visibility.vert") != std::string_view::npos;
     VkVertexInputBindingDescription binding{0, sizeof(MeshVertex), VK_VERTEX_INPUT_RATE_VERTEX};
     std::array<VkVertexInputAttributeDescription, 4> attributes = {
         VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
         VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
         VkVertexInputAttributeDescription{2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
         VkVertexInputAttributeDescription{3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32}};
-    if (!fullscreen)
+    if (!fullscreen && !storageVertex)
     {
         vertexInput.vertexBindingDescriptionCount = 1;
         vertexInput.pVertexBindingDescriptions = &binding;

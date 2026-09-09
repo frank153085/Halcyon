@@ -1,9 +1,12 @@
 #include "VulkanSceneResources.h"
 
+#include "Core/Log.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <new>
 #include <span>
 #include <utility>
 #include <vector>
@@ -155,11 +158,63 @@ VulkanSceneResources::uploadVirtualGeometry(
     if (allocator_ == nullptr || uploader_ == nullptr)
         return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
             {Halcyon::ErrorCode::InvalidState, "virtual geometry uploader is unavailable"});
+    // Cache readers validate these ranges, but upload is also reachable from
+    // programmatic SceneDatabase users. Recheck the GPU-facing spans here so
+    // a malformed asset cannot create descriptors whose shader-visible range
+    // disagrees with its meshlet metadata.
+    if (asset.vertices.empty() || asset.meshlets.empty() || asset.lods.empty() ||
+        asset.meshlets.size() > (1u << 20u) - 1u)
+    {
+        return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+            {Halcyon::ErrorCode::InvalidArgument,
+                "virtual geometry asset has no uploadable meshlet tables"});
+    }
+    const auto inRange = [](std::uint32_t offset, std::uint32_t count,
+        std::size_t size) noexcept
+    {
+        return static_cast<std::size_t>(offset) <= size &&
+            static_cast<std::size_t>(count) <= size - offset;
+    };
+    for (const auto& meshlet : asset.meshlets)
+    {
+        if (meshlet.vertexCount == 0u || meshlet.vertexCount > 64u ||
+            meshlet.triangleCount == 0u || meshlet.triangleCount > 124u ||
+            meshlet.indexCount != meshlet.triangleCount * 3u ||
+            !inRange(meshlet.vertexOffset, meshlet.vertexCount, asset.meshletVertices.size()) ||
+            !inRange(meshlet.triangleOffset, meshlet.indexCount, asset.meshletTriangles.size()) ||
+            !inRange(meshlet.indexOffset, meshlet.indexCount, asset.indices.size()))
+        {
+            return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+                {Halcyon::ErrorCode::InvalidArgument,
+                    "virtual geometry meshlet range is outside its upload table"});
+        }
+        for (std::uint32_t local = 0; local < meshlet.vertexCount; ++local)
+        {
+            if (asset.meshletVertices[meshlet.vertexOffset + local] >= asset.vertices.size())
+                return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+                    {Halcyon::ErrorCode::InvalidArgument,
+                        "virtual geometry meshlet vertex references outside the vertex table"});
+        }
+        for (std::uint32_t index = 0; index < meshlet.indexCount; ++index)
+        {
+            const auto local = asset.meshletTriangles[meshlet.triangleOffset + index];
+            if (local >= meshlet.vertexCount ||
+                asset.indices[meshlet.indexOffset + index] !=
+                    asset.meshletVertices[meshlet.vertexOffset + local])
+                return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+                    {Halcyon::ErrorCode::InvalidArgument,
+                        "virtual geometry meshlet topology is inconsistent"});
+        }
+    }
     VirtualGeometryGpuBuffers result{};
     const auto createAndUpload = [&](const void* data, std::size_t size,
         VkBufferUsageFlags usage, BufferAllocation& destination) -> Halcyon::Result<void>
     {
         if (size == 0) return Halcyon::Result<void>::success();
+        if (data == nullptr || size > std::numeric_limits<VkDeviceSize>::max())
+            return Halcyon::Result<void>::failure(
+                {Halcyon::ErrorCode::InvalidArgument,
+                    "virtual geometry buffer size is outside the Vulkan device range"});
         VkBufferCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         info.size = size; info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -173,6 +228,14 @@ VulkanSceneResources::uploadVirtualGeometry(
     };
     const auto fail = [&](Halcyon::Result<void> error) {
         destroyVirtualGeometry(result); return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(error.error());
+    };
+    const auto byteSize = [](std::size_t count, std::size_t elementSize,
+                             std::size_t& output) noexcept
+    {
+        if (elementSize != 0u && count > std::numeric_limits<std::size_t>::max() / elementSize)
+            return false;
+        output = count * elementSize;
+        return true;
     };
     std::vector<VirtualGeometryGpuMeshlet> gpuMeshlets;
     try
@@ -200,12 +263,63 @@ VulkanSceneResources::uploadVirtualGeometry(
         return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
             {Halcyon::ErrorCode::OutOfMemory, "failed to pack virtual geometry meshlets"});
     }
-    auto upload = createAndUpload(asset.vertices.data(), asset.vertices.size() * sizeof(asset.vertices[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, result.vertices); if (!upload) return fail(std::move(upload));
-    upload = createAndUpload(asset.indices.data(), asset.indices.size() * sizeof(asset.indices[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, result.indices); if (!upload) return fail(std::move(upload));
-    upload = createAndUpload(asset.meshletVertices.data(), asset.meshletVertices.size() * sizeof(asset.meshletVertices[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshletVertices); if (!upload) return fail(std::move(upload));
-    upload = createAndUpload(asset.meshletTriangles.data(), asset.meshletTriangles.size() * sizeof(asset.meshletTriangles[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshletTriangles); if (!upload) return fail(std::move(upload));
-    upload = createAndUpload(gpuMeshlets.data(), gpuMeshlets.size() * sizeof(gpuMeshlets[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshlets); if (!upload) return fail(std::move(upload));
-    upload = createAndUpload(asset.lods.data(), asset.lods.size() * sizeof(asset.lods[0]), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.lods); if (!upload) return fail(std::move(upload));
+    std::size_t bytes = 0;
+    if (!byteSize(asset.vertices.size(), sizeof(asset.vertices[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry vertex byte size overflow"}));
+    auto upload = createAndUpload(asset.vertices.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, result.vertices);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(asset.indices.size(), sizeof(asset.indices[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry index byte size overflow"}));
+    upload = createAndUpload(asset.indices.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, result.indices);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(asset.meshletVertices.size(), sizeof(asset.meshletVertices[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry meshlet vertex byte size overflow"}));
+    upload = createAndUpload(asset.meshletVertices.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshletVertices);
+    if (!upload) return fail(std::move(upload));
+    // material_classify reads the packed meshoptimizer triangle stream through
+    // ByteAddressBuffer.Load (4-byte words). Pad the device copy to a word
+    // boundary so the final byte can be loaded without crossing the Vulkan
+    // descriptor range; the cache/CPU representation remains byte-packed.
+    if (asset.meshletTriangles.size() > std::numeric_limits<std::size_t>::max() - 3u)
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry meshlet triangle byte size overflow"}));
+    const std::size_t paddedTriangleBytes =
+        (asset.meshletTriangles.size() + 3u) & ~std::size_t(3u);
+    std::vector<std::uint8_t> paddedTriangles;
+    try
+    {
+        paddedTriangles.assign(paddedTriangleBytes, 0u);
+        std::copy(asset.meshletTriangles.begin(), asset.meshletTriangles.end(), paddedTriangles.begin());
+    }
+    catch (const std::bad_alloc&)
+    {
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "failed to pad virtual geometry meshlet triangle stream"}));
+    }
+    if (!byteSize(paddedTriangles.size(), sizeof(paddedTriangles[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry meshlet triangle byte size overflow"}));
+    upload = createAndUpload(paddedTriangles.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshletTriangles);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(gpuMeshlets.size(), sizeof(gpuMeshlets[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry meshlet metadata byte size overflow"}));
+    upload = createAndUpload(gpuMeshlets.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.meshlets);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(asset.lods.size(), sizeof(asset.lods[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry LOD byte size overflow"}));
+    upload = createAndUpload(asset.lods.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.lods);
+    if (!upload) return fail(std::move(upload));
     return Halcyon::Result<VirtualGeometryGpuBuffers>::success(std::move(result));
 }
 
@@ -419,9 +533,57 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
             if (source->virtualGeometry)
             {
                 const auto virtualGpu = uploadVirtualGeometry(*source->virtualGeometry);
-                if (!virtualGpu) { rollback(); return Halcyon::Result<void>::failure(virtualGpu.error()); }
-                virtualGeometryByMesh_.emplace(handle.index(), source->virtualGeometry);
-                virtualGeometryGpuByMesh_.emplace(handle.index(), std::move(virtualGpu).value());
+                if (virtualGpu)
+                {
+                    // BufferAllocation is an explicit handle, not an RAII
+                    // owner. Keep the freshly uploaded set locally until both
+                    // lookup tables have accepted it so a map allocation
+                    // failure cannot leak Lucy-sized GPU allocations.
+                    VirtualGeometryGpuBuffers pending = virtualGpu.value();
+                    bool indexed = false;
+                    try
+                    {
+                        const auto [assetIt, assetInserted] =
+                            virtualGeometryByMesh_.emplace(
+                                handle.index(), source->virtualGeometry);
+                        if (assetInserted)
+                        {
+                            const auto [gpuIt, gpuInserted] =
+                                virtualGeometryGpuByMesh_.emplace(handle.index(), pending);
+                            (void)gpuIt;
+                            if (gpuInserted)
+                            {
+                                pending = {};
+                                indexed = true;
+                            }
+                            else
+                            {
+                                virtualGeometryByMesh_.erase(assetIt);
+                            }
+                        }
+                    }
+                    catch (...)
+                    {
+                        virtualGeometryByMesh_.erase(handle.index());
+                    }
+                    if (!indexed)
+                    {
+                        destroyVirtualGeometry(pending);
+                        rollback();
+                        return resourceError(Halcyon::ErrorCode::OutOfMemory,
+                            "failed to index uploaded virtual geometry");
+                    }
+                }
+                else
+                {
+                    // The traditional mesh upload above is sufficient for
+                    // DeferredIndexed/GpuDrivenIndexed. Treat virtual buffer
+                    // allocation or upload failure as an M5 capability miss
+                    // instead of discarding an otherwise valid scene asset.
+                    HALCYON_LOG_WARN("Virtual Geometry upload unavailable for mesh ",
+                        handle.index(), ": ", virtualGpu.error().describe(),
+                        "; retaining indexed fallback");
+                }
             }
             const std::uint32_t dense = freeMeshDense_.empty()
                 ? static_cast<std::uint32_t>(denseMeshStable_.size())
@@ -488,6 +650,18 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
             source->occlusionTexture.index()};
         for (std::size_t textureIndex = 0; textureIndex < textureStable.size(); ++textureIndex)
             bindlessRow.textureIndices[textureIndex] = textureDenseIndex(textureStable[textureIndex]);
+        const auto generatedDefault = [&](auto textureHandle)
+        {
+            const auto* textureSource = database.get(textureHandle);
+            return textureSource != nullptr && textureSource->generatedDefault;
+        };
+        const bool virtualGeometryCompatible = !source->transparent &&
+            !source->doubleSided && !source->alphaMasked &&
+            generatedDefault(source->baseColorTexture) &&
+            generatedDefault(source->normalTexture) &&
+            generatedDefault(source->metallicRoughnessTexture) &&
+            generatedDefault(source->emissiveTexture) &&
+            generatedDefault(source->occlusionTexture);
         try
         {
             materials_.emplace(handle.index(), MaterialResource{
@@ -496,7 +670,7 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                 source->metallicRoughnessTexture.index(),
                 source->emissiveTexture.index(),
                 source->occlusionTexture.index(),
-                factorsBuffer.value(), bindlessRow});
+                factorsBuffer.value(), bindlessRow, virtualGeometryCompatible});
             uploadedMaterials.push_back(handle.index());
             const std::uint32_t dense = freeMaterialDense_.empty()
                 ? static_cast<std::uint32_t>(denseMaterialStable_.size())
@@ -560,6 +734,13 @@ Halcyon::Result<void> VulkanSceneResources::releaseAsset(
     }
     for (const Halcyon::Renderer::Resources::MeshHandle handle : imported.meshes)
     {
+        virtualGeometryByMesh_.erase(handle.index());
+        const auto virtualGpu = virtualGeometryGpuByMesh_.find(handle.index());
+        if (virtualGpu != virtualGeometryGpuByMesh_.end())
+        {
+            destroyVirtualGeometry(virtualGpu->second);
+            virtualGeometryGpuByMesh_.erase(virtualGpu);
+        }
         const auto found = meshes_.find(handle.index());
         if (found != meshes_.end())
         {
@@ -900,6 +1081,14 @@ Halcyon::Renderer::Scene::MaterialGpuData VulkanSceneResources::materialRow(
     const auto found = materials_.find(denseMaterialStable_[denseIndex]);
     return found != materials_.end() ? found->second.bindlessRow
                                      : Halcyon::Renderer::Scene::MaterialGpuData{};
+}
+
+bool VulkanSceneResources::virtualGeometryMaterialCompatible(
+    std::uint32_t denseIndex) const noexcept
+{
+    if (denseIndex >= denseMaterialStable_.size()) return false;
+    const auto found = materials_.find(denseMaterialStable_[denseIndex]);
+    return found != materials_.end() && found->second.virtualGeometryCompatible;
 }
 
 const TextureResource* VulkanSceneResources::textureDense(

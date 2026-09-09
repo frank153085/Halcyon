@@ -6,7 +6,7 @@
 namespace Halcyon::Renderer::Scene
 {
 
-inline constexpr std::uint32_t kVirtualGeometryCacheVersion = 2u;
+inline constexpr std::uint32_t kVirtualGeometryCacheVersion = 3u;
 
 struct VirtualGeometryCacheOptions
 {
@@ -23,6 +23,7 @@ struct VirtualGeometryCacheOptions
 [[nodiscard]] Halcyon::Result<VirtualGeometryAsset> readVirtualGeometryCache(
     const std::filesystem::path& path,
     const Sha256Digest* expectedSourceHash = nullptr,
-    VirtualGeometryCacheOptions* metadata = nullptr);
+    VirtualGeometryCacheOptions* metadata = nullptr,
+    const VirtualGeometryCacheOptions* expectedOptions = nullptr);
 
 } // namespace Halcyon::Renderer::Scene

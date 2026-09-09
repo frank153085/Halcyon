@@ -148,6 +148,34 @@ void descriptorAndPushConstantTests(TestContext& context)
     }
 }
 
+void structuredBufferStrideTests(TestContext& context)
+{
+    using Halcyon::Renderer::Shaders::ResourceType;
+
+    // StorageBuffer block { RuntimeArray<MeshletMeta> }, with the shader-side
+    // meshlet stride explicitly decorated as 80 bytes.
+    constexpr std::array<std::uint32_t, 38> module = {
+        0x07230203u, 0x00010300u, 0u, 16u, 0u,
+        instruction(4, 21), 1u, 32u, 0u,
+        instruction(3, 30), 2u, 1u,
+        instruction(3, 29), 3u, 2u,
+        instruction(3, 30), 4u, 3u,
+        instruction(4, 32), 5u, 12u, 4u,
+        instruction(4, 59), 5u, 6u, 12u,
+        instruction(4, 71), 3u, 6u, 80u,
+        instruction(4, 71), 6u, 34u, 0u,
+        instruction(4, 71), 6u, 33u, 5u,
+    };
+    const auto result = Halcyon::Renderer::Shaders::reflectSpirv(module);
+    HALCYON_EXPECT(context, result);
+    if (!result || result.value().resources.empty())
+        return;
+    const auto& resource = result.value().resources.front();
+    HALCYON_EXPECT(context, resource.type == ResourceType::StorageBuffer);
+    HALCYON_EXPECT(context, resource.binding == 5u);
+    HALCYON_EXPECT(context, resource.elementStride == 80u);
+}
+
 } // namespace
 
 int main()
@@ -155,6 +183,7 @@ int main()
     TestContext context;
     invalidModuleTests(context);
     descriptorAndPushConstantTests(context);
+    structuredBufferStrideTests(context);
 
     if (context.failures() != 0)
     {

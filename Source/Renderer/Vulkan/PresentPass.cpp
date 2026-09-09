@@ -166,7 +166,8 @@ void addPresentPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             builder.read(presentOutput, screenshotReadback != VK_NULL_HANDLE
                     ? Graph::ResourceUsage::TransferSource
                     : Graph::ResourceUsage::Present);
-            if (config.enableGpuDrivenScene)
+            if (config.enableGpuDrivenScene && config.renderPath !=
+                    Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
                 builder.read(presentInstanceId, Graph::ResourceUsage::TransferSource);
             builder.sideEffect();
         },
@@ -174,7 +175,9 @@ void addPresentPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             Graph::CommandContext&)
         {
             HALCYON_BIND_PASS_EXECUTE(passCtx);
-            if (config.enableGpuDrivenScene && currentFrame < instanceIdReadbacks.size() &&
+            if (config.enableGpuDrivenScene && config.renderPath !=
+                    Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+                currentFrame < instanceIdReadbacks.size() &&
                 instanceIdReadbacks[currentFrame].buffer != VK_NULL_HANDLE)
             {
                 const VkImage instanceImage = frameGraphProvider.image(

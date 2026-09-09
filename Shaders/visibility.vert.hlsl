@@ -1,27 +1,67 @@
-struct MeshletMeta { uint vertexOffset; uint vertexCount; uint triangleOffset; uint triangleCount; uint indexOffset; uint indexCount; uint primitiveIndex; uint lodIndex; float4 sphere; float4 cone; float geometricError; };
-struct Vertex { float3 position; float3 normal; float2 uv; float4 tangent; };
+#include "virtual_geometry_ids.hlsli"
+
 [[vk::binding(0, 0)]] StructuredBuffer<MeshletMeta> meshlets;
 [[vk::binding(1, 0)]] StructuredBuffer<uint> meshletVertices;
 [[vk::binding(2, 0)]] StructuredBuffer<Vertex> vertices;
 [[vk::binding(3, 0)]] StructuredBuffer<uint> indices;
-struct VisibilityConstants { float4x4 viewProjection; float4x4 model; float4x4 previousModel; uint instance; uint material; uint pad0; uint pad1; };
+[[vk::binding(4, 0)]] StructuredBuffer<TransformRow> transforms;
+[[vk::binding(5, 0)]] StructuredBuffer<MeshMaterialRow> meshMaterials;
+struct VisibilityConstants
+{
+    float4x4 viewProjection;
+    uint meshletCount;
+    uint vertexCount;
+    uint instanceCount;
+    uint meshletVertexTableCount;
+};
 [[vk::push_constant]] ConstantBuffer<VisibilityConstants> constants;
-struct VSOut { float4 position : SV_Position; uint visibility : TEXCOORD0; };
-VSOut main(uint vertexId : SV_VertexID, uint meshletId : SV_InstanceID)
+struct VSOut
+{
+    float4 position : SV_Position;
+    nointerpolation uint visibility : TEXCOORD0;
+};
+VSOut main(uint vertexId : SV_VertexID, uint drawToken : SV_InstanceID)
 {
     VSOut o;
+    o.position = float4(0.0, 0.0, 0.0, 0.0);
+    o.visibility = 0u;
+    const uint meshletId = vgDrawTokenMeshlet(drawToken);
+    const uint instanceIndex = vgDrawTokenInstance(drawToken);
+    if (meshletId >= constants.meshletCount || instanceIndex >= constants.instanceCount ||
+        vertexId >= constants.vertexCount)
+        return o;
     MeshletMeta m = meshlets[meshletId];
+    if (m.vertexCount == 0u || m.vertexCount > VG_MESHLET_MAX_VERTICES ||
+        m.triangleCount == 0u || m.triangleCount > VG_MESHLET_MAX_TRIANGLES ||
+        m.indexCount != m.triangleCount * 3u ||
+        m.vertexOffset >= constants.meshletVertexTableCount ||
+        m.vertexCount > constants.meshletVertexTableCount - m.vertexOffset)
+        return o;
+    // Validate the first meshlet-local vertex through the metadata stream as
+    // well. The indexed draw still supplies the global vertex ID; this read
+    // keeps the meshlet table and visibility ABI coupled in the shader.
+    if (meshletVertices[m.vertexOffset] >= constants.vertexCount)
+        return o;
     // Indexed draws expose the fetched index as SV_VertexID.  firstIndex is
     // already applied by the fixed-function input assembler, so indexing the
     // virtual index table a second time would address unrelated vertices.
     uint vertexIndex = vertexId;
     Vertex v = vertices[vertexIndex];
-    float4 world = mul(constants.model, float4(v.position, 1.0));
-    o.position = mul(constants.viewProjection, world);
-    // R32 visibility ABI: instance in bits 0..7, meshlet in 8..27,
-    // material class in bits 28..31.  The triangle is recovered from the
-    // rasterized primitive and meshlet metadata in compute shading.
-    o.visibility = (constants.instance & 0xffu) |
-        ((meshletId & 0xfffffu) << 8) | ((constants.material & 0xfu) << 28);
+    const float4x4 model = transforms[instanceIndex].model;
+    o.position = mul(constants.viewProjection, mul(model, float4(v.position, 1.0)));
+    // R32 visibility ABI: zero is the clear/background value. Instance is
+    // bits 0..7, (meshlet + 1) is bits 8..27, and material class is bits
+    // 28..31. M5's compatible opaque PBR work is class 1; the classification
+    // pass resolves the full material index from the instance table.
+    // Transparent (bit 0), double-sided (bit 1), and alpha-masked (bit 4)
+    // materials stay on the established fallback paths.
+    const uint materialClass = (meshMaterials[instanceIndex].flags &
+        VG_VISIBILITY_INCOMPATIBLE_MATERIAL_FLAGS) == 0u
+        ? VG_VISIBILITY_COMPATIBLE_MATERIAL_CLASS : VG_VISIBILITY_MATERIAL_MASK;
+    o.visibility = (instanceIndex & VG_VISIBILITY_INSTANCE_MASK) |
+        (((meshletId + 1u) & VG_VISIBILITY_MESHLET_MASK) <<
+            VG_VISIBILITY_MESHLET_SHIFT) |
+        ((materialClass & VG_VISIBILITY_MATERIAL_MASK) <<
+            VG_VISIBILITY_MATERIAL_SHIFT);
     return o;
 }

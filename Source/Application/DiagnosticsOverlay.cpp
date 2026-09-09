@@ -165,6 +165,13 @@ void DiagnosticsOverlay::beginFrame(
     ImGui::Text(
         "Device memory: %llu bytes", static_cast<unsigned long long>(stats.deviceMemoryBytes));
     ImGui::Text("Rendered: %s", stats.rendered ? "yes" : "no");
+    if (stats.renderPath == "VirtualGeometryIndexed")
+    {
+        ImGui::Text("Virtual meshlets: %u | indirect commands: %u",
+            stats.virtualVisibleMeshletCount, stats.virtualIndirectCommandCount);
+        ImGui::Text("Invalid visibility records: %u",
+            stats.virtualInvalidVisibilityCount);
+    }
     for (const auto& pass : stats.gpuPasses)
     {
         ImGui::Text("Pass %s: %.3f ms", pass.name.c_str(), pass.gpuFrameMs);

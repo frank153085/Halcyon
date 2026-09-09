@@ -40,6 +40,7 @@ struct alignas(16) TransformRow
 {
     std::array<float, 16> model{};
 };
+static_assert(sizeof(TransformRow) == 64);
 
 struct alignas(16) BoundsRow
 {
@@ -55,6 +56,7 @@ struct MeshMaterialRow
     std::uint32_t flags = 0;
     std::uint32_t lodState = 0;
 };
+static_assert(sizeof(MeshMaterialRow) == 16);
 
 // The high bit is owned by the renderer and never comes from an ECS
 // RenderableFlags value. It marks a slot that must remain on the CPU fallback

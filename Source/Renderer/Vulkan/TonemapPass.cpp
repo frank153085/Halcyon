@@ -159,8 +159,10 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
     const auto setError = [&](std::string message) { ctx.setError(std::move(message)); };
 
     auto& historyWrite = taaHistoryFlip ? historyA : historyB;
-    const auto tonemapInput = config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed
-        ? ctx.hdr : historyWrite;
+    // Every path flows through TAA before tonemapping. Virtual Geometry writes
+    // HDR and reconstructed camera motion directly, so historyWrite remains
+    // the common post-TAA source.
+    const auto tonemapInput = historyWrite;
     graph.addPass<Graph::FrameGraph::Empty>("ACES tonemap",
         [&](Graph::FrameGraph::Builder& builder, Graph::FrameGraph::Empty&)
         {
@@ -177,7 +179,8 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
         [passCtx, tonemapInput](const Graph::FrameGraphResources& resources, const Graph::FrameGraph::Empty&, Graph::CommandContext&)
         {
             HALCYON_BIND_PASS_EXECUTE(passCtx);
-            if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed)
+            if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed &&
+                tonemapInput == ctx.hdr)
             {
                 const VkImage inputImage = frameGraphProvider.image(resources.getTexture(tonemapInput).native);
                 transitionImage(inputImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -202,7 +205,8 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
             vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 tonemapPipeline.pipeline());
             const VkDescriptorSet descriptor = allocateSet(tonemapLayout);
-            if (descriptor != VK_NULL_HANDLE)
+            const bool descriptorReady = descriptor != VK_NULL_HANDLE;
+            if (descriptorReady)
             {
                 writeSampled(descriptor, 0, frameGraphProvider.view(resources.getTexture(tonemapInput).native));
                 writeSampler(descriptor);
@@ -222,9 +226,12 @@ void addTonemapPass(Graph::FrameGraph& graph, FramePassContext& ctx)
                 (swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB ||
                     swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB) ? 1.0f : 0.0f,
                 {0.0f, 0.0f}};
-            vkCmdPushConstants(frame.commandBuffer, tonemapPipeline.layout(),
-                VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemapConstants), &tonemapConstants);
-            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+            if (descriptorReady)
+            {
+                vkCmdPushConstants(frame.commandBuffer, tonemapPipeline.layout(),
+                    VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(tonemapConstants), &tonemapConstants);
+                vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+            }
             vkCmdEndRendering(frame.commandBuffer);
         });
 

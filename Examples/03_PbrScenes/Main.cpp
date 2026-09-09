@@ -60,8 +60,9 @@ int main(int argc, char** argv)
     if (scene != "stress" && !std::filesystem::exists(root / selected))
     {
         std::fprintf(stderr,
-            "Scene asset '%s' is missing. Run: cmake --build <build-dir> --target HalcyonFetchAssets\n",
-            (root / selected).string().c_str());
+            "Scene asset '%s' is missing. Run: cmake --build <build-dir> --target %s\n",
+            (root / selected).string().c_str(),
+            scene == "lucy" ? "HalcyonFetchM5Assets" : "HalcyonFetchAssets");
         std::fprintf(stderr, "Press Enter to exit...\n");
         (void)std::getchar();
         return EXIT_FAILURE;

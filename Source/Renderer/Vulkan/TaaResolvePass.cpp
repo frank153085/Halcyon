@@ -180,15 +180,26 @@ void addTaaResolvePass(Graph::FrameGraph& graph, FramePassContext& ctx)
             auto& historyWrite = taaHistoryFlip ? historyA : historyB;
             const bool frameHistoryFlip = taaHistoryFlip;
             const bool virtualHdr = config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed;
+            const bool virtualMotion = virtualHdr;
+            // Virtual shading may either dispatch a storage-image write or
+            // clear the target through TRANSFER when a descriptor/resource
+            // setup fails. Include both producer classes in the acquire
+            // barrier so fallback clears are synchronized as well.
             transitionImage(frameGraphProvider.image(resources.getTexture(taaHdr).native),
                 virtualHdr ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                virtualHdr ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                virtualHdr ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                virtualHdr ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                virtualHdr ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             transitionImage(frameGraphProvider.image(resources.getTexture(taaMotion).native),
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                virtualMotion ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                virtualMotion ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                    VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                virtualMotion ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             const VkImage historyReadImage = frameGraphProvider.image(resources.getTexture(taaHistoryRead).native);
             const VkImage historyWriteImage = frameGraphProvider.image(resources.getTexture(historyWrite).native);
@@ -202,13 +213,19 @@ void addTaaResolvePass(Graph::FrameGraph& graph, FramePassContext& ctx)
             transitionImage(historyWriteImage,
                 writeInitialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                writeInitialized
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                writeInitialized ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : VK_ACCESS_2_NONE,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
             {
                 vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     taaPipeline.computePipeline());
                 const VkDescriptorSet descriptor = allocateSet(taaLayout);
-                if (descriptor != VK_NULL_HANDLE)
+                const bool descriptorReady = descriptor != VK_NULL_HANDLE;
+                if (descriptorReady)
                 {
                     writeSampled(descriptor, 0, frameGraphProvider.view(resources.getTexture(taaHdr).native));
                     writeSampled(descriptor, 1, frameGraphProvider.view(resources.getTexture(taaHistoryRead).native));
@@ -221,12 +238,26 @@ void addTaaResolvePass(Graph::FrameGraph& graph, FramePassContext& ctx)
                 struct TaaConstants { std::uint32_t extent[2]; float historyWeight; float sharpen; } constants{{width, height},
                     (config.enableTaa && taaHistoryValid) ? 0.9f : 0.0f,
                     config.enableTaa ? 0.05f : 0.0f};
-                vkCmdPushConstants(frame.commandBuffer, taaPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
-                    0, sizeof(constants), &constants);
-                vkCmdDispatch(frame.commandBuffer, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+                if (descriptorReady)
+                {
+                    vkCmdPushConstants(frame.commandBuffer, taaPipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                        0, sizeof(constants), &constants);
+                    vkCmdDispatch(frame.commandBuffer, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+                }
+                else
+                {
+                    const VkImage historyImage = frameGraphProvider.image(resources.getTexture(historyWrite).native);
+                    const VkClearColorValue clear{{0.0f, 0.0f, 0.0f, 1.0f}};
+                    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    vkCmdClearColorImage(frame.commandBuffer, historyImage,
+                        VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+                }
                 transitionImage(historyWriteImage, VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    descriptorReady ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                                     : VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    descriptorReady ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                                     : VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 if (frameHistoryFlip) taaHistoryInitializedA = true;
                 else taaHistoryInitializedB = true;

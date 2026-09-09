@@ -349,12 +349,20 @@ if(HALCYON_DXC_EXECUTABLE)
     set(HALCYON_M5_SHADER_OUTPUTS)
     function(halcyon_add_m5_shader stem profile)
         set(output "${HALCYON_SHADER_OUTPUT_DIR}/${stem}.spv")
+        set(extra_args)
+        if(stem STREQUAL "visibility.frag")
+            # SV_Barycentrics maps to VK_KHR_fragment_shader_barycentric;
+            # keep the extension opt-in to this fragment module.
+            list(APPEND extra_args -fspv-extension=SPV_KHR_fragment_shader_barycentric)
+        endif()
         add_custom_command(OUTPUT "${output}"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${HALCYON_SHADER_OUTPUT_DIR}"
             COMMAND "${HALCYON_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.3 -Zpc
-                    -T "${profile}" -E main -Fo "${output}"
+                    ${extra_args} -T "${profile}" -E main -Fo "${output}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/${stem}.hlsl"
-            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/${stem}.hlsl"
+            DEPENDS
+                "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/${stem}.hlsl"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/virtual_geometry_ids.hlsli"
             VERBATIM COMMENT "Compiling M5 ${stem}")
         set(HALCYON_M5_SHADER_OUTPUTS "${HALCYON_M5_SHADER_OUTPUTS};${output}" PARENT_SCOPE)
     endfunction()
@@ -485,6 +493,12 @@ if(HALCYON_DXC_EXECUTABLE)
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_GPU_DRIVEN_CSM_VERTEX_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE1_SPIRV}"
             COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_OCCLUSION_PHASE2_SPIRV}"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/meshlet_cull.comp.spv"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/meshlet_build_indirect.comp.spv"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/visibility.vert.spv"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/visibility.frag.spv"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/material_classify.comp.spv"
+            COMMAND "${HALCYON_SPIRV_VAL_EXECUTABLE}" "${HALCYON_SHADER_OUTPUT_DIR}/compute_shading.comp.spv"
             DEPENDS HalcyonShaders
             COMMENT "Validating generated SPIR-V modules"
             VERBATIM
@@ -559,6 +573,13 @@ add_custom_target(HalcyonFetchAssets
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_assets.ps1"
             -Destination "${CMAKE_CURRENT_SOURCE_DIR}/assets/models"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_assets.ps1"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL)
+
+add_custom_target(HalcyonFetchM5Assets
+    COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_m5_assets.ps1"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_m5_assets.ps1"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     USES_TERMINAL)
 
@@ -756,5 +777,7 @@ if(HALCYON_ENABLE_BENCHMARK)
     add_executable(HalcyonVirtualGeometryBenchmarks Tests/VirtualGeometryBenchmarks.cpp)
     target_link_libraries(HalcyonVirtualGeometryBenchmarks PRIVATE
         HalcyonAssetPipeline Halcyon::Benchmark)
+    target_compile_definitions(HalcyonVirtualGeometryBenchmarks PRIVATE
+        HALCYON_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     halcyon_enable_warnings(HalcyonVirtualGeometryBenchmarks)
 endif()

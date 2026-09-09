@@ -31,6 +31,7 @@ constexpr std::uint32_t kDecorationBinding = 33;
 constexpr std::uint32_t kDecorationDescriptorSet = 34;
 constexpr std::uint32_t kDecorationOffset = 35;
 constexpr std::uint32_t kDecorationLocation = 30;
+constexpr std::uint32_t kDecorationArrayStride = 6;
 
 constexpr std::uint32_t kStorageUniformConstant = 0;
 constexpr std::uint32_t kStorageUniform = 2;
@@ -150,6 +151,34 @@ struct DecorationInfo
     }
 }
 
+[[nodiscard]] std::uint32_t structuredBufferStride(
+    const std::unordered_map<std::uint32_t, TypeInfo>& types,
+    const std::unordered_map<std::uint32_t, std::uint32_t>& arrayStrides,
+    std::uint32_t typeId) noexcept
+{
+    const auto found = types.find(typeId);
+    if (found == types.end())
+        return 0u;
+    const TypeInfo& type = found->second;
+    if (type.opcode == kOpTypeArray || type.opcode == kOpTypeRuntimeArray)
+    {
+        const auto stride = arrayStrides.find(typeId);
+        return stride == arrayStrides.end() ? 0u : stride->second;
+    }
+    if (type.opcode != kOpTypeStruct)
+        return 0u;
+    // DXC represents StructuredBuffer<T> as a block struct containing one
+    // runtime array of T. Walk all members defensively so this remains valid
+    // if a producer adds an implementation detail before that array.
+    for (const std::uint32_t memberType : type.members)
+    {
+        if (const std::uint32_t stride = structuredBufferStride(
+                types, arrayStrides, memberType); stride != 0u)
+            return stride;
+    }
+    return 0u;
+}
+
 } // namespace
 
 Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> words)
@@ -165,6 +194,7 @@ Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> wo
     std::unordered_map<std::uint32_t, DecorationInfo> decorations;
     std::unordered_map<std::uint32_t, std::uint32_t> constants;
     std::unordered_map<std::uint64_t, std::uint32_t> memberOffsets;
+    std::unordered_map<std::uint32_t, std::uint32_t> arrayStrides;
 
     for (std::size_t offset = 5; offset < words.size();)
     {
@@ -270,6 +300,10 @@ Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> wo
                 {
                     decoration.location = operand(3);
                 }
+                else if (operand(2) == kDecorationArrayStride)
+                {
+                    arrayStrides[operand(1)] = operand(3);
+                }
                 break;
             }
             case kOpMemberDecorate:
@@ -337,7 +371,10 @@ Halcyon::Result<ShaderReflection> reflectSpirv(std::span<const std::uint32_t> wo
         if (type != ResourceType::Unknown)
         {
             reflection.resources.push_back(ResourceBinding{
-                decoration->second.set, decoration->second.binding, arraySize, type, variableId});
+                decoration->second.set, decoration->second.binding, arraySize, type, variableId,
+                type == ResourceType::StorageBuffer
+                    ? structuredBufferStride(types, arrayStrides, pointer->second.elementType)
+                    : 0u});
         }
     }
 
