@@ -71,6 +71,131 @@ bool finiteSelectionOptions(const VirtualGeometryBuildOptions& options) noexcept
         options.lodRefineThresholdPixels > options.lodCoarsenThresholdPixels;
 }
 
+// The source mesh keeps one global vertex table, while a heavily simplified
+// bootstrap LOD may reference a sparse set of those vertices.  Reordering the
+// per-primitive table puts the bootstrap set in a contiguous prefix, which is
+// essential for keeping root page dependencies small and deterministic.
+Halcyon::Result<void> compactBootstrapVertices(
+    VirtualGeometryAsset& asset, const VirtualGeometryBuildOptions& options)
+{
+    std::size_t bootstrapLod = options.lodRatios.size();
+    for (std::size_t i = options.lodRatios.size(); i-- > 0u;)
+    {
+        if (options.lodRatios[i] > 0.0f)
+        {
+            bootstrapLod = i;
+            break;
+        }
+    }
+    if (bootstrapLod == options.lodRatios.size())
+        return dagFailure("bootstrap LOD ladder contains no enabled level");
+
+    try
+    {
+        std::vector<std::uint32_t> remap(asset.vertices.size(),
+            std::numeric_limits<std::uint32_t>::max());
+        for (std::uint32_t primitiveIndex = 0u;
+            primitiveIndex < asset.primitives.size(); ++primitiveIndex)
+        {
+            const auto& primitive = asset.primitives[primitiveIndex];
+            std::vector<unsigned char> used(primitive.vertexCount, 0u);
+            for (const auto& lod : asset.lods)
+            {
+                if (lod.primitiveIndex != primitiveIndex ||
+                    lod.ratio != options.lodRatios[bootstrapLod])
+                    continue;
+                for (std::uint32_t i = 0u; i < lod.meshletCount; ++i)
+                {
+                    const auto& meshlet = asset.meshlets[lod.meshletOffset + i];
+                    for (std::uint32_t v = 0u; v < meshlet.vertexCount; ++v)
+                    {
+                        const auto source = asset.meshletVertices[meshlet.vertexOffset + v];
+                        if (source < primitive.vertexOffset ||
+                            source - primitive.vertexOffset >= primitive.vertexCount)
+                            return dagFailure("bootstrap vertex escapes its primitive");
+                        used[source - primitive.vertexOffset] = 1u;
+                    }
+                }
+            }
+
+            std::uint32_t next = 0u;
+            for (std::uint32_t local = 0u; local < primitive.vertexCount; ++local)
+            {
+                if (used[local] != 0u)
+                    remap[primitive.vertexOffset + local] =
+                        primitive.vertexOffset + next++;
+            }
+            for (std::uint32_t local = 0u; local < primitive.vertexCount; ++local)
+            {
+                if (used[local] == 0u)
+                    remap[primitive.vertexOffset + local] =
+                        primitive.vertexOffset + next++;
+            }
+        }
+
+        // The vector above is in old order; apply each primitive's permutation
+        // into the same-sized destination so primitive ranges remain stable.
+        std::vector<StaticSceneVertex> compacted(asset.vertices.size());
+        for (std::uint32_t old = 0u; old < asset.vertices.size(); ++old)
+            compacted[remap[old]] = asset.vertices[old];
+        asset.vertices = std::move(compacted);
+
+        for (auto& meshlet : asset.meshlets)
+        {
+            const auto& primitive = asset.primitives[meshlet.primitiveIndex];
+            for (std::uint32_t v = 0u; v < meshlet.vertexCount; ++v)
+            {
+                auto& source = asset.meshletVertices[meshlet.vertexOffset + v];
+                if (source < primitive.vertexOffset ||
+                    source - primitive.vertexOffset >= primitive.vertexCount)
+                    return dagFailure("meshlet vertex escapes its primitive during compaction");
+                source = remap[source];
+            }
+            for (std::uint32_t i = 0u; i < meshlet.indexCount; ++i)
+            {
+                auto& source = asset.indices[meshlet.indexOffset + i];
+                if (source < primitive.vertexOffset ||
+                    source - primitive.vertexOffset >= primitive.vertexCount)
+                    return dagFailure("indexed vertex escapes its primitive during compaction");
+                source = remap[source];
+            }
+        }
+        for (auto& cluster : asset.clusters)
+        {
+            for (auto& boundary : cluster.boundaryVertices)
+            {
+                if (boundary >= remap.size() || remap[boundary] ==
+                    std::numeric_limits<std::uint32_t>::max())
+                    return dagFailure("cluster boundary vertex cannot be remapped");
+                boundary = remap[boundary];
+            }
+            std::sort(cluster.boundaryVertices.begin(), cluster.boundaryVertices.end());
+            cluster.boundaryVertices.erase(std::unique(cluster.boundaryVertices.begin(),
+                cluster.boundaryVertices.end()), cluster.boundaryVertices.end());
+            std::uint32_t minVertex = std::numeric_limits<std::uint32_t>::max();
+            std::unordered_set<std::uint32_t> vertices;
+            for (const auto meshletIndex : cluster.meshletIndices)
+            {
+                const auto& meshlet = asset.meshlets[meshletIndex];
+                for (std::uint32_t v = 0u; v < meshlet.vertexCount; ++v)
+                {
+                    const auto source = asset.meshletVertices[meshlet.vertexOffset + v];
+                    vertices.insert(source);
+                    minVertex = std::min(minVertex, source);
+                }
+            }
+            cluster.vertexOffset = minVertex;
+            cluster.vertexCount = static_cast<std::uint32_t>(vertices.size());
+        }
+        return Halcyon::Result<void>::success();
+    }
+    catch (const std::bad_alloc&)
+    {
+        return Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "unable to compact bootstrap vertex table", "VirtualGeometry"});
+    }
+}
+
 } // namespace
 
 static Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometryPass(
@@ -160,18 +285,27 @@ static Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometryPass(
             if (lodIndex != 0u)
             {
                 const unsigned char* lockData = nullptr;
-                if (vertexLocks != nullptr && primitiveIndex < vertexLocks->size() &&
+                if (vertexLocks != nullptr && lodIndex + 1u != options.lodRatios.size() &&
+                    primitiveIndex < vertexLocks->size() &&
                     (*vertexLocks)[primitiveIndex].size() == primitive.vertices.size())
                     lockData = (*vertexLocks)[primitiveIndex].data();
+                // The final bootstrap level is intentionally allowed a
+                // larger geometric tolerance.  Without this, meshoptimizer
+                // can retain nearly every source vertex even when the target
+                // triangle ratio is tiny, making every root page depend on
+                // the full-resolution position stream.
+                const float lodSimplifyError = lodIndex + 1u == options.lodRatios.size()
+                    ? std::max(options.simplifyError, options.simplifyError * 16.0f)
+                    : options.simplifyError;
                 count = lockData == nullptr
                     ? meshopt_simplify(lodIndices.data(), primitive.indices.data(),
                         primitive.indices.size(), positions.data(), primitive.vertices.size(),
-                        sizeof(float) * 3u, target, options.simplifyError,
+                        sizeof(float) * 3u, target, lodSimplifyError,
                         meshopt_SimplifyLockBorder, &error)
                     : meshopt_simplifyWithAttributes(lodIndices.data(), primitive.indices.data(),
                         primitive.indices.size(), positions.data(), primitive.vertices.size(),
                         sizeof(float) * 3u, nullptr, 0u, nullptr, 0u, lockData, target,
-                        options.simplifyError, meshopt_SimplifyLockBorder, &error);
+                        lodSimplifyError, meshopt_SimplifyLockBorder, &error);
             }
             if (count < 3u)
                 return failure("meshoptimizer could not produce the requested LOD");
@@ -293,6 +427,21 @@ static Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometryPass(
 Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometry(
     const StaticScene& scene, const VirtualGeometryBuildOptions& options)
 {
+    // Validate the caller's full LOD ladder before replacing it with the
+    // fine-only provisional options below.  Otherwise malformed intermediate
+    // ratios could be hidden by the boundary-discovery pass.
+    bool disabledLodSeen = false;
+    float previousRatio = 1.0f;
+    for (std::size_t lodIndex = 0u; lodIndex < options.lodRatios.size(); ++lodIndex)
+    {
+        const float ratio = options.lodRatios[lodIndex];
+        if (!std::isfinite(ratio) || ratio < 0.0f || ratio > 1.0f ||
+            (lodIndex == 0u && ratio != 1.0f) || ratio > previousRatio ||
+            (disabledLodSeen && ratio != 0.0f))
+            return failure("LOD ratios must start at 1, descend, and use only trailing zeros");
+        disabledLodSeen = disabledLodSeen || ratio == 0.0f;
+        previousRatio = ratio;
+    }
     std::vector<std::vector<unsigned char>> locks;
     try
     {
@@ -302,7 +451,12 @@ Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometry(
         // Keep the provisional asset in a nested scope. Lucy-sized inputs can
         // otherwise retain the complete unlocked result while the locked pass
         // allocates another full set of vertices, LOD indices and meshlets.
-        auto provisional = buildVirtualGeometryPass(scene, options, nullptr);
+        // Boundary locks are derived only from the finest partition.  Avoid
+        // building every intermediate LOD twice for Lucy-sized assets: the
+        // provisional pass is intentionally a fine-level-only asset.
+        auto provisionalOptions = options;
+        provisionalOptions.lodRatios = {1.0f, 0.0f, 0.0f, 0.0f};
+        auto provisional = buildVirtualGeometryPass(scene, provisionalOptions, nullptr);
         if (!provisional) return provisional;
         bool hasClusterBoundary = false;
         const auto& asset = provisional.value();
@@ -320,13 +474,26 @@ Halcyon::Result<VirtualGeometryAsset> buildVirtualGeometry(
                 hasClusterBoundary = true;
             }
         }
-        if (!hasClusterBoundary) return provisional;
+        if (!hasClusterBoundary)
+        {
+            auto full = buildVirtualGeometryPass(scene, options, nullptr);
+            if (!full) return full;
+            const auto compacted = compactBootstrapVertices(full.value(), options);
+            if (!compacted)
+                return Halcyon::Result<VirtualGeometryAsset>::failure(compacted.error());
+            return full;
+        }
     }
     catch (const std::bad_alloc&)
     {
         return allocationFailure();
     }
-    return buildVirtualGeometryPass(scene, options, &locks);
+    auto full = buildVirtualGeometryPass(scene, options, &locks);
+    if (!full) return full;
+    const auto compacted = compactBootstrapVertices(full.value(), options);
+    if (!compacted)
+        return Halcyon::Result<VirtualGeometryAsset>::failure(compacted.error());
+    return full;
 }
 
 Halcyon::Result<void> buildVirtualGeometryDag(
@@ -388,7 +555,13 @@ Halcyon::Result<void> buildVirtualGeometryDag(
             // METIS cannot bisect a singleton graph or produce one partition
             // per vertex. Keep those deterministic cases on the modulo path
             // to avoid noisy diagnostics and undefined partition quality.
-            if (nparts > 1 && nparts < vertices && !adjncy.empty())
+            // METIS emits diagnostics for disconnected/degenerate graphs
+            // whose requested partition count is close to the vertex count.
+            // Such tiny partitions are not useful for a 4-8 meshlet group;
+            // use the deterministic modulo fallback instead.
+            const bool metisInputValid = vertices >= 4 && nparts > 1 &&
+                nparts <= vertices / 2 && adjncy.size() >= 2u;
+            if (metisInputValid)
             {
                 idx_t optionsArray[METIS_NOPTIONS];
                 METIS_SetDefaultOptions(optionsArray);

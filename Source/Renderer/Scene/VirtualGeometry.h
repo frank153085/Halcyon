@@ -176,7 +176,7 @@ struct VirtualGeometryCluster
     std::vector<std::uint32_t> meshletIndices;
     std::vector<std::uint32_t> boundaryVertices;
     // Deterministic same-LOD cluster adjacency. Entries are sorted, unique,
-    // and symmetric; the cache validator treats this as part of the v4 ABI.
+    // and symmetric; the cache validator treats this as part of the v5 ABI.
     std::vector<std::uint32_t> adjacentClusters;
 };
 
@@ -255,7 +255,10 @@ struct VirtualGeometryAsset
 
 struct VirtualGeometryBuildOptions
 {
-    std::array<float, 3> lodRatios{1.0f, 0.5f, 0.25f};
+    // The fourth level is a coarse bootstrap representation.  Keeping a
+    // compact root level is what allows v5 streaming to pin roots without
+    // materializing the entire Lucy asset in the CPU staging budget.
+    std::array<float, 4> lodRatios{1.0f, 0.5f, 0.25f, 0.03125f};
     std::uint32_t maxVertices = kVirtualGeometryMaxVertices;
     std::uint32_t maxTriangles = kVirtualGeometryMaxTriangles;
     float simplifyError = 1.0f;

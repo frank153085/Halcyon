@@ -125,16 +125,10 @@ bool supportsObjectSpaceCone(float4x4 model)
         orthogonality <= maximum * maximum * 1.0e-4;
 }
 
-bool selectedByLod(uint meshletIndex)
+void cullMeshlet(uint meshletIndex)
 {
-    const uint nodeIndex = meshletDagNodes[meshletIndex];
-    return (lodStates[nodeIndex].w & 2u) != 0u;
-}
-
-[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= constants.meshletCount) return;
-    MeshletMeta m = meshlets[id.x];
-    if (!selectedByLod(id.x)) return;
+    if (meshletIndex >= constants.meshletCount) return;
+    MeshletMeta m = meshlets[meshletIndex];
     const float4x4 model = transforms[constants.instanceIndex].model;
     // Frustum planes stay in world space so non-uniform and sheared instance
     // transforms can use a conservative transformed sphere radius.
@@ -168,19 +162,29 @@ bool selectedByLod(uint meshletIndex)
             m.cone.w * distance + m.sphere.w)
             return;
     }
-    uint dst = 0;
-    uint observed = visibleCount[0];
-    while (observed < constants.visibleCapacity)
-    {
-        uint previous = 0;
-        InterlockedCompareExchange(visibleCount[0], observed, observed + 1u, previous);
-        if (previous == observed) { dst = observed; break; }
-        observed = previous;
-    }
-    if (observed < constants.visibleCapacity && dst < constants.visibleCapacity)
+    uint dst = 0u;
+    InterlockedAdd(visibleCount[0], 1u, dst);
+    if (dst < constants.visibleCapacity)
     {
         // The upper byte identifies the instance; the low 20 bits identify
         // the meshlet in the shared virtual asset table.
-        visibleMeshlets[dst] = vgPackDrawToken(constants.instanceIndex, id.x);
+        visibleMeshlets[dst] = vgPackDrawToken(constants.instanceIndex, meshletIndex);
+    }
+}
+
+[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID)
+{
+    // The LOD pass publishes a compact frontier. Expanding only its clusters
+    // avoids the previous O(total asset meshlets) scan, which dominated Lucy.
+    const uint frontierCount = min(selectedCount[0], constants.visibleCapacity);
+    if (id.x >= frontierCount) return;
+    const uint nodeIndex = selectedNodes[id.x];
+    const DagNode node = dagNodes[nodeIndex];
+    const Cluster cluster = clusters[node.clusterIndex];
+    [loop]
+    for (uint localIndex = 0u; localIndex < cluster.meshletCount; ++localIndex)
+    {
+        const uint meshletListIndex = cluster.meshletOffset + localIndex;
+        cullMeshlet(clusterMeshletIndices[meshletListIndex]);
     }
 }

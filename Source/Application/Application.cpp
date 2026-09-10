@@ -822,6 +822,7 @@ int Application::run(
                                "gpu_two_phase_ms,visible_instance_count,indirect_draw_count,"
                                "virtual_visible_meshlet_count,virtual_indirect_command_count,"
                                "virtual_dag_node_count,virtual_selected_node_count,virtual_lod_switch_count,"
+                               "virtual_page_request_count,virtual_page_request_overflow_count,"
                                "mesh_shader_active,mesh_shader_fallback_reason,"
                                "virtual_invalid_visibility_count,"
                                "frustum_visible_instance_count,occluded_instance_count,gpu_driven_active,"
@@ -880,6 +881,8 @@ int Application::run(
                         << previousStats.virtualDagNodeCount << ','
                         << previousStats.virtualSelectedNodeCount << ','
                         << previousStats.virtualLodSwitchCount << ','
+                        << previousStats.virtualPageRequestCount << ','
+                        << previousStats.virtualPageRequestOverflowCount << ','
                         << (previousStats.meshShaderActive ? 1 : 0) << ','
                         << previousStats.meshShaderFallbackReason << ','
                         << previousStats.virtualInvalidVisibilityCount << ','

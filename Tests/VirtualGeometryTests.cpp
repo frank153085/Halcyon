@@ -1,8 +1,11 @@
 #include "Renderer/Scene/Sha256.h"
 #include "Renderer/Scene/VirtualGeometry.h"
 #include "Renderer/Scene/VirtualGeometryCache.h"
+#include "Renderer/Scene/VirtualGeometryPages.h"
+#include "Renderer/Scene/VirtualGeometryStreamer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -37,6 +40,40 @@ StaticScene makeScene()
         {{1, 1, 0}, {0, 0, 1}}, {{-1, 1, 0}, {0, 0, 1}}};
     primitive.indices = {0, 1, 2, 0, 2, 3};
     primitive.boundsMin = {-1, -1, 0}; primitive.boundsMax = {1, 1, 0};
+    scene.primitives.push_back(std::move(primitive));
+    return scene;
+}
+
+StaticScene makeGridScene(std::uint32_t cells)
+{
+    StaticScene scene;
+    scene.materials.emplace_back();
+    StaticScenePrimitive primitive;
+    const std::uint32_t width = cells + 1u;
+    primitive.vertices.reserve(static_cast<std::size_t>(width) * width);
+    primitive.indices.reserve(static_cast<std::size_t>(cells) * cells * 6u);
+    for (std::uint32_t y = 0; y < width; ++y)
+    {
+        for (std::uint32_t x = 0; x < width; ++x)
+        {
+            StaticSceneVertex vertex{};
+            vertex.position = {static_cast<float>(x), static_cast<float>(y), 0.0f};
+            vertex.normal = {0.0f, 0.0f, 1.0f};
+            vertex.uv = {static_cast<float>(x) / cells, static_cast<float>(y) / cells};
+            primitive.vertices.push_back(vertex);
+        }
+    }
+    for (std::uint32_t y = 0; y < cells; ++y)
+    {
+        for (std::uint32_t x = 0; x < cells; ++x)
+        {
+            const std::uint32_t i = y * width + x;
+            primitive.indices.insert(primitive.indices.end(),
+                {i, i + 1u, i + width + 1u, i, i + width + 1u, i + width});
+        }
+    }
+    primitive.boundsMin = {0.0f, 0.0f, 0.0f};
+    primitive.boundsMax = {static_cast<float>(cells), static_cast<float>(cells), 0.0f};
     scene.primitives.push_back(std::move(primitive));
     return scene;
 }
@@ -394,6 +431,45 @@ void cacheTests()
         input.seekg(0); input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())); return bytes;
     };
     EXPECT(readBytes(path) == readBytes(secondPath));
+    const auto pageMetadata = readVirtualGeometryCacheMetadata(path, &hash);
+    EXPECT(pageMetadata);
+    if (pageMetadata)
+    {
+        const auto expectedLayout = buildVirtualGeometryPageLayout(
+            built.value(), kVirtualGeometryCachePageSize);
+        EXPECT(expectedLayout);
+        EXPECT(pageMetadata.value().options.pageSize == kVirtualGeometryCachePageSize);
+        EXPECT(expectedLayout && pageMetadata.value().rootPageCount ==
+            expectedLayout->rootPageIndices.size());
+        EXPECT(expectedLayout && pageMetadata.value().rootPageIndices ==
+            expectedLayout->rootPageIndices);
+        EXPECT(pageMetadata.value().pageLayout.dependencyPageIndices ==
+            (expectedLayout ? expectedLayout->dependencyPageIndices :
+                std::vector<std::uint32_t>{}));
+        EXPECT(!pageMetadata.value().pages.empty());
+        for (std::uint32_t pageIndex = 0u;
+            pageIndex < pageMetadata.value().pages.size(); ++pageIndex)
+        {
+            const bool root = std::binary_search(
+                pageMetadata.value().rootPageIndices.begin(),
+                pageMetadata.value().rootPageIndices.end(), pageIndex);
+            EXPECT(((pageMetadata.value().pages[pageIndex].flags &
+                VirtualGeometryCachePagePinnedRoot) != 0u) == root);
+            const auto diskPage = readVirtualGeometryCachePage(
+                path, pageMetadata.value(), pageIndex);
+            EXPECT(diskPage);
+            if (diskPage && expectedLayout)
+            {
+                const auto expectedPage = serializeVirtualGeometryPage(
+                    built.value(), expectedLayout.value(), pageIndex);
+                EXPECT(expectedPage);
+                if (expectedPage)
+                    EXPECT(diskPage.value() == expectedPage.value());
+            }
+        }
+        EXPECT(!readVirtualGeometryCachePage(path, pageMetadata.value(),
+            static_cast<std::uint32_t>(pageMetadata.value().pages.size())));
+    }
     VirtualGeometryCacheOptions metadata;
     const auto roundTrip = readVirtualGeometryCache(path, &hash, &metadata);
     EXPECT(roundTrip);
@@ -488,7 +564,7 @@ void cacheTests()
     // short zstd frame before inspecting payload bytes.
     {
         auto headerOnly = readBytes(path);
-        headerOnly.resize(104u);
+        headerOnly.resize(128u);
         std::ofstream truncated(path, std::ios::binary | std::ios::trunc);
         truncated.write(headerOnly.data(), static_cast<std::streamsize>(headerOnly.size()));
     }
@@ -498,6 +574,157 @@ void cacheTests()
     { std::ofstream damaged(path, std::ios::binary | std::ios::trunc); damaged.write(bytes.data(), static_cast<std::streamsize>(bytes.size())); }
     EXPECT(!readVirtualGeometryCache(path));
     std::filesystem::remove(path, error); std::filesystem::remove(secondPath, error);
+}
+
+void streamerTests()
+{
+    using namespace std::chrono_literals;
+    const auto path = std::filesystem::temp_directory_path() /
+        "halcyon-vg-streamer-test.cache";
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    const auto built = buildVirtualGeometry(makeGridScene(20u));
+    EXPECT(built);
+    if (!built)
+        return;
+    const auto pageLayout = buildVirtualGeometryPageLayout(built.value(), 4096u);
+    EXPECT(pageLayout);
+    if (!pageLayout)
+        return;
+    EXPECT(pageLayout->pageCount > 1u);
+    EXPECT(pageLayout->nodeDependencies.size() == built->dagNodes.size());
+    EXPECT(!pageLayout->rootPageIndices.empty());
+    EXPECT(!buildVirtualGeometryPageLayout(built.value(), 5000u));
+
+    std::vector<std::byte> pageableBytes(
+        static_cast<std::size_t>(pageLayout->rawSize), std::byte{0});
+    for (std::uint32_t pageIndex = 0u; pageIndex < pageLayout->pageCount; ++pageIndex)
+    {
+        const auto page = serializeVirtualGeometryPage(
+            built.value(), pageLayout.value(), pageIndex);
+        EXPECT(page);
+        if (page)
+            std::copy(page->begin(), page->end(),
+                pageableBytes.begin() + static_cast<std::size_t>(pageIndex) *
+                    pageLayout->pageSize);
+    }
+    const auto matchesStream = [&](VirtualGeometryStreamRange range,
+                                   const void* source, std::size_t size)
+    {
+        return range.size == size &&
+            std::memcmp(pageableBytes.data() + static_cast<std::size_t>(range.offset),
+                source, size) == 0;
+    };
+    EXPECT(matchesStream(pageLayout->vertices, built->vertices.data(),
+        built->vertices.size() * sizeof(built->vertices[0])));
+    EXPECT(matchesStream(pageLayout->meshletVertices, built->meshletVertices.data(),
+        built->meshletVertices.size() * sizeof(built->meshletVertices[0])));
+    EXPECT(matchesStream(pageLayout->meshletTriangles, built->meshletTriangles.data(),
+        built->meshletTriangles.size() * sizeof(built->meshletTriangles[0])));
+    EXPECT(matchesStream(pageLayout->indices, built->indices.data(),
+        built->indices.size() * sizeof(built->indices[0])));
+    EXPECT(!serializeVirtualGeometryPage(
+        built.value(), pageLayout.value(), pageLayout->pageCount));
+    for (std::uint32_t nodeIndex = 0u; nodeIndex < built->dagNodes.size(); ++nodeIndex)
+    {
+        const auto dependency = pageLayout->nodeDependencies[nodeIndex];
+        EXPECT(dependency.count > 0u);
+        EXPECT(static_cast<std::size_t>(dependency.offset) + dependency.count <=
+            pageLayout->dependencyPageIndices.size());
+        for (std::uint32_t i = 0u; i < dependency.count; ++i)
+        {
+            const auto page = pageLayout->dependencyPageIndices[dependency.offset + i];
+            EXPECT(page < pageLayout->pageCount);
+            EXPECT(virtualGeometryNodeDependsOnPage(
+                pageLayout.value(), nodeIndex, page));
+            if (i != 0u)
+                EXPECT(pageLayout->dependencyPageIndices[dependency.offset + i - 1u] < page);
+        }
+    }
+    for (std::uint32_t nodeIndex = 0u; nodeIndex < built->dagNodes.size(); ++nodeIndex)
+    {
+        if (built->dagNodes[nodeIndex].parentIndex !=
+            std::numeric_limits<std::uint32_t>::max())
+            continue;
+        const auto dependency = pageLayout->nodeDependencies[nodeIndex];
+        for (std::uint32_t i = 0u; i < dependency.count; ++i)
+            EXPECT(std::binary_search(pageLayout->rootPageIndices.begin(),
+                pageLayout->rootPageIndices.end(),
+                pageLayout->dependencyPageIndices[dependency.offset + i]));
+    }
+    VirtualGeometryCacheOptions cacheOptions{};
+    cacheOptions.pageSize = 4096u;
+    const Sha256Digest hash{};
+    EXPECT(writeVirtualGeometryCache(path, built.value(), hash, cacheOptions));
+    const auto metadata = readVirtualGeometryCacheMetadata(path, &hash, &cacheOptions);
+    EXPECT(metadata);
+    if (!metadata)
+        return;
+    EXPECT(metadata->pages.size() > 1u);
+
+    VirtualGeometryStreamingConfig streamingConfig{};
+    streamingConfig.cpuStagingBudgetBytes = 16u * 4096u;
+    streamingConfig.maxUploadBytesPerFrame = 4096u;
+    streamingConfig.maxUploadPagesPerFrame = 1u;
+    auto streamer = VirtualGeometryStreamer::open(
+        path, &hash, &cacheOptions, streamingConfig);
+    EXPECT(streamer);
+    if (!streamer)
+        return;
+    for (const auto rootPage : metadata->rootPageIndices)
+        EXPECT(streamer.value()->pageState(rootPage) == VirtualGeometryPageState::ReadyCPU);
+    for (std::size_t rootIndex = 0u; rootIndex < metadata->rootPageIndices.size(); ++rootIndex)
+    {
+        auto root = streamer.value()->takeReadyPages();
+        EXPECT(root.size() == 1u);
+        if (!root.empty())
+        {
+            EXPECT(std::binary_search(metadata->rootPageIndices.begin(),
+                metadata->rootPageIndices.end(), root.front().pageIndex));
+            EXPECT(streamer.value()->markResident(root.front().pageIndex,
+                root.front().generation, 0u, 1u));
+        }
+    }
+    const auto nonRoot = std::find_if(metadata->pages.begin(), metadata->pages.end(),
+        [](const VirtualGeometryCachePageEntry& page)
+        {
+            return (page.flags & VirtualGeometryCachePagePinnedRoot) == 0u;
+        });
+    EXPECT(nonRoot != metadata->pages.end());
+    if (nonRoot == metadata->pages.end())
+        return;
+    const std::uint32_t nonRootPage = static_cast<std::uint32_t>(
+        std::distance(metadata->pages.begin(), nonRoot));
+    EXPECT(!streamer.value()->requestPage(metadata->rootPageIndices.front(), 1.0f, 1u));
+    EXPECT(streamer.value()->requestPage(nonRootPage, 10.0f, 1u));
+    EXPECT(!streamer.value()->requestPage(nonRootPage, 20.0f, 1u));
+    EXPECT(streamer.value()->waitForPageState(
+        nonRootPage, VirtualGeometryPageState::ReadyCPU, 5s));
+    auto ready = streamer.value()->takeReadyPages();
+    EXPECT(ready.size() == 1u);
+    if (!ready.empty())
+    {
+        const auto generation = ready.front().generation;
+        EXPECT(ready.front().pageIndex == nonRootPage);
+        EXPECT(!streamer.value()->markResident(
+            nonRootPage, generation + 1u, 1u, 3u));
+        EXPECT(streamer.value()->markResident(nonRootPage, generation, 1u, 3u));
+        EXPECT(streamer.value()->beginEviction(2u, 10u) ==
+            std::numeric_limits<std::uint32_t>::max());
+        EXPECT(streamer.value()->beginEviction(3u, 10u) == nonRootPage);
+        EXPECT(streamer.value()->finishEviction(nonRootPage, generation));
+        EXPECT(streamer.value()->pageGeneration(nonRootPage) == generation + 1u);
+        EXPECT(streamer.value()->pageState(nonRootPage) ==
+            VirtualGeometryPageState::Unloaded);
+    }
+    EXPECT(streamer.value()->beginEviction(
+        std::numeric_limits<std::uint64_t>::max(), 100u) ==
+        std::numeric_limits<std::uint32_t>::max());
+    const auto stats = streamer.value()->stats();
+    EXPECT(stats.requestedPages == 1u);
+    EXPECT(stats.loadedPages >= metadata->rootPageIndices.size() + 1u);
+    EXPECT(stats.evictedPages == 1u);
+    std::filesystem::remove(path, error);
 }
 
 void plyTests()
@@ -543,6 +770,7 @@ int main()
 {
     buildTests();
     cacheTests();
+    streamerTests();
     plyTests();
     if (failures != 0) { std::cerr << failures << " Virtual Geometry test(s) failed\n"; return 1; }
     std::cout << "All Virtual Geometry tests passed\n";

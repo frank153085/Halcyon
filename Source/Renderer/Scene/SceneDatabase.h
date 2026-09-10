@@ -21,6 +21,8 @@
 namespace Halcyon::Renderer::Scene
 {
 
+class VirtualGeometryStreamer;
+
 struct SceneMesh
 {
     std::string name;
@@ -31,6 +33,10 @@ struct SceneMesh
     // Optional M5 representation. Traditional vertex/index data remains the
     // compatibility source for Deferred/GPU-driven paths.
     std::shared_ptr<const VirtualGeometryAsset> virtualGeometry;
+    // M6 sidecar streamer. It owns the v5 page state machine and is kept
+    // separate from the compatibility asset so the indexed path can be
+    // retired without changing scene handles.
+    std::shared_ptr<VirtualGeometryStreamer> virtualGeometryStreamer;
 };
 
 struct SceneMaterial
@@ -329,6 +335,14 @@ public:
         auto* mesh = get(handle);
         if (mesh == nullptr) return false;
         mesh->virtualGeometry = std::move(asset);
+        return true;
+    }
+    [[nodiscard]] bool attachVirtualGeometryStreamer(MeshHandle handle,
+        std::shared_ptr<VirtualGeometryStreamer> streamer) noexcept
+    {
+        auto* mesh = get(handle);
+        if (mesh == nullptr) return false;
+        mesh->virtualGeometryStreamer = std::move(streamer);
         return true;
     }
     [[nodiscard]] const SceneMesh* get(MeshHandle handle) const noexcept

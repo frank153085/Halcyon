@@ -360,6 +360,15 @@ struct Renderer::Impl
     std::vector<bool>& gpuVisibilityValid = debugReadbacks.gpuVisibilityValid;
     std::vector<BufferAllocation>& virtualGeometryReadbacks = debugReadbacks.virtualGeometryReadbacks;
     std::vector<bool>& virtualGeometryValid = debugReadbacks.virtualGeometryValid;
+    std::vector<BufferAllocation>& virtualPageRequestReadbacks =
+        debugReadbacks.virtualPageRequestReadbacks;
+    std::vector<bool>& virtualPageRequestValid = debugReadbacks.virtualPageRequestValid;
+    std::vector<std::uint64_t>& virtualPageRequestFrameIndices =
+        debugReadbacks.virtualPageRequestFrameIndices;
+    std::vector<std::uint32_t>& virtualPageRequestPageCounts =
+        debugReadbacks.virtualPageRequestPageCounts;
+    std::vector<std::uint32_t>& virtualPageRequestMeshIds =
+        debugReadbacks.virtualPageRequestMeshIds;
     std::vector<std::vector<std::uint32_t>>& gpuReferenceVisible = debugReadbacks.gpuReferenceVisible;
     std::vector<BufferAllocation>& instanceIdReadbacks = debugReadbacks.instanceIdReadbacks;
     std::vector<bool>& instanceIdReadbackValid = debugReadbacks.instanceIdReadbackValid;
@@ -581,6 +590,8 @@ struct Renderer::Impl
             gpuAllocator.destroy(readback);
         for (auto& readback : virtualGeometryReadbacks)
             gpuAllocator.destroy(readback);
+        for (auto& readback : virtualPageRequestReadbacks)
+            gpuAllocator.destroy(readback);
         clusterOverflowReadbacks.clear();
         clusterOverflowReadbacks.reserve(frames.size());
         gpuVisibilityReadbacks.clear();
@@ -589,6 +600,13 @@ struct Renderer::Impl
         virtualGeometryReadbacks.clear();
         virtualGeometryReadbacks.reserve(frames.size());
         virtualGeometryValid.assign(frames.size(), false);
+        virtualPageRequestReadbacks.clear();
+        virtualPageRequestReadbacks.reserve(frames.size());
+        virtualPageRequestValid.assign(frames.size(), false);
+        virtualPageRequestFrameIndices.assign(frames.size(), 0u);
+        virtualPageRequestPageCounts.assign(frames.size(), 0u);
+        virtualPageRequestMeshIds.assign(frames.size(),
+            std::numeric_limits<std::uint32_t>::max());
         gpuReferenceVisible.assign(frames.size(), {});
         instanceIdReadbacks.assign(frames.size(), {});
         instanceIdReadbackValid.assign(frames.size(), false);
@@ -614,6 +632,9 @@ struct Renderer::Impl
                 for (auto& readback : virtualGeometryReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualGeometryReadbacks.clear();
+                for (auto& readback : virtualPageRequestReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageRequestReadbacks.clear();
                 return allocation.error();
             }
             clusterOverflowReadbacks.push_back(allocation.value());
@@ -636,6 +657,9 @@ struct Renderer::Impl
                 for (auto& readback : virtualGeometryReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualGeometryReadbacks.clear();
+                for (auto& readback : virtualPageRequestReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageRequestReadbacks.clear();
                 return visibility.error();
             }
             gpuVisibilityReadbacks.push_back(visibility.value());
@@ -654,9 +678,32 @@ struct Renderer::Impl
                 for (auto& readback : virtualGeometryReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualGeometryReadbacks.clear();
+                for (auto& readback : virtualPageRequestReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageRequestReadbacks.clear();
                 return virtualCounters.error();
             }
             virtualGeometryReadbacks.push_back(virtualCounters.value());
+            info.size = sizeof(std::uint32_t) *
+                (1ull + DebugReadbackManager::VirtualPageRequestCapacity);
+            const auto pageRequests = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
+            if (!pageRequests)
+            {
+                for (auto& readback : clusterOverflowReadbacks)
+                    gpuAllocator.destroy(readback);
+                clusterOverflowReadbacks.clear();
+                for (auto& readback : gpuVisibilityReadbacks)
+                    gpuAllocator.destroy(readback);
+                gpuVisibilityReadbacks.clear();
+                for (auto& readback : virtualGeometryReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualGeometryReadbacks.clear();
+                for (auto& readback : virtualPageRequestReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageRequestReadbacks.clear();
+                return pageRequests.error();
+            }
+            virtualPageRequestReadbacks.push_back(pageRequests.value());
         }
         return ok();
     }
@@ -1218,7 +1265,7 @@ struct Renderer::Impl
         result = meshletCullPipeline.createCompute(device, meshletCullDesc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 8> lodSelectBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 13> lodSelectBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -1226,10 +1273,15 @@ struct Renderer::Impl
             VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(lodSelectBindings, lodSelectLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 8> lodSelectAbi = {
+        const std::array<DescriptorBindingDesc, 13> lodSelectAbi = {
             DescriptorBindingDesc{0, lodSelectBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode)},
             DescriptorBindingDesc{0, lodSelectBindings[1], sizeof(Halcyon::Renderer::Scene::VirtualGeometryDagEdge)},
             DescriptorBindingDesc{0, lodSelectBindings[2], 16},
@@ -1237,7 +1289,12 @@ struct Renderer::Impl
             DescriptorBindingDesc{0, lodSelectBindings[4], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, lodSelectBindings[5], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, lodSelectBindings[6], sizeof(std::uint32_t)},
-            DescriptorBindingDesc{0, lodSelectBindings[7], sizeof(std::uint32_t)}};
+            DescriptorBindingDesc{0, lodSelectBindings[7], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[8], sizeof(VulkanSceneResources::VirtualGeometryGpuPageTableEntry)},
+            DescriptorBindingDesc{0, lodSelectBindings[9], sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageDependencyRange)},
+            DescriptorBindingDesc{0, lodSelectBindings[10], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[11], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[12], sizeof(std::uint32_t)}};
         ComputePipelineDesc lodSelectDesc{};
         lodSelectDesc.shader = "lod_select.comp.spv";
         lodSelectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&lodSelectLayout, 1};
@@ -1860,6 +1917,68 @@ struct Renderer::Impl
                     counters.value().data() + sizeof(std::uint32_t) * 4u, sizeof(std::uint32_t));
             }
         }
+        if (frame.submitted && currentFrame < virtualPageRequestReadbacks.size() &&
+            currentFrame < virtualPageRequestValid.size() &&
+            virtualPageRequestValid[currentFrame])
+        {
+            const auto countBytes = gpuAllocator.readBuffer(
+                virtualPageRequestReadbacks[currentFrame], 0u, sizeof(std::uint32_t));
+            if (countBytes && countBytes->size() >= sizeof(std::uint32_t))
+            {
+                std::uint32_t rawCount = 0u;
+                std::memcpy(&rawCount, countBytes->data(), sizeof(rawCount));
+                const std::uint32_t pageCount = currentFrame <
+                        virtualPageRequestPageCounts.size()
+                    ? virtualPageRequestPageCounts[currentFrame] : 0u;
+                const std::uint32_t capacity = std::min<std::uint32_t>(pageCount,
+                    DebugReadbackManager::VirtualPageRequestCapacity);
+                const std::uint32_t copiedCount = std::min(rawCount, capacity);
+                stats.virtualPageRequestOverflowCount = rawCount > capacity
+                    ? rawCount - capacity : 0u;
+                if (copiedCount != 0u)
+                {
+                    const auto requestBytes = gpuAllocator.readBuffer(
+                        virtualPageRequestReadbacks[currentFrame], sizeof(std::uint32_t),
+                        static_cast<VkDeviceSize>(copiedCount) * sizeof(std::uint32_t));
+                    if (requestBytes && requestBytes->size() >=
+                            static_cast<std::size_t>(copiedCount) * sizeof(std::uint32_t))
+                    {
+                        std::vector<std::uint32_t> requests(copiedCount);
+                        std::memcpy(requests.data(), requestBytes->data(),
+                            requests.size() * sizeof(requests[0]));
+                        const auto invalid = std::remove_if(requests.begin(), requests.end(),
+                            [pageCount](std::uint32_t page) { return page >= pageCount; });
+                        stats.virtualPageRequestOverflowCount +=
+                            static_cast<std::uint32_t>(requests.end() - invalid);
+                        requests.erase(invalid, requests.end());
+                        std::sort(requests.begin(), requests.end());
+                        requests.erase(std::unique(requests.begin(), requests.end()),
+                            requests.end());
+                        stats.virtualPageRequestCount =
+                            static_cast<std::uint32_t>(requests.size());
+                        const std::uint32_t meshId = currentFrame <
+                                virtualPageRequestMeshIds.size()
+                            ? virtualPageRequestMeshIds[currentFrame]
+                            : std::numeric_limits<std::uint32_t>::max();
+                        if (meshId != std::numeric_limits<std::uint32_t>::max())
+                        {
+                            if (auto* streamer = sceneResources.virtualGeometryStreamer(meshId))
+                            {
+                                // Requests are consumed two frames after GPU
+                                // production. Preserve the GPU ordering while
+                                // assigning a deterministic priority within
+                                // this readback batch.
+                                for (std::size_t i = 0u; i < requests.size(); ++i)
+                                    (void)streamer->requestPage(requests[i],
+                                        1000000.0f - static_cast<float>(i),
+                                        packet.frameIndex);
+                            }
+                        }
+                    }
+                }
+            }
+            virtualPageRequestValid[currentFrame] = false;
+        }
         if (frame.submitted && config.enableGpuDrivenScene &&
             currentFrame < gpuVisibilityReadbacks.size() &&
             currentFrame < gpuVisibilityValid.size() && gpuVisibilityValid[currentFrame])
@@ -2141,6 +2260,8 @@ struct Renderer::Impl
 
         if (currentFrame < virtualGeometryValid.size())
             virtualGeometryValid[currentFrame] = false;
+        if (currentFrame < virtualPageRequestValid.size())
+            virtualPageRequestValid[currentFrame] = false;
         const VoidResult recordResult = recordFrame(frame, stats.swapchainImageIndex, packet,
             screenshotReadback.buffer);
         if (!recordResult)
@@ -2706,6 +2827,8 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.selectedLodNodes = m3.selectedLodNodes;
     ctx.selectedLodCount = m3.selectedLodCount;
     ctx.lodBalanceDepth = m3.lodBalanceDepth;
+    ctx.virtualPageRequests = m3.virtualPageRequests;
+    ctx.virtualPageRequestCount = m3.virtualPageRequestCount;
     ctx.meshletIndirect = m3.meshletIndirect;
     ctx.meshletIndirectCount = m3.meshletIndirectCount;
     ctx.meshletMeshIndirect = m3.meshletMeshIndirect;

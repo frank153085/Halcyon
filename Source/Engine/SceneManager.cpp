@@ -6,6 +6,7 @@
 #include "Renderer/Vulkan/HalcyonVulkanRenderer.h"
 #include "Renderer/Scene/Sha256.h"
 #include "Renderer/Scene/VirtualGeometryCache.h"
+#include "Renderer/Scene/VirtualGeometryStreamer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -267,6 +268,7 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
     // mesh and would implicitly migrate older cache ABIs. Keep startup
     // deterministic and let the established indexed renderer remain usable.
     std::shared_ptr<const Renderer::Scene::VirtualGeometryAsset> virtualGeometry;
+    std::shared_ptr<Renderer::Scene::VirtualGeometryStreamer> virtualGeometryStreamer;
     const std::filesystem::path sourcePath = sceneAsset.sourcePath;
     if (isVirtualGeometrySourcePath(sourcePath))
     {
@@ -277,13 +279,25 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             {
                 const auto sidecar = sourcePath.string() + ".halcyon.vgcache";
                 const Renderer::Scene::VirtualGeometryCacheOptions cacheOptions{};
+                auto streamed = Renderer::Scene::VirtualGeometryStreamer::open(
+                    sidecar, &sourceHash.value(), &cacheOptions);
+                if (streamed)
+                {
+                    virtualGeometryStreamer = std::shared_ptr<Renderer::Scene::VirtualGeometryStreamer>(
+                        std::move(streamed).value());
+                }
+                else
+                {
+                    HALCYON_LOG_WARN("Virtual Geometry streamer unavailable for ",
+                        sourcePath.string(), ": ", streamed.error().describe());
+                }
                 auto cached = Renderer::Scene::readVirtualGeometryCache(
                     sidecar, &sourceHash.value(), nullptr, &cacheOptions);
                 if (!cached)
                 {
                     HALCYON_LOG_WARN("Virtual Geometry cache unavailable for ",
                         sourcePath.string(), ": ", cached.error().describe(),
-                        "; run HalcyonCooker to generate a v4 sidecar; using indexed fallback");
+                        "; run HalcyonCooker to generate a v5 sidecar; using indexed fallback");
                 }
                 if (cached)
                     virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
@@ -293,7 +307,7 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
             {
                 HALCYON_LOG_WARN("Virtual Geometry source hash failed for ",
                     sourcePath.string(), ": ", sourceHash.error().describe(),
-                    "; cannot validate a v4 sidecar; using indexed fallback");
+                    "; cannot validate a v5 sidecar; using indexed fallback");
             }
         }
         catch (const std::bad_alloc&)
@@ -321,7 +335,12 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
     if (virtualGeometry)
     {
         for (std::size_t i = 0; i < imported.meshes.size() && i < sceneAsset.primitives.size(); ++i)
+        {
             (void)impl_->database.attachVirtualGeometry(imported.meshes[i], virtualGeometry);
+            if (virtualGeometryStreamer)
+                (void)impl_->database.attachVirtualGeometryStreamer(
+                    imported.meshes[i], virtualGeometryStreamer);
+        }
     }
     if (impl_->renderer != nullptr)
     {

@@ -104,8 +104,13 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     result.visibleMeshletCount = graph.createBuffer({"VisibleMeshletCount", 4u, 4u, true});
     result.selectedLodNodes = graph.createBuffer({"VirtualGeometrySelectedLodNodes",
         static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 4u, 4u, true});
-    result.selectedLodCount = graph.createBuffer({"VirtualGeometrySelectionCounters", 8u, 4u, true});
+    // Two counters followed by VkDispatchIndirectCommand for compact culling.
+    result.selectedLodCount = graph.createBuffer({"VirtualGeometrySelectionCounters", 20u, 4u, true});
     result.lodBalanceDepth = graph.createBuffer({"VirtualGeometryLodBalanceDepth", 4u, 4u, true});
+    result.virtualPageRequests = graph.createBuffer({"VirtualGeometryPageRequests",
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 4u, 4u, true});
+    result.virtualPageRequestCount = graph.createBuffer(
+        {"VirtualGeometryPageRequestCount", 4u, 4u, true});
     result.meshletIndirect = graph.createBuffer({"MeshletIndirect",
         static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 20u, 20u, true});
     result.meshletIndirectCount = graph.createBuffer({"MeshletIndirectCount", 4u, 4u, true});

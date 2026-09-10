@@ -16,6 +16,14 @@ struct DagNode
 };
 struct DagEdge { uint parent; uint child; };
 struct LodState { uint currentNode; uint candidateNode; uint pendingFrames; uint pad; };
+struct PageTableEntry
+{
+    uint physicalPage;
+    uint generation;
+    uint flags;
+    uint lastRequestedFrame;
+};
+struct PageDependencyRange { uint offset; uint count; };
 struct LodFrame
 {
     float4x4 viewProjection;
@@ -34,7 +42,44 @@ struct LodFrame
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> balanceDepth;
 [[vk::binding(6, 0)]] StructuredBuffer<uint> adjacencyOffsets;
 [[vk::binding(7, 0)]] StructuredBuffer<uint> adjacencyIndices;
+[[vk::binding(8, 0)]] RWStructuredBuffer<PageTableEntry> pageTable;
+[[vk::binding(9, 0)]] StructuredBuffer<PageDependencyRange> nodePageRanges;
+[[vk::binding(10, 0)]] StructuredBuffer<uint> pageDependencies;
+[[vk::binding(11, 0)]] RWStructuredBuffer<uint> pageRequests;
+[[vk::binding(12, 0)]] RWStructuredBuffer<uint> pageRequestCount;
 [[vk::push_constant]] ConstantBuffer<LodFrame> frame;
+
+static const uint VG_PAGE_RESIDENT = 1u;
+
+bool nodePagesResident(uint nodeIndex)
+{
+    const PageDependencyRange range = nodePageRanges[nodeIndex];
+    bool resident = true;
+    [loop]
+    for (uint dependency = 0u; dependency < range.count; ++dependency)
+    {
+        const uint pageIndex = pageDependencies[range.offset + dependency];
+        if (pageIndex >= frame.outputAndRoot.y)
+        {
+            resident = false;
+            continue;
+        }
+        if ((pageTable[pageIndex].flags & VG_PAGE_RESIDENT) != 0u)
+            continue;
+        resident = false;
+        uint previousFrame = 0u;
+        InterlockedExchange(pageTable[pageIndex].lastRequestedFrame,
+            frame.outputAndRoot.w, previousFrame);
+        if (previousFrame != frame.outputAndRoot.w)
+        {
+            uint requestIndex = 0u;
+            InterlockedAdd(pageRequestCount[0], 1u, requestIndex);
+            if (requestIndex < frame.outputAndRoot.x)
+                pageRequests[requestIndex] = pageIndex;
+        }
+    }
+    return resident;
+}
 
 float projectedError(DagNode node)
 {
@@ -48,6 +93,17 @@ void main(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= frame.counts.w) return;
     const uint phase = frame.outputAndRoot.z;
+    if (phase == 4u)
+    {
+        if (id.x == 0u)
+        {
+            selectionCounters[2] = (min(selectionCounters[0],
+                frame.outputAndRoot.x) + 63u) / 64u;
+            selectionCounters[3] = 1u;
+            selectionCounters[4] = 1u;
+        }
+        return;
+    }
     LodState state = lodStates[id.x];
     DagNode current = dagNodes[id.x];
 
@@ -87,7 +143,23 @@ void main(uint3 id : SV_DispatchThreadID)
     // balancing, so repeated dispatches converge without an auxiliary copy.
     if (phase == 1u)
     {
-        lodStates[id.x].pad = state.currentNode & 1u;
+        uint decision = state.currentNode & 1u;
+        if (decision != 0u)
+        {
+            [loop]
+            for (uint childEdge = current.firstChild;
+                childEdge < current.firstChild + current.childCount &&
+                    childEdge < frame.counts.z; ++childEdge)
+            {
+                const uint child = dagEdges[childEdge].child;
+                if (child >= frame.counts.y || !nodePagesResident(child))
+                {
+                    decision = 0u;
+                    break;
+                }
+            }
+        }
+        lodStates[id.x].pad = decision;
         return;
     }
 

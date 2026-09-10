@@ -153,7 +153,8 @@ Halcyon::Result<BufferAllocation> VulkanSceneResources::createMaterialBuffer(
 
 Halcyon::Result<VulkanSceneResources::VirtualGeometryGpuBuffers>
 VulkanSceneResources::uploadVirtualGeometry(
-    const Halcyon::Renderer::Scene::VirtualGeometryAsset& asset)
+    const Halcyon::Renderer::Scene::VirtualGeometryAsset& asset,
+    Halcyon::Renderer::Scene::VirtualGeometryStreamer* streamer)
 {
     if (allocator_ == nullptr || uploader_ == nullptr)
         return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
@@ -329,6 +330,120 @@ VulkanSceneResources::uploadVirtualGeometry(
     std::vector<std::uint32_t> meshletDagNodes;
     std::vector<std::uint32_t> clusterAdjacencyOffsets;
     std::vector<std::uint32_t> clusterAdjacencyIndices;
+    const auto pageLayoutResult =
+        Halcyon::Renderer::Scene::buildVirtualGeometryPageLayout(asset);
+    if (!pageLayoutResult)
+        return fail(Halcyon::Result<void>::failure(pageLayoutResult.error()));
+    const auto& pageLayout = pageLayoutResult.value();
+    constexpr std::uint32_t invalidPhysicalPage = std::numeric_limits<std::uint32_t>::max();
+    std::vector<VirtualGeometryGpuPageTableEntry> pageTable;
+    try
+    {
+        pageTable.assign(pageLayout.pageCount, VirtualGeometryGpuPageTableEntry{});
+    }
+    catch (const std::bad_alloc&)
+    {
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "failed to allocate virtual geometry page table"}));
+    }
+    for (auto& page : pageTable)
+    {
+        page.physicalPage = invalidPhysicalPage;
+        page.generation = 1u;
+        page.flags = 0u;
+        page.lastRequestedFrame = std::numeric_limits<std::uint32_t>::max();
+    }
+    const auto& streamConfig = streamer != nullptr
+        ? streamer->config() : Halcyon::Renderer::Scene::VirtualGeometryStreamingConfig{};
+    const std::uint64_t requestedPoolPages = streamConfig.gpuPagePoolBytes /
+        pageLayout.pageSize;
+    const std::uint64_t physicalPageCount64 = std::min<std::uint64_t>(
+        pageLayout.pageCount, requestedPoolPages);
+    if (physicalPageCount64 == 0u || physicalPageCount64 > std::numeric_limits<std::uint32_t>::max() ||
+        pageLayout.rootPageIndices.size() > physicalPageCount64)
+    {
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "virtual geometry page pool cannot hold the root pages"}));
+    }
+    const std::uint32_t physicalPageCount = static_cast<std::uint32_t>(physicalPageCount64);
+    VkBufferCreateInfo pagePoolInfo{};
+    pagePoolInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    pagePoolInfo.size = static_cast<VkDeviceSize>(physicalPageCount) * pageLayout.pageSize;
+    pagePoolInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    pagePoolInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const auto pagePool = allocator_->createBuffer(pagePoolInfo, MemoryUsage::GpuOnly);
+    if (!pagePool)
+        return fail(Halcyon::Result<void>::failure(pagePool.error()));
+    result.geometryPagePool = pagePool.value();
+    try
+    {
+        result.virtualToPhysical.assign(pageLayout.pageCount, invalidPhysicalPage);
+        result.physicalToVirtual.assign(physicalPageCount, invalidPhysicalPage);
+        result.pageTableCpu = pageTable;
+    }
+    catch (const std::bad_alloc&)
+    {
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::OutOfMemory,
+            "failed to allocate virtual geometry page mappings"}));
+    }
+
+    // Root geometry is the only synchronous bootstrap upload. It guarantees a
+    // complete coarse representation while ordinary pages are requested and
+    // decoded by the background streamer.
+    std::vector<VirtualGeometryReadyPage> rootReady;
+    if (streamer != nullptr)
+    {
+        rootReady = streamer->takeReadyPages(
+            static_cast<std::uint64_t>(pageLayout.rootPageIndices.size()) * pageLayout.pageSize,
+            static_cast<std::uint32_t>(pageLayout.rootPageIndices.size()));
+        std::sort(rootReady.begin(), rootReady.end(),
+            [](const auto& left, const auto& right) { return left.pageIndex < right.pageIndex; });
+    }
+    std::uint32_t nextPhysicalPage = 0u;
+    for (const std::uint32_t pageIndex : pageLayout.rootPageIndices)
+    {
+        std::vector<std::byte> generated;
+        const std::vector<std::byte>* bytesForUpload = nullptr;
+        std::uint32_t generation = 1u;
+        if (streamer != nullptr)
+        {
+            const auto found = std::lower_bound(rootReady.begin(), rootReady.end(), pageIndex,
+                [](const auto& page, std::uint32_t index) { return page.pageIndex < index; });
+            if (found == rootReady.end() || found->pageIndex != pageIndex ||
+                found->bytes.size() != pageLayout.pageSize)
+            {
+                return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::Io,
+                    "streamer did not provide every required root page"}));
+            }
+            bytesForUpload = &found->bytes;
+            generation = found->generation;
+        }
+        else
+        {
+            const auto generatedPage = Halcyon::Renderer::Scene::serializeVirtualGeometryPage(
+                asset, pageLayout, pageIndex);
+            if (!generatedPage)
+                return fail(Halcyon::Result<void>::failure(generatedPage.error()));
+            generated = std::move(generatedPage.value());
+            bytesForUpload = &generated;
+        }
+        const std::uint32_t physical = nextPhysicalPage++;
+        const auto uploadPage = uploader_->uploadBuffer(device_, uploadCommandPool_, graphicsQueue_,
+            *allocator_, result.geometryPagePool, *bytesForUpload,
+            static_cast<VkDeviceSize>(physical) * pageLayout.pageSize);
+        if (!uploadPage)
+            return fail(std::move(uploadPage));
+        result.virtualToPhysical[pageIndex] = physical;
+        result.physicalToVirtual[physical] = pageIndex;
+        auto& tableEntry = result.pageTableCpu[pageIndex];
+        tableEntry.physicalPage = physical;
+        tableEntry.generation = generation;
+        tableEntry.flags = VirtualGeometryPageResident | VirtualGeometryPagePinned;
+        tableEntry.lastRequestedFrame = std::numeric_limits<std::uint32_t>::max();
+        if (streamer != nullptr && !streamer->markResident(pageIndex, generation, 0u, 0u))
+            return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidState,
+                "failed to publish a root virtual geometry page"}));
+    }
     try
     {
         meshletDagNodes.assign(asset.meshlets.size(), std::numeric_limits<std::uint32_t>::max());
@@ -456,6 +571,31 @@ VulkanSceneResources::uploadVirtualGeometry(
         clusterAdjacencyIndices.empty() ? sizeof(emptyAdjacency) : bytes,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.clusterAdjacencyIndices);
     if (!upload) return fail(std::move(upload));
+    if (!byteSize(pageTable.size(), sizeof(pageTable[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry page table byte size overflow"}));
+    upload = createAndUpload(result.pageTableCpu.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.pageTable);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(pageLayout.nodeDependencies.size(),
+            sizeof(pageLayout.nodeDependencies[0]), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry node page-range byte size overflow"}));
+    upload = createAndUpload(pageLayout.nodeDependencies.data(), bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.nodePageRanges);
+    if (!upload) return fail(std::move(upload));
+    if (!byteSize(pageLayout.dependencyPageIndices.size(), sizeof(std::uint32_t), bytes))
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry page dependency byte size overflow"}));
+    const std::uint32_t emptyPageDependency = 0u;
+    upload = createAndUpload(pageLayout.dependencyPageIndices.empty()
+            ? static_cast<const void*>(&emptyPageDependency)
+            : static_cast<const void*>(pageLayout.dependencyPageIndices.data()),
+        pageLayout.dependencyPageIndices.empty() ? sizeof(emptyPageDependency) : bytes,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, result.pageDependencies);
+    if (!upload) return fail(std::move(upload));
+    result.virtualPageCount = pageLayout.pageCount;
+    result.virtualPageSize = pageLayout.pageSize;
     return Halcyon::Result<VirtualGeometryGpuBuffers>::success(std::move(result));
 }
 
@@ -472,7 +612,11 @@ void VulkanSceneResources::destroyVirtualGeometry(VirtualGeometryGpuBuffers& buf
     allocator_->destroy(buffers.meshletDagNodes);
     allocator_->destroy(buffers.clusterAdjacencyOffsets);
     allocator_->destroy(buffers.clusterAdjacencyIndices);
-    buffers = {};
+    allocator_->destroy(buffers.pageTable);
+    allocator_->destroy(buffers.geometryPagePool);
+    allocator_->destroy(buffers.nodePageRanges);
+    allocator_->destroy(buffers.pageDependencies);
+    buffers = VirtualGeometryGpuBuffers{};
 }
 
 const TextureResource* VulkanSceneResources::texture(std::uint32_t index) const noexcept
@@ -569,6 +713,7 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                 meshes_.erase(found);
             }
             virtualGeometryByMesh_.erase(mesh);
+            virtualGeometryStreamerByMesh_.erase(mesh);
             const auto virtualGpu = virtualGeometryGpuByMesh_.find(mesh);
             if (virtualGpu != virtualGeometryGpuByMesh_.end())
             {
@@ -675,7 +820,8 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
             uploadedMeshes.push_back(handle.index());
             if (source->virtualGeometry)
             {
-                const auto virtualGpu = uploadVirtualGeometry(*source->virtualGeometry);
+                const auto virtualGpu = uploadVirtualGeometry(*source->virtualGeometry,
+                    source->virtualGeometryStreamer.get());
                 if (virtualGpu)
                 {
                     // BufferAllocation is an explicit handle, not an RAII
@@ -696,7 +842,10 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                             (void)gpuIt;
                             if (gpuInserted)
                             {
-                                pending = {};
+                                if (source->virtualGeometryStreamer)
+                                    virtualGeometryStreamerByMesh_.emplace(
+                                        handle.index(), source->virtualGeometryStreamer);
+                                pending = VirtualGeometryGpuBuffers{};
                                 indexed = true;
                             }
                             else
@@ -708,6 +857,7 @@ Halcyon::Result<void> VulkanSceneResources::uploadAsset(
                     catch (...)
                     {
                         virtualGeometryByMesh_.erase(handle.index());
+                        virtualGeometryStreamerByMesh_.erase(handle.index());
                     }
                     if (!indexed)
                     {
@@ -878,6 +1028,7 @@ Halcyon::Result<void> VulkanSceneResources::releaseAsset(
     for (const Halcyon::Renderer::Resources::MeshHandle handle : imported.meshes)
     {
         virtualGeometryByMesh_.erase(handle.index());
+        virtualGeometryStreamerByMesh_.erase(handle.index());
         const auto virtualGpu = virtualGeometryGpuByMesh_.find(handle.index());
         if (virtualGpu != virtualGeometryGpuByMesh_.end())
         {
@@ -1297,6 +1448,7 @@ void VulkanSceneResources::cleanup() noexcept
     meshDrawRows_.clear();
     virtualGeometryGpuByMesh_.clear();
     virtualGeometryByMesh_.clear();
+    virtualGeometryStreamerByMesh_.clear();
     for (auto& [index, meshResource] : meshes_)
     {
         (void)index;

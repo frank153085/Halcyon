@@ -14,7 +14,7 @@ $output = [System.IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
 $framesToRun = [Math]::Max(2100, $Frames)
 $cache = Join-Path $root "assets/models/lucy/lucy.ply.halcyon.vgcache"
 if (-not (Test-Path -LiteralPath $cache)) {
-    throw "Lucy v4 cache is missing: $cache. Run HalcyonCooker first."
+    throw "Lucy v5 cache is missing: $cache. Run HalcyonCooker first."
 }
 if (-not $SkipRuns -and -not (Test-Path -LiteralPath $Exe)) {
     throw "M6 acceptance executable not found: $Exe"

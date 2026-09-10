@@ -2,6 +2,8 @@
 
 #include "../Scene/SceneDatabase.h"
 #include "../Scene/VirtualGeometry.h"
+#include "../Scene/VirtualGeometryPages.h"
+#include "../Scene/VirtualGeometryStreamer.h"
 #include "../Scene/GpuScene.h"
 #include "Core/Result.h"
 #include "GpuResourceManager.h"
@@ -43,6 +45,8 @@ public:
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
     [[nodiscard]] Halcyon::Result<void> releaseAsset(
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
+    [[nodiscard]] Halcyon::Result<void> serviceVirtualGeometryStreaming(
+        std::uint64_t frameIndex);
     void cleanup() noexcept;
 
     [[nodiscard]] const MeshResource* mesh(std::uint32_t index) const noexcept;
@@ -84,6 +88,21 @@ public:
             return nullptr;
         return virtualGeometry(denseMeshStable_[denseIndex]);
     }
+    [[nodiscard]] Halcyon::Renderer::Scene::VirtualGeometryStreamer* virtualGeometryStreamer(
+        std::uint32_t meshIndex) const noexcept
+    {
+        const auto found = virtualGeometryStreamerByMesh_.find(meshIndex);
+        return found == virtualGeometryStreamerByMesh_.end() ? nullptr : found->second.get();
+    }
+    struct VirtualGeometryGpuPageTableEntry
+    {
+        std::uint32_t physicalPage = 0u;
+        std::uint32_t generation = 0u;
+        std::uint32_t flags = 0u;
+        std::uint32_t lastRequestedFrame = 0u;
+    };
+    static_assert(sizeof(VirtualGeometryGpuPageTableEntry) == 16u);
+
     struct VirtualGeometryGpuBuffers
     {
         BufferAllocation vertices{};
@@ -101,6 +120,15 @@ public:
         BufferAllocation meshletDagNodes{};
         BufferAllocation clusterAdjacencyOffsets{};
         BufferAllocation clusterAdjacencyIndices{};
+        BufferAllocation pageTable{};
+        BufferAllocation geometryPagePool{};
+        BufferAllocation nodePageRanges{};
+        BufferAllocation pageDependencies{};
+        std::uint32_t virtualPageCount = 0u;
+        std::uint32_t virtualPageSize = 0u;
+        std::vector<std::uint32_t> virtualToPhysical;
+        std::vector<std::uint32_t> physicalToVirtual;
+        std::vector<VirtualGeometryGpuPageTableEntry> pageTableCpu;
     };
     struct alignas(16) VirtualGeometryGpuMeshlet
     {
@@ -139,6 +167,8 @@ public:
     };
     static_assert(sizeof(VirtualGeometryGpuCluster) == 64);
     static_assert(sizeof(VirtualGeometryGpuDagNode) == 64);
+    static constexpr std::uint32_t VirtualGeometryPageResident = 1u << 0u;
+    static constexpr std::uint32_t VirtualGeometryPagePinned = 1u << 1u;
     [[nodiscard]] const VirtualGeometryGpuBuffers* virtualGeometryBuffers(
         std::uint32_t meshIndex) const noexcept
     {
@@ -215,7 +245,8 @@ private:
     [[nodiscard]] Halcyon::Result<std::string> retainTexture(
         const Halcyon::Renderer::Scene::SceneTexture& texture);
     [[nodiscard]] Halcyon::Result<VirtualGeometryGpuBuffers> uploadVirtualGeometry(
-        const Halcyon::Renderer::Scene::VirtualGeometryAsset& asset);
+        const Halcyon::Renderer::Scene::VirtualGeometryAsset& asset,
+        Halcyon::Renderer::Scene::VirtualGeometryStreamer* streamer);
     void destroyVirtualGeometry(VirtualGeometryGpuBuffers& buffers) noexcept;
     void releaseTexture(std::uint32_t index) noexcept;
     [[nodiscard]] const TextureResource* texture(std::uint32_t index) const noexcept;
@@ -233,6 +264,7 @@ private:
     VkDescriptorPool textureDescriptorPool_ = VK_NULL_HANDLE;
     std::unordered_map<std::uint32_t, MeshResource> meshes_;
     std::unordered_map<std::uint32_t, std::shared_ptr<const Halcyon::Renderer::Scene::VirtualGeometryAsset>> virtualGeometryByMesh_;
+    std::unordered_map<std::uint32_t, std::shared_ptr<Halcyon::Renderer::Scene::VirtualGeometryStreamer>> virtualGeometryStreamerByMesh_;
     std::unordered_map<std::uint32_t, VirtualGeometryGpuBuffers> virtualGeometryGpuByMesh_;
     BufferAllocation gpuDrivenVertices_{};
     BufferAllocation gpuDrivenIndices_{};

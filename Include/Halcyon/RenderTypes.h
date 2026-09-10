@@ -67,6 +67,8 @@ struct FrameStats
     std::uint32_t virtualDagNodeCount = 0;
     std::uint32_t virtualSelectedNodeCount = 0;
     std::uint32_t virtualLodSwitchCount = 0;
+    std::uint32_t virtualPageRequestCount = 0;
+    std::uint32_t virtualPageRequestOverflowCount = 0;
     bool meshShaderActive = false;
     std::string meshShaderFallbackReason;
     // Number of malformed non-background visibility records rejected during

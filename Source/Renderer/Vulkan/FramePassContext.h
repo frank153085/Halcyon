@@ -111,6 +111,8 @@ struct FramePassContext
     Graph::BufferHandle selectedLodNodes{};
     Graph::BufferHandle selectedLodCount{};
     Graph::BufferHandle lodBalanceDepth{};
+    Graph::BufferHandle virtualPageRequests{};
+    Graph::BufferHandle virtualPageRequestCount{};
     Graph::BufferHandle meshletIndirect{};
     Graph::BufferHandle meshletIndirectCount{};
     Graph::BufferHandle meshletMeshIndirect{};

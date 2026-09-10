@@ -14,7 +14,7 @@ namespace
 void usage()
 {
     std::cout << "HalcyonCooker --input <scene.gltf|scene.glb|scene.ply> --output <cache.halcyon.vgcache>\n"
-                 "              [--lod-count 1..3] [--max-vertices N] [--max-triangles N]\n";
+                 "              [--lod-count 1..4] [--max-vertices N] [--max-triangles N]\n";
 }
 }
 
@@ -38,7 +38,7 @@ int main(int argc, char** argv)
         catch (...) { std::cerr << "Invalid value for " << argument << '\n'; return 2; }
         std::cerr << "Unknown or incomplete option: " << argument << '\n'; usage(); return 2;
     }
-    if (input.empty() || output.empty() || lodCount == 0 || lodCount > 3) { usage(); return 2; }
+    if (input.empty() || output.empty() || lodCount == 0 || lodCount > options.build.lodRatios.size()) { usage(); return 2; }
     for (std::size_t i = lodCount; i < options.build.lodRatios.size(); ++i) options.build.lodRatios[i] = 0.0f;
     std::cout << "Hashing source...\n" << std::flush;
     const auto hash = sha256File(input); if (!hash) { std::cerr << hash.error().describe() << '\n'; return 1; }
@@ -46,7 +46,7 @@ int main(int argc, char** argv)
     const auto source = loadGeometrySource(input); if (!source) { std::cerr << source.error().describe() << '\n'; return 1; }
     std::cout << "Building deterministic clusters and LOD DAG...\n" << std::flush;
     const auto geometry = buildVirtualGeometry(source.value(), options.build); if (!geometry) { std::cerr << geometry.error().describe() << '\n'; return 1; }
-    std::cout << "Writing validated v4 cache...\n" << std::flush;
+    std::cout << "Writing validated v5 paged cache...\n" << std::flush;
     const auto result = writeVirtualGeometryCache(output, geometry.value(), hash.value(), options); if (!result) { std::cerr << result.error().describe() << '\n'; return 1; }
     std::cout << "Cooked " << geometry.value().triangleCount() << " triangles into " << output.string() << " (" << geometry.value().meshlets.size() << " meshlets)\n";
     return 0;

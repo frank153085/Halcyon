@@ -57,6 +57,8 @@ public:
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> selectedLodNodes;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> selectedLodCount;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> lodBalanceDepth;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualPageRequests;
+        Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> virtualPageRequestCount;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirect;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletIndirectCount;
         Halcyon::Renderer::Graph::FrameGraphId<Halcyon::Renderer::Graph::FrameGraphBuffer> meshletMeshIndirect;

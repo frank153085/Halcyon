@@ -112,6 +112,10 @@ add_library(HalcyonAssetPipeline STATIC
     Source/Renderer/Scene/VirtualGeometry.h
     Source/Renderer/Scene/VirtualGeometryCache.cpp
     Source/Renderer/Scene/VirtualGeometryCache.h
+    Source/Renderer/Scene/VirtualGeometryPages.cpp
+    Source/Renderer/Scene/VirtualGeometryPages.h
+    Source/Renderer/Scene/VirtualGeometryStreamer.cpp
+    Source/Renderer/Scene/VirtualGeometryStreamer.h
     Source/Renderer/Scene/Sha256.cpp
     Source/Renderer/Scene/Sha256.h)
 target_include_directories(HalcyonAssetPipeline PUBLIC

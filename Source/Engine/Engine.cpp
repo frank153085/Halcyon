@@ -77,6 +77,8 @@ namespace
     result.virtualDagNodeCount = source.virtualDagNodeCount;
     result.virtualSelectedNodeCount = source.virtualSelectedNodeCount;
     result.virtualLodSwitchCount = source.virtualLodSwitchCount;
+    result.virtualPageRequestCount = source.virtualPageRequestCount;
+    result.virtualPageRequestOverflowCount = source.virtualPageRequestOverflowCount;
     result.meshShaderActive = source.meshShaderActive;
     result.meshShaderFallbackReason = source.meshShaderFallbackReason;
     result.virtualInvalidVisibilityCount = source.virtualInvalidVisibilityCount;

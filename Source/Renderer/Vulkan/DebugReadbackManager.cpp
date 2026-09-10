@@ -20,6 +20,13 @@ void DebugReadbackManager::cleanup(GpuAllocator& allocator) noexcept
         allocator.destroy(readback);
     virtualGeometryReadbacks.clear();
     virtualGeometryValid.clear();
+    for (auto& readback : virtualPageRequestReadbacks)
+        allocator.destroy(readback);
+    virtualPageRequestReadbacks.clear();
+    virtualPageRequestValid.clear();
+    virtualPageRequestFrameIndices.clear();
+    virtualPageRequestPageCounts.clear();
+    virtualPageRequestMeshIds.clear();
     gpuReferenceVisible.clear();
     for (auto& readback : instanceIdReadbacks)
     {
