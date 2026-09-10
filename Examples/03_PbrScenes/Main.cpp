@@ -178,7 +178,13 @@ int main(int argc, char** argv)
                 return Halcyon::Result<void>::failure(Halcyon::MakeError(
                     Halcyon::ErrorCode::InvalidState, "Lucy transform is unavailable", "Example"));
             const glm::vec3 center{690.7556f, -121.5314f, 192.6266f};
-            transform->localTransform = glm::scale(glm::mat4{1.0f}, glm::vec3{0.0015f}) *
+            // The Stanford Lucy PLY is Z-up and faces +Y. Convert it to the
+            // engine's Y-up basis, then face the fixed +Z acceptance camera.
+            transform->localTransform = glm::rotate(glm::mat4{1.0f},
+                glm::pi<float>(), glm::vec3{0.0f, 1.0f, 0.0f}) *
+                glm::rotate(glm::mat4{1.0f}, -glm::half_pi<float>(),
+                    glm::vec3{1.0f, 0.0f, 0.0f}) *
+                glm::scale(glm::mat4{1.0f}, glm::vec3{0.0015f}) *
                 glm::translate(glm::mat4{1.0f}, -center);
             transform->dirty = true;
             return Halcyon::Result<void>::success();

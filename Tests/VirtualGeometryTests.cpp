@@ -5,6 +5,7 @@
 #include "Renderer/Scene/VirtualGeometryStreamer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -29,6 +30,15 @@ void expect(bool condition, const char* expression, int line)
     if (!condition) { ++failures; std::cerr << "FAILED line " << line << ": " << expression << '\n'; }
 }
 #define EXPECT(expression) expect(static_cast<bool>(expression), #expression, __LINE__)
+
+std::filesystem::path uniqueTempPath(const char* stem, const char* extension)
+{
+    static std::atomic<std::uint64_t> sequence{0u};
+    const auto ticks = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    return std::filesystem::temp_directory_path() /
+        (std::string(stem) + "-" + std::to_string(ticks) + "-" +
+            std::to_string(sequence.fetch_add(1u, std::memory_order_relaxed)) + extension);
+}
 
 StaticScene makeScene()
 {
@@ -420,8 +430,8 @@ void cacheTests()
     EXPECT(built);
     if (!built) return;
     const auto hash = sha256(std::as_bytes(std::span("virtual-geometry-test", 22)));
-    const auto path = std::filesystem::temp_directory_path() / "halcyon-vg-test.halcyon.vgcache";
-    const auto secondPath = std::filesystem::temp_directory_path() / "halcyon-vg-test-2.halcyon.vgcache";
+    const auto path = uniqueTempPath("halcyon-vg-test", ".halcyon.vgcache");
+    const auto secondPath = uniqueTempPath("halcyon-vg-test-2", ".halcyon.vgcache");
     std::error_code error; std::filesystem::remove(path, error);
     EXPECT(writeVirtualGeometryCache(path, built.value(), hash));
     EXPECT(writeVirtualGeometryCache(secondPath, built.value(), hash));
@@ -576,11 +586,36 @@ void cacheTests()
     std::filesystem::remove(path, error); std::filesystem::remove(secondPath, error);
 }
 
+void qualityControlTests()
+{
+    VirtualGeometryQualityState state{};
+    updateVirtualGeometryQuality(state, 20.0f, 0.0f);
+    EXPECT(std::abs(state.gpuTimeEmaMs - 20.0f) < 0.0001f);
+    EXPECT(std::abs(state.qualityScale - 1.25f) < 0.0001f);
+
+    VirtualGeometryQualityState recovery{};
+    recovery.qualityScale = 2.0f;
+    recovery.gpuTimeEmaMs = 10.0f;
+    recovery.gpuSampleCount = 8u;
+    for (std::uint32_t frame = 0u; frame < 59u; ++frame)
+        updateVirtualGeometryQuality(recovery, 10.0f, 0.0f);
+    EXPECT(std::abs(recovery.qualityScale - 2.0f) < 0.0001f);
+    updateVirtualGeometryQuality(recovery, 10.0f, 0.0f);
+    EXPECT(std::abs(recovery.qualityScale - 1.8f) < 0.0001f);
+
+    VirtualGeometryQualityState pressure{};
+    updateVirtualGeometryQuality(pressure,
+        std::numeric_limits<float>::quiet_NaN(), 0.76f);
+    EXPECT(std::abs(pressure.qualityScale - 1.25f) < 0.0001f);
+    for (std::uint32_t frame = 0u; frame < 20u; ++frame)
+        updateVirtualGeometryQuality(pressure, 100.0f, 1.0f);
+    EXPECT(std::abs(pressure.qualityScale - 8.0f) < 0.0001f);
+}
+
 void streamerTests()
 {
     using namespace std::chrono_literals;
-    const auto path = std::filesystem::temp_directory_path() /
-        "halcyon-vg-streamer-test.cache";
+    const auto path = uniqueTempPath("halcyon-vg-streamer-test", ".cache");
     std::error_code error;
     std::filesystem::remove(path, error);
     const auto built = buildVirtualGeometry(makeGridScene(20u));
@@ -717,11 +752,26 @@ void streamerTests()
         EXPECT(streamer.value()->pageState(nonRootPage) ==
             VirtualGeometryPageState::Unloaded);
     }
+    EXPECT(streamer.value()->requestPage(nonRootPage, 5.0f, 11u));
+    EXPECT(streamer.value()->waitForPageState(
+        nonRootPage, VirtualGeometryPageState::ReadyCPU, 5s));
+    auto abandoned = streamer.value()->takeReadyPages();
+    EXPECT(abandoned.size() == 1u);
+    if (!abandoned.empty())
+    {
+        EXPECT(streamer.value()->pageState(nonRootPage) ==
+            VirtualGeometryPageState::Uploading);
+        EXPECT(streamer.value()->abandonUpload(
+            abandoned.front().pageIndex, abandoned.front().generation));
+        EXPECT(streamer.value()->pageState(nonRootPage) ==
+            VirtualGeometryPageState::Unloaded);
+        EXPECT(streamer.value()->requestPage(nonRootPage, 4.0f, 12u));
+    }
     EXPECT(streamer.value()->beginEviction(
         std::numeric_limits<std::uint64_t>::max(), 100u) ==
         std::numeric_limits<std::uint32_t>::max());
     const auto stats = streamer.value()->stats();
-    EXPECT(stats.requestedPages == 1u);
+    EXPECT(stats.requestedPages == 3u);
     EXPECT(stats.loadedPages >= metadata->rootPageIndices.size() + 1u);
     EXPECT(stats.evictedPages == 1u);
     std::filesystem::remove(path, error);
@@ -729,7 +779,7 @@ void streamerTests()
 
 void plyTests()
 {
-    const auto path = std::filesystem::temp_directory_path() / "halcyon-vg-test.ply";
+    const auto path = uniqueTempPath("halcyon-vg-test", ".ply");
     { std::ofstream stream(path, std::ios::binary | std::ios::trunc);
       stream << "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\n"
                 "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
@@ -746,7 +796,7 @@ void plyTests()
     // Position and normal properties are requested as separate tinyply
     // buffers. Keep an explicit-normal fixture here so an interleaved
     // property regression cannot silently pass the generated-normal test.
-    const auto normalPath = std::filesystem::temp_directory_path() / "halcyon-vg-test-normals.ply";
+    const auto normalPath = uniqueTempPath("halcyon-vg-test-normals", ".ply");
     { std::ofstream stream(normalPath, std::ios::binary | std::ios::trunc);
       stream << "ply\nformat ascii 1.0\nelement vertex 3\n"
                 "property float x\nproperty float y\nproperty float z\n"
@@ -770,6 +820,7 @@ int main()
 {
     buildTests();
     cacheTests();
+    qualityControlTests();
     streamerTests();
     plyTests();
     if (failures != 0) { std::cerr << failures << " Virtual Geometry test(s) failed\n"; return 1; }

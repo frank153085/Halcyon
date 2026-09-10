@@ -69,6 +69,11 @@ struct FrameStats
     std::uint32_t virtualLodSwitchCount = 0;
     std::uint32_t virtualPageRequestCount = 0;
     std::uint32_t virtualPageRequestOverflowCount = 0;
+    float virtualGeometryQualityScale = 1.0f;
+    float virtualGeometryStreamingPressure = 0.0f;
+    std::uint32_t virtualGeometryResidentPages = 0u;
+    std::uint64_t virtualGeometryEvictedPages = 0u;
+    std::uint64_t virtualGeometryUploadedBytes = 0u;
     bool meshShaderActive = false;
     std::string meshShaderFallbackReason;
     // Number of malformed non-background visibility records rejected during

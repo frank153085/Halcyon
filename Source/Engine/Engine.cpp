@@ -79,6 +79,11 @@ namespace
     result.virtualLodSwitchCount = source.virtualLodSwitchCount;
     result.virtualPageRequestCount = source.virtualPageRequestCount;
     result.virtualPageRequestOverflowCount = source.virtualPageRequestOverflowCount;
+    result.virtualGeometryQualityScale = source.virtualGeometryQualityScale;
+    result.virtualGeometryStreamingPressure = source.virtualGeometryStreamingPressure;
+    result.virtualGeometryResidentPages = source.virtualGeometryResidentPages;
+    result.virtualGeometryEvictedPages = source.virtualGeometryEvictedPages;
+    result.virtualGeometryUploadedBytes = source.virtualGeometryUploadedBytes;
     result.meshShaderActive = source.meshShaderActive;
     result.meshShaderFallbackReason = source.meshShaderFallbackReason;
     result.virtualInvalidVisibilityCount = source.virtualInvalidVisibilityCount;

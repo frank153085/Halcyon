@@ -1,11 +1,12 @@
 #include "virtual_geometry_ids.hlsli"
 
 [[vk::binding(0, 0)]] StructuredBuffer<MeshletMeta> meshlets;
-[[vk::binding(1, 0)]] StructuredBuffer<uint> meshletVertices;
-[[vk::binding(2, 0)]] StructuredBuffer<Vertex> vertices;
-[[vk::binding(3, 0)]] StructuredBuffer<uint> indices;
+[[vk::binding(1, 0)]] ByteAddressBuffer geometryPages;
+[[vk::binding(2, 0)]] StructuredBuffer<PageTableEntry> geometryPageTable;
+[[vk::binding(3, 0)]] StructuredBuffer<GeometryPageInfo> geometryPageInfoBuffer;
 [[vk::binding(4, 0)]] StructuredBuffer<TransformRow> transforms;
 [[vk::binding(5, 0)]] StructuredBuffer<MeshMaterialRow> meshMaterials;
+#include "virtual_geometry_pages.hlsli"
 struct VisibilityConstants
 {
     float4x4 viewProjection;
@@ -27,26 +28,31 @@ VSOut main(uint vertexId : SV_VertexID, uint drawToken : SV_InstanceID)
     o.visibility = 0u;
     const uint meshletId = vgDrawTokenMeshlet(drawToken);
     const uint instanceIndex = vgDrawTokenInstance(drawToken);
+    const GeometryPageInfo pageInfo = geometryPageInfoBuffer[0];
     if (meshletId >= constants.meshletCount || instanceIndex >= constants.instanceCount ||
-        vertexId >= constants.vertexCount)
+        vertexId >= pageInfo.indexCount)
         return o;
     MeshletMeta m = meshlets[meshletId];
     if (m.vertexCount == 0u || m.vertexCount > VG_MESHLET_MAX_VERTICES ||
         m.triangleCount == 0u || m.triangleCount > VG_MESHLET_MAX_TRIANGLES ||
         m.indexCount != m.triangleCount * 3u ||
-        m.vertexOffset >= constants.meshletVertexTableCount ||
-        m.vertexCount > constants.meshletVertexTableCount - m.vertexOffset)
+        m.vertexOffset >= pageInfo.meshletVertexCount ||
+        m.vertexCount > pageInfo.meshletVertexCount - m.vertexOffset)
         return o;
     // Validate the first meshlet-local vertex through the metadata stream as
     // well. The indexed draw still supplies the global vertex ID; this read
     // keeps the meshlet table and visibility ABI coupled in the shader.
-    if (meshletVertices[m.vertexOffset] >= constants.vertexCount)
+    uint firstMeshletVertex = 0u;
+    if (!vgLoadMeshletVertex(m.vertexOffset, firstMeshletVertex) ||
+        firstMeshletVertex >= pageInfo.vertexCount)
         return o;
-    // Indexed draws expose the fetched index as SV_VertexID.  firstIndex is
-    // already applied by the fixed-function input assembler, so indexing the
-    // virtual index table a second time would address unrelated vertices.
-    uint vertexIndex = vertexId;
-    Vertex v = vertices[vertexIndex];
+    // The bound index buffer is a shared 0..371 sequence. vertexOffset carries
+    // the meshlet's virtual index-stream offset, so SV_VertexID is translated
+    // through the resident page table here.
+    uint vertexIndex = 0u;
+    Vertex v;
+    if (!vgLoadIndex(vertexId, vertexIndex) || !vgLoadVertex(vertexIndex, v))
+        return o;
     const float4x4 model = transforms[instanceIndex].model;
     o.position = mul(constants.viewProjection, mul(model, float4(v.position, 1.0)));
     // R32 visibility ABI: zero is the clear/background value. Instance is

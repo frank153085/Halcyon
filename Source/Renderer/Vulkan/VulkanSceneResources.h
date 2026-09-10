@@ -47,6 +47,13 @@ public:
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
     [[nodiscard]] Halcyon::Result<void> serviceVirtualGeometryStreaming(
         std::uint64_t frameIndex);
+    [[nodiscard]] float virtualGeometryStreamingPressure() const;
+    [[nodiscard]] Halcyon::Renderer::Scene::VirtualGeometryStreamingStats
+        virtualGeometryStreamingStats() const;
+    [[nodiscard]] std::uint64_t virtualGeometryUploadedBytes() const noexcept
+    {
+        return virtualGeometryUploadedBytes_;
+    }
     void cleanup() noexcept;
 
     [[nodiscard]] const MeshResource* mesh(std::uint32_t index) const noexcept;
@@ -103,6 +110,23 @@ public:
     };
     static_assert(sizeof(VirtualGeometryGpuPageTableEntry) == 16u);
 
+    struct VirtualGeometryGpuPageInfo
+    {
+        std::uint32_t pageSize = 0u;
+        std::uint32_t pageCount = 0u;
+        std::uint32_t physicalPageCount = 0u;
+        std::uint32_t vertexCount = 0u;
+        std::uint32_t meshletVertexCount = 0u;
+        std::uint32_t triangleByteCount = 0u;
+        std::uint32_t indexCount = 0u;
+        std::uint32_t verticesFirstPage = 0u;
+        std::uint32_t meshletVerticesFirstPage = 0u;
+        std::uint32_t meshletTrianglesFirstPage = 0u;
+        std::uint32_t indicesFirstPage = 0u;
+        std::uint32_t padding = 0u;
+    };
+    static_assert(sizeof(VirtualGeometryGpuPageInfo) == 48u);
+
     struct VirtualGeometryGpuBuffers
     {
         BufferAllocation vertices{};
@@ -122,6 +146,8 @@ public:
         BufferAllocation clusterAdjacencyIndices{};
         BufferAllocation pageTable{};
         BufferAllocation geometryPagePool{};
+        BufferAllocation pageInfo{};
+        BufferAllocation rasterIndices{};
         BufferAllocation nodePageRanges{};
         BufferAllocation pageDependencies{};
         std::uint32_t virtualPageCount = 0u;
@@ -266,6 +292,7 @@ private:
     std::unordered_map<std::uint32_t, std::shared_ptr<const Halcyon::Renderer::Scene::VirtualGeometryAsset>> virtualGeometryByMesh_;
     std::unordered_map<std::uint32_t, std::shared_ptr<Halcyon::Renderer::Scene::VirtualGeometryStreamer>> virtualGeometryStreamerByMesh_;
     std::unordered_map<std::uint32_t, VirtualGeometryGpuBuffers> virtualGeometryGpuByMesh_;
+    std::uint64_t virtualGeometryUploadedBytes_ = 0u;
     BufferAllocation gpuDrivenVertices_{};
     BufferAllocation gpuDrivenIndices_{};
     BufferAllocation meshDraws_{};

@@ -58,6 +58,7 @@ struct FramePassContext
     std::uint32_t imageIndex = 0;
     std::uint32_t virtualIndirectDrawCapacity = 0;
     std::uint32_t virtualMeshWorkGroupCapacity = 0;
+    float virtualGeometryQualityScale = 1.0f;
 
     bool gpuDrivenBindless = false;
     bool timestampsEnabled = false;

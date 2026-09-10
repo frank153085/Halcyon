@@ -390,6 +390,7 @@ struct Renderer::Impl
     bool virtualHiZInitialized = false;
     bool virtualHiZImageInitialized = false;
     bool virtualVisibilityValid = false;
+    Halcyon::Renderer::Scene::VirtualGeometryQualityState virtualGeometryQuality{};
     bool hasRenderedFrame = false;
     std::uint64_t lastFrameIndex = 0;
     std::uint64_t renderSerial = 0;
@@ -553,6 +554,7 @@ struct Renderer::Impl
         virtualHiZInitialized = false;
         virtualHiZImageInitialized = false;
         virtualVisibilityValid = false;
+        virtualGeometryQuality = {};
         virtualGeometryActive = false;
         meshShaderFallbackReason.clear();
         activeRenderPath = Halcyon::Renderer::Scene::RenderPathMode::DeferredIndexed;
@@ -1366,9 +1368,9 @@ struct Renderer::Impl
                 DescriptorBindingDesc{0, meshBindings[0], sizeof(std::uint32_t)},
                 DescriptorBindingDesc{0, meshBindings[1], sizeof(std::uint32_t)},
                 DescriptorBindingDesc{0, meshBindings[2], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
-                DescriptorBindingDesc{0, meshBindings[3], sizeof(std::uint32_t)},
-                DescriptorBindingDesc{0, meshBindings[4]},
-                DescriptorBindingDesc{0, meshBindings[5], sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)},
+                DescriptorBindingDesc{0, meshBindings[3]},
+                DescriptorBindingDesc{0, meshBindings[4], sizeof(VulkanSceneResources::VirtualGeometryGpuPageTableEntry)},
+                DescriptorBindingDesc{0, meshBindings[5], sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo)},
                 DescriptorBindingDesc{0, meshBindings[6], sizeof(Halcyon::Renderer::Scene::TransformRow)},
                 DescriptorBindingDesc{0, meshBindings[7], sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)}};
             GraphicsPipelineDesc meshDesc{};
@@ -1399,9 +1401,9 @@ struct Renderer::Impl
         if (!result) return result;
         const std::array<DescriptorBindingDesc, 6> visibilityAbi = {
             DescriptorBindingDesc{0, visibilityBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
-            DescriptorBindingDesc{0, visibilityBindings[1], sizeof(std::uint32_t)},
-            DescriptorBindingDesc{0, visibilityBindings[2], sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)},
-            DescriptorBindingDesc{0, visibilityBindings[3], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, visibilityBindings[1]},
+            DescriptorBindingDesc{0, visibilityBindings[2], sizeof(VulkanSceneResources::VirtualGeometryGpuPageTableEntry)},
+            DescriptorBindingDesc{0, visibilityBindings[3], sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo)},
             DescriptorBindingDesc{0, visibilityBindings[4], sizeof(Halcyon::Renderer::Scene::TransformRow)},
             DescriptorBindingDesc{0, visibilityBindings[5], sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)}};
         GraphicsPipelineDesc visibilityDesc{};
@@ -1429,23 +1431,27 @@ struct Renderer::Impl
             if (!result) return result;
         }
 
-        const std::array<VkDescriptorSetLayoutBinding, 7> classifyBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 9> classifyBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(classifyBindings, materialClassifyLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 7> classifyAbi = {
+        const std::array<DescriptorBindingDesc, 9> classifyAbi = {
             DescriptorBindingDesc{0, classifyBindings[0]}, DescriptorBindingDesc{0, classifyBindings[1]},
             DescriptorBindingDesc{0, classifyBindings[2], sizeof(Halcyon::Renderer::Scene::MeshMaterialRow)},
             DescriptorBindingDesc{0, classifyBindings[3], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, classifyBindings[4], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, classifyBindings[5], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
-            DescriptorBindingDesc{0, classifyBindings[6]}};
+            DescriptorBindingDesc{0, classifyBindings[6]},
+            DescriptorBindingDesc{0, classifyBindings[7], sizeof(VulkanSceneResources::VirtualGeometryGpuPageTableEntry)},
+            DescriptorBindingDesc{0, classifyBindings[8], sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo)}};
         ComputePipelineDesc classifyDesc{};
         classifyDesc.shader = "material_classify.comp.spv";
         classifyDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&materialClassifyLayout, 1};
@@ -1455,7 +1461,7 @@ struct Renderer::Impl
         result = materialClassifyPipeline.createCompute(device, classifyDesc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 16> shadingBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 17> shadingBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -1471,22 +1477,24 @@ struct Renderer::Impl
             VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(shadingBindings, computeShadingLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 16> shadingAbi = {
+        const std::array<DescriptorBindingDesc, 17> shadingAbi = {
             DescriptorBindingDesc{0, shadingBindings[0]}, DescriptorBindingDesc{0, shadingBindings[1]},
             DescriptorBindingDesc{0, shadingBindings[2]}, DescriptorBindingDesc{0, shadingBindings[3], sizeof(std::uint32_t)},
             DescriptorBindingDesc{0, shadingBindings[4]},
             DescriptorBindingDesc{0, shadingBindings[5], sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)},
-            DescriptorBindingDesc{0, shadingBindings[6], sizeof(std::uint32_t)},
-            DescriptorBindingDesc{0, shadingBindings[7], sizeof(Halcyon::Renderer::Scene::StaticSceneVertex)},
+            DescriptorBindingDesc{0, shadingBindings[6]},
+            DescriptorBindingDesc{0, shadingBindings[7], sizeof(VulkanSceneResources::VirtualGeometryGpuPageTableEntry)},
             DescriptorBindingDesc{0, shadingBindings[8]}, DescriptorBindingDesc{0, shadingBindings[9]},
             DescriptorBindingDesc{0, shadingBindings[10]}, DescriptorBindingDesc{0, shadingBindings[11]},
             DescriptorBindingDesc{0, shadingBindings[12], sizeof(Halcyon::Renderer::Scene::MaterialGpuData)},
             DescriptorBindingDesc{0, shadingBindings[13], sizeof(Halcyon::Renderer::Scene::LightData)},
             DescriptorBindingDesc{0, shadingBindings[14], sizeof(Halcyon::Renderer::Scene::TransformRow)},
-            DescriptorBindingDesc{0, shadingBindings[15]}};
+            DescriptorBindingDesc{0, shadingBindings[15]},
+            DescriptorBindingDesc{0, shadingBindings[16], sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo)}};
         ComputePipelineDesc shadingDesc{};
         shadingDesc.shader = "compute_shading.comp.spv";
         shadingDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&computeShadingLayout, 1};
@@ -1700,6 +1708,7 @@ struct Renderer::Impl
     {
         HALCYON_PROFILE_SCOPE("Renderer::render");
         FrameStats stats{};
+        stats.virtualGeometryQualityScale = virtualGeometryQuality.qualityScale;
         stats.quality.rayQueryEnabled = rayQueryEnabled;
         stats.quality.exposure = config.exposure;
         stats.quality.taaEnabled = config.enableTaa;
@@ -1979,6 +1988,42 @@ struct Renderer::Impl
             }
             virtualPageRequestValid[currentFrame] = false;
         }
+        const std::uint64_t requestedPages =
+            static_cast<std::uint64_t>(stats.virtualPageRequestCount) +
+            stats.virtualPageRequestOverflowCount;
+        const float requestPressure = static_cast<float>(requestedPages) /
+            static_cast<float>(DebugReadbackManager::VirtualPageRequestCapacity);
+        Halcyon::Renderer::Scene::updateVirtualGeometryQuality(
+            virtualGeometryQuality, static_cast<float>(stats.gpuFrameMs),
+            std::max(requestPressure,
+                sceneResources.virtualGeometryStreamingPressure()));
+        stats.virtualGeometryQualityScale = virtualGeometryQuality.qualityScale;
+        stats.virtualGeometryStreamingPressure = sceneResources.virtualGeometryStreamingPressure();
+        auto streamingStats = sceneResources.virtualGeometryStreamingStats();
+        stats.virtualGeometryResidentPages = streamingStats.residentPages;
+        stats.virtualGeometryEvictedPages = streamingStats.evictedPages;
+        stats.virtualGeometryUploadedBytes = sceneResources.virtualGeometryUploadedBytes();
+        const auto streamingResult =
+            sceneResources.serviceVirtualGeometryStreaming(packet.frameIndex);
+        if (!streamingResult)
+        {
+            setError(streamingResult.error().describe());
+            if (streamingResult.error().code == Halcyon::ErrorCode::DeviceLost)
+            {
+                deviceLost = true;
+                initialized = false;
+                fatalError = true;
+                stats.deviceLost = true;
+                stats.fatalError = true;
+                stats.cpuFrameMs = elapsedMilliseconds(begin);
+                return stats;
+            }
+        }
+        stats.virtualGeometryStreamingPressure = sceneResources.virtualGeometryStreamingPressure();
+        streamingStats = sceneResources.virtualGeometryStreamingStats();
+        stats.virtualGeometryResidentPages = streamingStats.residentPages;
+        stats.virtualGeometryEvictedPages = streamingStats.evictedPages;
+        stats.virtualGeometryUploadedBytes = sceneResources.virtualGeometryUploadedBytes();
         if (frame.submitted && config.enableGpuDrivenScene &&
             currentFrame < gpuVisibilityReadbacks.size() &&
             currentFrame < gpuVisibilityValid.size() && gpuVisibilityValid[currentFrame])
@@ -2548,9 +2593,10 @@ VoidResult Renderer::Impl::recordFrame(
                         // indexed fallback path for correctness.
                         std::isfinite(determinant) && determinant > 1.0e-12f &&
                         gpu->meshlets.buffer != VK_NULL_HANDLE &&
-                        gpu->meshletVertices.buffer != VK_NULL_HANDLE &&
-                        gpu->vertices.buffer != VK_NULL_HANDLE &&
-                        gpu->indices.buffer != VK_NULL_HANDLE;
+                        gpu->geometryPagePool.buffer != VK_NULL_HANDLE &&
+                        gpu->pageTable.buffer != VK_NULL_HANDLE &&
+                        gpu->pageInfo.buffer != VK_NULL_HANDLE &&
+                        (meshShaderPath || gpu->rasterIndices.buffer != VK_NULL_HANDLE);
                 });
         if (!allVirtualAssets)
         {
@@ -2577,8 +2623,10 @@ VoidResult Renderer::Impl::recordFrame(
                         !sceneResources.virtualGeometryMaterialCompatible(instance.materialId))
                         fallbackReason = "Virtual Geometry material ABI is incompatible";
                     else if (gpu == nullptr || gpu->meshlets.buffer == VK_NULL_HANDLE ||
-                        gpu->meshletVertices.buffer == VK_NULL_HANDLE ||
-                        gpu->vertices.buffer == VK_NULL_HANDLE || gpu->indices.buffer == VK_NULL_HANDLE)
+                        gpu->geometryPagePool.buffer == VK_NULL_HANDLE ||
+                        gpu->pageTable.buffer == VK_NULL_HANDLE ||
+                        gpu->pageInfo.buffer == VK_NULL_HANDLE ||
+                        (!meshShaderPath && gpu->rasterIndices.buffer == VK_NULL_HANDLE))
                         fallbackReason = "Virtual Geometry GPU buffers are unavailable";
                     else
                     {
@@ -2695,6 +2743,7 @@ VoidResult Renderer::Impl::recordFrame(
         VulkanFrameResources::MaxVirtualGeometryMeshlets,
         physicalProperties.limits.maxDrawIndirectCount);
     ctx.virtualMeshWorkGroupCapacity = caps.maxMeshWorkGroupCountX;
+    ctx.virtualGeometryQualityScale = virtualGeometryQuality.qualityScale;
     // GpuDrivenIndexed is also selected by enableGpuDrivenScene while the
     // public renderPath remains DeferredIndexed. Keep the bindless ABI for
     // that established path; when GPU-driven rendering is disabled (including

@@ -26,8 +26,8 @@ struct Constants { uint meshletCount; uint commandCapacity; uint instanceCount; 
     DrawIndexedCommand command;
     command.indexCount = m.indexCount;
     command.instanceCount = 1;
-    command.firstIndex = m.indexOffset;
-    command.vertexOffset = 0;
+    command.firstIndex = 0u;
+    command.vertexOffset = int(m.indexOffset);
     // firstInstance carries the packed instance/meshlet token into the
     // visibility vertex shader through SV_InstanceID.
     command.firstInstance = token;

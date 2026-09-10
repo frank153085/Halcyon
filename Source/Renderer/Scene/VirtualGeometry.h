@@ -205,6 +205,14 @@ struct VirtualGeometryLodSelectionState
     std::uint32_t pendingFrames = 0;
 };
 
+struct VirtualGeometryQualityState
+{
+    float qualityScale = 1.0f;
+    float gpuTimeEmaMs = 0.0f;
+    std::uint32_t gpuSampleCount = 0u;
+    std::uint32_t underBudgetFrames = 0u;
+};
+
 struct VirtualGeometryPrimitive
 {
     std::uint32_t vertexOffset = 0;
@@ -286,6 +294,9 @@ struct VirtualGeometryBuildOptions
 [[nodiscard]] bool selectVirtualGeometryLod(
     const VirtualGeometryAsset& asset, VirtualGeometryLodSelectionState& state,
     float projectedError, const VirtualGeometryBuildOptions& options = {}) noexcept;
+
+void updateVirtualGeometryQuality(VirtualGeometryQualityState& state,
+    float gpuFrameMs, float queueOccupancy) noexcept;
 
 // Mirrors the GPU's monotonic adjacency pass. Each entry is a boolean refine
 // decision for the corresponding DAG node; only coarse nodes may be forced

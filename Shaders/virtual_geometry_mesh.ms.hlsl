@@ -3,11 +3,12 @@
 [[vk::binding(0, 0)]] StructuredBuffer<uint> visibleMeshlets;
 [[vk::binding(1, 0)]] StructuredBuffer<uint> visibleCount;
 [[vk::binding(2, 0)]] StructuredBuffer<MeshletMeta> meshlets;
-[[vk::binding(3, 0)]] StructuredBuffer<uint> meshletVertices;
-[[vk::binding(4, 0)]] ByteAddressBuffer meshletTriangles;
-[[vk::binding(5, 0)]] StructuredBuffer<Vertex> vertices;
+[[vk::binding(3, 0)]] ByteAddressBuffer geometryPages;
+[[vk::binding(4, 0)]] StructuredBuffer<PageTableEntry> geometryPageTable;
+[[vk::binding(5, 0)]] StructuredBuffer<GeometryPageInfo> geometryPageInfoBuffer;
 [[vk::binding(6, 0)]] StructuredBuffer<TransformRow> transforms;
 [[vk::binding(7, 0)]] StructuredBuffer<MeshMaterialRow> meshMaterials;
+#include "virtual_geometry_pages.hlsli"
 
 struct VisibilityConstants
 {
@@ -32,8 +33,9 @@ struct MeshPrimitive
 
 uint triangleByte(uint byteOffset)
 {
-    const uint word = meshletTriangles.Load(byteOffset & ~3u);
-    return (word >> ((byteOffset & 3u) * 8u)) & 0xffu;
+    uint value = 0u;
+    (void)vgLoadTriangleByte(byteOffset, value);
+    return value;
 }
 
 [outputtopology("triangle")]
@@ -64,10 +66,14 @@ void main(uint3 groupThreadId : SV_GroupThreadID,
     // meshlet uninitialized.
     for (uint vertexIndex = groupThreadId.x; vertexIndex < vertexCount; vertexIndex += 32u)
     {
-        const uint sourceIndex = meshletVertices[meshlet.vertexOffset + vertexIndex];
+        uint sourceIndex = 0u;
+        Vertex sourceVertex;
+        const bool validVertex = vgLoadMeshletVertex(
+            meshlet.vertexOffset + vertexIndex, sourceIndex) &&
+            vgLoadVertex(sourceIndex, sourceVertex);
         MeshVertex output;
-        output.position = sourceIndex < constants.vertexCount
-            ? mul(constants.viewProjection, mul(model, float4(vertices[sourceIndex].position, 1.0)))
+        output.position = validVertex
+            ? mul(constants.viewProjection, mul(model, float4(sourceVertex.position, 1.0)))
             : float4(0.0, 0.0, 0.0, 0.0);
         const uint materialClass = (meshMaterials[instanceIndex].flags &
             VG_VISIBILITY_INCOMPATIBLE_MATERIAL_FLAGS) == 0u

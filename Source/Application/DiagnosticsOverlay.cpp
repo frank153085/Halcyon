@@ -165,10 +165,18 @@ void DiagnosticsOverlay::beginFrame(
     ImGui::Text(
         "Device memory: %llu bytes", static_cast<unsigned long long>(stats.deviceMemoryBytes));
     ImGui::Text("Rendered: %s", stats.rendered ? "yes" : "no");
-    if (stats.renderPath == "VirtualGeometryIndexed")
+    if (stats.renderPath == "VirtualGeometryIndexed" ||
+        stats.renderPath == "VirtualGeometryMeshShader")
     {
         ImGui::Text("Virtual meshlets: %u | indirect commands: %u",
             stats.virtualVisibleMeshletCount, stats.virtualIndirectCommandCount);
+        ImGui::Text("Virtual quality scale: %.2f", stats.virtualGeometryQualityScale);
+        ImGui::Text("Virtual pages: %u resident | %.0f%% pressure | %llu evicted",
+            stats.virtualGeometryResidentPages,
+            static_cast<double>(stats.virtualGeometryStreamingPressure * 100.0f),
+            static_cast<unsigned long long>(stats.virtualGeometryEvictedPages));
+        ImGui::Text("Virtual uploaded: %llu bytes",
+            static_cast<unsigned long long>(stats.virtualGeometryUploadedBytes));
         ImGui::Text("Invalid visibility records: %u",
             stats.virtualInvalidVisibilityCount);
     }

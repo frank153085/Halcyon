@@ -219,7 +219,10 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                     static_cast<std::uint32_t>(asset->dagNodes.size())),
                 gpu->virtualPageCount, 0u,
                 static_cast<std::uint32_t>(ctx.packet->frameIndex));
-            frame.thresholds = glm::vec4(1.0f, 0.75f, 0.0f, 0.0f);
+            const float qualityScale = std::clamp(
+                ctx.virtualGeometryQualityScale, 1.0f, 8.0f);
+            frame.thresholds = glm::vec4(
+                1.0f * qualityScale, 0.75f * qualityScale, 0.0f, 0.0f);
             static_assert(sizeof(LodFrame) == 128);
             vkCmdBindPipeline(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE,
                 ctx.pipelines->lodSelectPipeline.computePipeline());
@@ -951,10 +954,11 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             const auto* gpu = instance == nullptr ? nullptr :
                 ctx.sceneResources->virtualGeometryBuffersDense(meshId);
             if (!selection || gpu == nullptr ||
-                gpu->indices.buffer == VK_NULL_HANDLE ||
                 gpu->meshlets.buffer == VK_NULL_HANDLE ||
-                gpu->meshletVertices.buffer == VK_NULL_HANDLE ||
-                gpu->vertices.buffer == VK_NULL_HANDLE)
+                gpu->geometryPagePool.buffer == VK_NULL_HANDLE ||
+                gpu->pageTable.buffer == VK_NULL_HANDLE ||
+                gpu->pageInfo.buffer == VK_NULL_HANDLE ||
+                (!meshShaderPath && gpu->rasterIndices.buffer == VK_NULL_HANDLE))
                 return;
              const auto& visibilityResource = resources.getTexture(passCtx->visibility);
              const auto& primitiveResource = resources.getTexture(passCtx->visibilityPrimitive);
@@ -1062,12 +1066,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 ctx.writeStorageBuffer(set, 1, ctx.frameGraphProvider->buffer(visibleCount.native), sizeof(std::uint32_t));
                 ctx.writeStorageBuffer(set, 2, gpu->meshlets.buffer,
                     asset->meshlets.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet));
-                ctx.writeStorageBuffer(set, 3, gpu->meshletVertices.buffer,
-                    asset->meshletVertices.size() * sizeof(std::uint32_t));
-                ctx.writeStorageBuffer(set, 4, gpu->meshletTriangles.buffer,
-                    gpu->meshletTriangles.size);
-                ctx.writeStorageBuffer(set, 5, gpu->vertices.buffer,
-                    asset->vertices.size() * sizeof(asset->vertices[0]));
+                ctx.writeStorageBuffer(set, 3, gpu->geometryPagePool.buffer,
+                    gpu->geometryPagePool.size);
+                ctx.writeStorageBuffer(set, 4, gpu->pageTable.buffer,
+                    gpu->pageTable.size);
+                ctx.writeStorageBuffer(set, 5, gpu->pageInfo.buffer,
+                    sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo));
                 ctx.writeStorageBuffer(set, 6,
                     ctx.frameGraphProvider->buffer(transformsResource.native),
                     transformsResource.descriptor.size);
@@ -1079,12 +1083,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             {
                 ctx.writeStorageBuffer(set, 0, gpu->meshlets.buffer,
                     asset->meshlets.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet));
-                ctx.writeStorageBuffer(set, 1, gpu->meshletVertices.buffer,
-                    asset->meshletVertices.size() * sizeof(std::uint32_t));
-                ctx.writeStorageBuffer(set, 2, gpu->vertices.buffer,
-                    asset->vertices.size() * sizeof(asset->vertices[0]));
-                ctx.writeStorageBuffer(set, 3, gpu->indices.buffer,
-                    asset->indices.size() * sizeof(std::uint32_t));
+                ctx.writeStorageBuffer(set, 1, gpu->geometryPagePool.buffer,
+                    gpu->geometryPagePool.size);
+                ctx.writeStorageBuffer(set, 2, gpu->pageTable.buffer,
+                    gpu->pageTable.size);
+                ctx.writeStorageBuffer(set, 3, gpu->pageInfo.buffer,
+                    sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo));
                 ctx.writeStorageBuffer(set, 4,
                     ctx.frameGraphProvider->buffer(transformsResource.native),
                     transformsResource.descriptor.size);
@@ -1125,7 +1129,7 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              }
              else
              {
-                 vkCmdBindIndexBuffer(ctx.commandBuffer(), gpu->indices.buffer, 0,
+                 vkCmdBindIndexBuffer(ctx.commandBuffer(), gpu->rasterIndices.buffer, 0,
                      VK_INDEX_TYPE_UINT32);
                  vkCmdDrawIndexedIndirectCount(ctx.commandBuffer(),
                      indirectBuffer, 0, countBuffer, 0,
@@ -1398,7 +1402,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              if (!selection || visibilityView == VK_NULL_HANDLE || primitiveView == VK_NULL_HANDLE ||
                  meshMaterialsBuffer == VK_NULL_HANDLE || gpu == nullptr ||
                  gpu->meshlets.buffer == VK_NULL_HANDLE ||
-                 gpu->meshletTriangles.buffer == VK_NULL_HANDLE)
+                 gpu->geometryPagePool.buffer == VK_NULL_HANDLE ||
+                 gpu->pageTable.buffer == VK_NULL_HANDLE ||
+                 gpu->pageInfo.buffer == VK_NULL_HANDLE)
              {
                  clearOutput();
                  return;
@@ -1419,9 +1425,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              ctx.writeStorageBuffer(set, 5, gpu->meshlets.buffer,
                  static_cast<VkDeviceSize>(asset->meshlets.size() *
                      sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)));
-             ctx.writeStorageBuffer(set, 6, gpu->meshletTriangles.buffer,
-                 static_cast<VkDeviceSize>((asset->meshletTriangles.size() + 3u) &
-                     ~std::size_t(3u)));
+             ctx.writeStorageBuffer(set, 6, gpu->geometryPagePool.buffer,
+                 gpu->geometryPagePool.size);
+             ctx.writeStorageBuffer(set, 7, gpu->pageTable.buffer,
+                 gpu->pageTable.size);
+             ctx.writeStorageBuffer(set, 8, gpu->pageInfo.buffer,
+                 sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo));
             vkCmdBindPipeline(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE, ctx.pipelines->materialClassifyPipeline.computePipeline());
             vkCmdBindDescriptorSets(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE, ctx.pipelines->materialClassifyPipeline.layout(), 0, 1, &set, 0, nullptr);
             struct alignas(16) ClassificationConstants
@@ -1705,7 +1714,9 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 prefilteredView != VK_NULL_HANDLE && brdfView != VK_NULL_HANDLE &&
                 motionView != VK_NULL_HANDLE;
             const bool validBuffers = gpu->meshlets.buffer != VK_NULL_HANDLE &&
-                gpu->indices.buffer != VK_NULL_HANDLE && gpu->vertices.buffer != VK_NULL_HANDLE &&
+                gpu->geometryPagePool.buffer != VK_NULL_HANDLE &&
+                gpu->pageTable.buffer != VK_NULL_HANDLE &&
+                gpu->pageInfo.buffer != VK_NULL_HANDLE &&
                 materialBuffer != VK_NULL_HANDLE && materialIdsBuffer != VK_NULL_HANDLE &&
                 lightBuffer != VK_NULL_HANDLE &&
                 transformBuffer != VK_NULL_HANDLE;
@@ -1728,10 +1739,10 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             ctx.writeStorage(set, 4, hdrView);
              ctx.writeStorageBuffer(set, 5, gpu->meshlets.buffer,
                  static_cast<VkDeviceSize>(asset->meshlets.size() * sizeof(VulkanSceneResources::VirtualGeometryGpuMeshlet)));
-             ctx.writeStorageBuffer(set, 6, gpu->indices.buffer,
-                 static_cast<VkDeviceSize>(asset->indices.size() * sizeof(std::uint32_t)));
-             ctx.writeStorageBuffer(set, 7, gpu->vertices.buffer,
-                 static_cast<VkDeviceSize>(asset->vertices.size() * sizeof(asset->vertices[0])));
+             ctx.writeStorageBuffer(set, 6, gpu->geometryPagePool.buffer,
+                 gpu->geometryPagePool.size);
+             ctx.writeStorageBuffer(set, 7, gpu->pageTable.buffer,
+                 gpu->pageTable.size);
              ctx.writeSampled(set, 8, irradianceView);
              ctx.writeSampled(set, 9, prefilteredView);
              ctx.writeSampled(set, 11, brdfView);
@@ -1762,6 +1773,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
              ctx.writeStorageBuffer(set, 13, lightBuffer, lights.descriptor.size);
              ctx.writeStorageBuffer(set, 14, transformBuffer, transforms.descriptor.size);
              ctx.writeStorage(set, 15, motionView);
+             ctx.writeStorageBuffer(set, 16, gpu->pageInfo.buffer,
+                 sizeof(VulkanSceneResources::VirtualGeometryGpuPageInfo));
              ctx.writeSampler(set);
             ctx.transitionImage(motionImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

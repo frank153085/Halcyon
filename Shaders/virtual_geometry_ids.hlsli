@@ -54,6 +54,30 @@ struct Vertex
     float4 tangent;
 };
 
+struct PageTableEntry
+{
+    uint physicalPage;
+    uint generation;
+    uint flags;
+    uint lastRequestedFrame;
+};
+
+struct GeometryPageInfo
+{
+    uint pageSize;
+    uint pageCount;
+    uint physicalPageCount;
+    uint vertexCount;
+    uint meshletVertexCount;
+    uint triangleByteCount;
+    uint indexCount;
+    uint verticesFirstPage;
+    uint meshletVerticesFirstPage;
+    uint meshletTrianglesFirstPage;
+    uint indicesFirstPage;
+    uint padding;
+};
+
 struct TransformRow
 {
     float4x4 model;

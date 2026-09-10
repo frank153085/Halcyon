@@ -880,6 +880,47 @@ bool balanceVirtualGeometryLodRefinement(const VirtualGeometryAsset& asset,
     return true;
 }
 
+void updateVirtualGeometryQuality(VirtualGeometryQualityState& state,
+    float gpuFrameMs, float queueOccupancy) noexcept
+{
+    state.qualityScale = std::clamp(
+        std::isfinite(state.qualityScale) ? state.qualityScale : 1.0f, 1.0f, 8.0f);
+    queueOccupancy = std::clamp(
+        std::isfinite(queueOccupancy) ? queueOccupancy : 0.0f, 0.0f, 1.0f);
+
+    if (std::isfinite(gpuFrameMs) && gpuFrameMs >= 0.0f)
+    {
+        if (state.gpuSampleCount == 0u || !std::isfinite(state.gpuTimeEmaMs))
+            state.gpuTimeEmaMs = gpuFrameMs;
+        else
+            state.gpuTimeEmaMs += (gpuFrameMs - state.gpuTimeEmaMs) * (2.0f / 9.0f);
+        state.gpuSampleCount = std::min(state.gpuSampleCount + 1u, 8u);
+    }
+
+    const bool overBudget = queueOccupancy > 0.75f ||
+        (state.gpuSampleCount != 0u && state.gpuTimeEmaMs > 16.67f);
+    if (overBudget)
+    {
+        state.qualityScale = std::min(8.0f, state.qualityScale * 1.25f);
+        state.underBudgetFrames = 0u;
+        return;
+    }
+
+    const bool underBudget = queueOccupancy < 0.25f &&
+        state.gpuSampleCount != 0u && state.gpuTimeEmaMs < 14.5f;
+    if (!underBudget)
+    {
+        state.underBudgetFrames = 0u;
+        return;
+    }
+    ++state.underBudgetFrames;
+    if (state.underBudgetFrames >= 60u)
+    {
+        state.qualityScale = std::max(1.0f, state.qualityScale * 0.9f);
+        state.underBudgetFrames = 0u;
+    }
+}
+
 Halcyon::Result<StaticScene> loadGeometrySource(
     const std::filesystem::path& path, const StaticSceneLoadOptions& options)
 {

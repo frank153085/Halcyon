@@ -823,6 +823,9 @@ int Application::run(
                                "virtual_visible_meshlet_count,virtual_indirect_command_count,"
                                "virtual_dag_node_count,virtual_selected_node_count,virtual_lod_switch_count,"
                                "virtual_page_request_count,virtual_page_request_overflow_count,"
+                               "virtual_geometry_quality_scale,"
+                               "virtual_geometry_streaming_pressure,virtual_geometry_resident_pages,"
+                               "virtual_geometry_evicted_pages,virtual_geometry_uploaded_bytes,"
                                "mesh_shader_active,mesh_shader_fallback_reason,"
                                "virtual_invalid_visibility_count,"
                                "frustum_visible_instance_count,occluded_instance_count,gpu_driven_active,"
@@ -883,6 +886,11 @@ int Application::run(
                         << previousStats.virtualLodSwitchCount << ','
                         << previousStats.virtualPageRequestCount << ','
                         << previousStats.virtualPageRequestOverflowCount << ','
+                        << previousStats.virtualGeometryQualityScale << ','
+                        << previousStats.virtualGeometryStreamingPressure << ','
+                        << previousStats.virtualGeometryResidentPages << ','
+                        << previousStats.virtualGeometryEvictedPages << ','
+                        << previousStats.virtualGeometryUploadedBytes << ','
                         << (previousStats.meshShaderActive ? 1 : 0) << ','
                         << previousStats.meshShaderFallbackReason << ','
                         << previousStats.virtualInvalidVisibilityCount << ','

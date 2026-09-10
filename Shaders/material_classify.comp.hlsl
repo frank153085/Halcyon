@@ -6,11 +6,10 @@
 [[vk::binding(3, 0)]] RWStructuredBuffer<uint> materialIds;
 [[vk::binding(4, 0)]] RWStructuredBuffer<uint> invalidVisibilityCount;
 [[vk::binding(5, 0)]] StructuredBuffer<MeshletMeta> meshlets;
-// Meshlet triangle indices are stored as the meshoptimizer-produced byte
-// stream. ByteAddressBuffer preserves that packed representation; a
-// StructuredBuffer<uint> would incorrectly reinterpret four adjacent local
-// indices as one value.
-[[vk::binding(6, 0)]] ByteAddressBuffer meshletTriangles;
+[[vk::binding(6, 0)]] ByteAddressBuffer geometryPages;
+[[vk::binding(7, 0)]] StructuredBuffer<PageTableEntry> geometryPageTable;
+[[vk::binding(8, 0)]] StructuredBuffer<GeometryPageInfo> geometryPageInfoBuffer;
+#include "virtual_geometry_pages.hlsli"
 struct Constants
 {
     uint width;
@@ -76,10 +75,9 @@ struct Constants
     [unroll]
     for (uint corner = 0u; corner < 3u; ++corner)
     {
-        const uint byteAddress = triangleBase + corner;
-        const uint packed = meshletTriangles.Load(byteAddress & ~3u);
-        const uint localIndex = (packed >> ((byteAddress & 3u) * 8u)) & 0xffu;
-        if (localIndex >= meshlet.vertexCount)
+        uint localIndex = 0u;
+        if (!vgLoadTriangleByte(triangleBase + corner, localIndex) ||
+            localIndex >= meshlet.vertexCount)
         {
             materialIds[pixel] = 0xffffffffu;
             InterlockedAdd(invalidVisibilityCount[0], 1u);

@@ -6,8 +6,8 @@
 [[vk::binding(3, 0)]] StructuredBuffer<uint> materialIds;
 [[vk::binding(4, 0)]] [[vk::image_format("rgba32f")]] RWTexture2D<float4> hdr;
 [[vk::binding(5, 0)]] StructuredBuffer<MeshletMeta> meshlets;
-[[vk::binding(6, 0)]] StructuredBuffer<uint> indices;
-[[vk::binding(7, 0)]] StructuredBuffer<Vertex> vertices;
+[[vk::binding(6, 0)]] ByteAddressBuffer geometryPages;
+[[vk::binding(7, 0)]] StructuredBuffer<PageTableEntry> geometryPageTable;
 [[vk::binding(8, 0)]] TextureCube irradianceMap;
 [[vk::binding(9, 0)]] TextureCube prefilteredEnvironment;
 [[vk::binding(10, 0)]] SamplerState linearSampler;
@@ -16,6 +16,8 @@
 [[vk::binding(13, 0)]] StructuredBuffer<LightData> lights;
 [[vk::binding(14, 0)]] StructuredBuffer<TransformRow> transforms;
 [[vk::binding(15, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> motionVectors;
+[[vk::binding(16, 0)]] StructuredBuffer<GeometryPageInfo> geometryPageInfoBuffer;
+#include "virtual_geometry_pages.hlsli"
 
 struct Constants
 {
@@ -188,10 +190,13 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     }
     const uint triangleBase = meshlet.indexOffset + triangleIndex * 3u;
-    const uint i0 = indices[triangleBase + 0u];
-    const uint i1 = indices[triangleBase + 1u];
-    const uint i2 = indices[triangleBase + 2u];
-    if (i0 >= constants.vertexCount || i1 >= constants.vertexCount || i2 >= constants.vertexCount)
+    uint i0 = 0u;
+    uint i1 = 0u;
+    uint i2 = 0u;
+    if (!vgLoadIndex(triangleBase + 0u, i0) ||
+        !vgLoadIndex(triangleBase + 1u, i1) ||
+        !vgLoadIndex(triangleBase + 2u, i2) ||
+        i0 >= constants.vertexCount || i1 >= constants.vertexCount || i2 >= constants.vertexCount)
     {
         hdr[id.xy] = float4(0.012, 0.018, 0.028, 1.0);
         return;
@@ -205,9 +210,14 @@ void main(uint3 id : SV_DispatchThreadID)
         hdr[id.xy] = float4(0.012, 0.018, 0.028, 1.0);
         return;
     }
-    const Vertex v0 = vertices[i0];
-    const Vertex v1 = vertices[i1];
-    const Vertex v2 = vertices[i2];
+    Vertex v0;
+    Vertex v1;
+    Vertex v2;
+    if (!vgLoadVertex(i0, v0) || !vgLoadVertex(i1, v1) || !vgLoadVertex(i2, v2))
+    {
+        hdr[id.xy] = float4(0.012, 0.018, 0.028, 1.0);
+        return;
+    }
     const float3 objectPosition = v0.position * weights.x + v1.position * weights.y +
         v2.position * weights.z;
     // Keep the complete triangle attribute reconstruction in the visibility
