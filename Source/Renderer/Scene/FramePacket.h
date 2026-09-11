@@ -48,10 +48,23 @@ static_assert(alignof(LightData) == 16);
 static_assert(sizeof(LightData) == 64);
 static_assert(std::is_standard_layout_v<LightData>);
 
+// Motion supplied to virtual-geometry streaming. Velocities are expressed in
+// world units per second and radians per second; valid is zero when the pose
+// cannot be extrapolated safely (first frame, teleport, or invalid dt).
+struct alignas(16) CameraMotionData
+{
+    glm::vec4 linearVelocityAndDt{0.0f};
+    glm::vec4 angularVelocityAndValid{0.0f};
+};
+
+static_assert(alignof(CameraMotionData) == 16);
+static_assert(sizeof(CameraMotionData) == 32);
+
 struct FramePacket
 {
     std::uint64_t frameIndex = 0;
     CameraData camera{};
+    CameraMotionData cameraMotion{};
     std::span<const InstanceData> instances{};
     std::span<const LightData> lights{};
 };
@@ -62,12 +75,13 @@ struct OwnedFramePacket
 {
     std::uint64_t frameIndex = 0;
     CameraData camera{};
+    CameraMotionData cameraMotion{};
     std::vector<InstanceData> instances;
     std::vector<LightData> lights;
 
     [[nodiscard]] FramePacket view() const noexcept
     {
-        return FramePacket{frameIndex, camera, instances, lights};
+        return FramePacket{frameIndex, camera, cameraMotion, instances, lights};
     }
 
     [[nodiscard]] bool empty() const noexcept

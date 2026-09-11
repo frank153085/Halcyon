@@ -2,6 +2,7 @@
 
 #include "Renderer/Scene/FramePacket.h"
 #include "Renderer/Scene/GpuScene.h"
+#include "Renderer/Scene/VirtualGeometryPages.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -108,9 +109,17 @@ Halcyon::Result<VulkanFrameResources::Handles> VulkanFrameResources::declare(
     result.selectedLodCount = graph.createBuffer({"VirtualGeometrySelectionCounters", 20u, 4u, true});
     result.lodBalanceDepth = graph.createBuffer({"VirtualGeometryLodBalanceDepth", 4u, 4u, true});
     result.virtualPageRequests = graph.createBuffer({"VirtualGeometryPageRequests",
-        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 4u, 4u, true});
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) *
+            sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageRequest),
+        static_cast<std::uint32_t>(sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageRequest)), true});
     result.virtualPageRequestCount = graph.createBuffer(
         {"VirtualGeometryPageRequestCount", 4u, 4u, true});
+    result.virtualPageUsage = graph.createBuffer({"VirtualGeometryPageUsage",
+        static_cast<std::size_t>(MaxVirtualGeometryMeshlets) *
+            sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage),
+        static_cast<std::uint32_t>(sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage)), true});
+    result.virtualPageUsageCount = graph.createBuffer(
+        {"VirtualGeometryPageUsageCount", 4u, 4u, true});
     result.meshletIndirect = graph.createBuffer({"MeshletIndirect",
         static_cast<std::size_t>(MaxVirtualGeometryMeshlets) * 20u, 20u, true});
     result.meshletIndirectCount = graph.createBuffer({"MeshletIndirectCount", 4u, 4u, true});

@@ -31,6 +31,7 @@ namespace Graph = Halcyon::Renderer::Graph;
 struct FramePassContext
 {
     VkDevice device = VK_NULL_HANDLE;
+    PFN_vkCmdDrawMeshTasksIndirectEXT cmdDrawMeshTasksIndirect = nullptr;
     PFN_vkCmdDrawMeshTasksIndirectCountEXT cmdDrawMeshTasksIndirectCount = nullptr;
     VulkanFrame* frame = nullptr;
     const FramePacket* packet = nullptr;
@@ -114,6 +115,8 @@ struct FramePassContext
     Graph::BufferHandle lodBalanceDepth{};
     Graph::BufferHandle virtualPageRequests{};
     Graph::BufferHandle virtualPageRequestCount{};
+    Graph::BufferHandle virtualPageUsage{};
+    Graph::BufferHandle virtualPageUsageCount{};
     Graph::BufferHandle meshletIndirect{};
     Graph::BufferHandle meshletIndirectCount{};
     Graph::BufferHandle meshletMeshIndirect{};

@@ -23,6 +23,7 @@ public:
     VkDevice device = VK_NULL_HANDLE;
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     VkQueue presentQueue = VK_NULL_HANDLE;
+    PFN_vkCmdDrawMeshTasksIndirectEXT cmdDrawMeshTasksIndirect = nullptr;
     PFN_vkCmdDrawMeshTasksIndirectCountEXT cmdDrawMeshTasksIndirectCount = nullptr;
     std::uint32_t graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
     std::uint32_t presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;

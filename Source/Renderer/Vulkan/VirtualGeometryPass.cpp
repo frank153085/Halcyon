@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -97,6 +98,12 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 passCtx->virtualPageRequestCount,
                 Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination |
                     Graph::ResourceUsage::TransferSource);
+            passCtx->virtualPageUsage = builder.write(passCtx->virtualPageUsage,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination |
+                    Graph::ResourceUsage::TransferSource);
+            passCtx->virtualPageUsageCount = builder.write(passCtx->virtualPageUsageCount,
+                Graph::ResourceUsage::Storage | Graph::ResourceUsage::TransferDestination |
+                    Graph::ResourceUsage::TransferSource);
             builder.sideEffect();
         },
         [passCtx](const Graph::FrameGraphResources& resources,
@@ -121,6 +128,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             const auto& balanceDepth = resources.get<Graph::FrameGraphBuffer>(ctx.lodBalanceDepth);
             const auto& pageRequests = resources.get<Graph::FrameGraphBuffer>(ctx.virtualPageRequests);
             const auto& pageRequestCount = resources.get<Graph::FrameGraphBuffer>(ctx.virtualPageRequestCount);
+            const auto& pageUsage = resources.get<Graph::FrameGraphBuffer>(ctx.virtualPageUsage);
+            const auto& pageUsageCount = resources.get<Graph::FrameGraphBuffer>(ctx.virtualPageUsageCount);
             const VkBuffer statesBuffer = gpu->lodStates.buffer;
             const VkBuffer selectedBuffer = ctx.frameGraphProvider->buffer(selectedNodes.native);
             const VkBuffer countBuffer = ctx.frameGraphProvider->buffer(selectedCount.native);
@@ -128,9 +137,14 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             const VkBuffer pageRequestBuffer = ctx.frameGraphProvider->buffer(pageRequests.native);
             const VkBuffer pageRequestCountBuffer =
                 ctx.frameGraphProvider->buffer(pageRequestCount.native);
+            const VkBuffer pageUsageBuffer = ctx.frameGraphProvider->buffer(pageUsage.native);
+            const VkBuffer pageUsageCountBuffer =
+                ctx.frameGraphProvider->buffer(pageUsageCount.native);
             if (statesBuffer == VK_NULL_HANDLE || selectedBuffer == VK_NULL_HANDLE ||
                 countBuffer == VK_NULL_HANDLE || balanceBuffer == VK_NULL_HANDLE ||
                 pageRequestBuffer == VK_NULL_HANDLE || pageRequestCountBuffer == VK_NULL_HANDLE)
+                return;
+            if (pageUsageBuffer == VK_NULL_HANDLE || pageUsageCountBuffer == VK_NULL_HANDLE)
                 return;
             vkCmdFillBuffer(ctx.commandBuffer(), selectedBuffer, 0, VK_WHOLE_SIZE, 0u);
             vkCmdFillBuffer(ctx.commandBuffer(), countBuffer, 0,
@@ -140,7 +154,10 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             vkCmdFillBuffer(ctx.commandBuffer(), pageRequestBuffer, 0, VK_WHOLE_SIZE, 0u);
             vkCmdFillBuffer(ctx.commandBuffer(), pageRequestCountBuffer, 0,
                 sizeof(std::uint32_t), 0u);
-            VkBufferMemoryBarrier2 reset[5]{};
+            vkCmdFillBuffer(ctx.commandBuffer(), pageUsageBuffer, 0, VK_WHOLE_SIZE, 0u);
+            vkCmdFillBuffer(ctx.commandBuffer(), pageUsageCountBuffer, 0,
+                sizeof(std::uint32_t), 0u);
+            VkBufferMemoryBarrier2 reset[7]{};
             for (auto& barrier : reset)
             {
                 barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -154,6 +171,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             reset[2].buffer = balanceBuffer; reset[2].size = sizeof(std::uint32_t);
             reset[3].buffer = pageRequestBuffer; reset[3].size = VK_WHOLE_SIZE;
             reset[4].buffer = pageRequestCountBuffer; reset[4].size = sizeof(std::uint32_t);
+            reset[5].buffer = pageUsageBuffer; reset[5].size = VK_WHOLE_SIZE;
+            reset[6].buffer = pageUsageCountBuffer; reset[6].size = sizeof(std::uint32_t);
             VkBufferMemoryBarrier2 stateBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
             stateBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             stateBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -162,8 +181,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             stateBarrier.buffer = statesBuffer;
             stateBarrier.size = VK_WHOLE_SIZE;
             VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            std::array<VkBufferMemoryBarrier2, 6> barriers = {
-                reset[0], reset[1], reset[2], reset[3], reset[4], stateBarrier};
+            std::array<VkBufferMemoryBarrier2, 8> barriers = {
+                reset[0], reset[1], reset[2], reset[3], reset[4], reset[5], reset[6], stateBarrier};
             dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
             dependency.pBufferMemoryBarriers = barriers.data();
             vkCmdPipelineBarrier2(ctx.commandBuffer(), &dependency);
@@ -194,6 +213,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 pageRequests.descriptor.size);
             ctx.writeStorageBuffer(set, 12, pageRequestCountBuffer,
                 sizeof(std::uint32_t));
+            ctx.writeStorageBuffer(set, 13, pageUsageBuffer, pageUsage.descriptor.size);
+            ctx.writeStorageBuffer(set, 14, pageUsageCountBuffer, sizeof(std::uint32_t));
             const float projectionY = std::abs(ctx.packet->camera.projection[1][1]);
             struct alignas(16) LodFrame
             {
@@ -222,7 +243,11 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             const float qualityScale = std::clamp(
                 ctx.virtualGeometryQualityScale, 1.0f, 8.0f);
             frame.thresholds = glm::vec4(
-                1.0f * qualityScale, 0.75f * qualityScale, 0.0f, 0.0f);
+                1.0f * qualityScale, 0.75f * qualityScale,
+                std::bit_cast<float>(std::min<std::uint32_t>(
+                    VulkanFrameResources::MaxVirtualGeometryMeshlets, gpu->virtualPageCount)),
+                std::bit_cast<float>(std::min<std::uint32_t>(
+                    VulkanFrameResources::MaxVirtualGeometryMeshlets, gpu->virtualPageCount)));
             static_assert(sizeof(LodFrame) == 128);
             vkCmdBindPipeline(ctx.commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE,
                 ctx.pipelines->lodSelectPipeline.computePipeline());
@@ -239,14 +264,17 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             };
             const auto phaseBarrier = [&]()
             {
-                std::array<VkBufferMemoryBarrier2, 4> phaseBarriers{};
+                std::array<VkBufferMemoryBarrier2, 5> phaseBarriers{};
                 for (auto& barrier : phaseBarriers)
                 {
                     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
                     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                     barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
                     barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                        VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
                     barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
                 }
@@ -258,6 +286,8 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 phaseBarriers[2].size = sizeof(std::uint32_t) * 5u;
                 phaseBarriers[3].buffer = selectedBuffer;
                 phaseBarriers[3].size = VK_WHOLE_SIZE;
+                phaseBarriers[4].buffer = gpu->pageTable.buffer;
+                phaseBarriers[4].size = VK_WHOLE_SIZE;
                 VkDependencyInfo phaseDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
                 phaseDependency.bufferMemoryBarrierCount =
                     static_cast<std::uint32_t>(phaseBarriers.size());
@@ -283,50 +313,102 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(frame), &frame);
             vkCmdDispatch(ctx.commandBuffer(), 1u, 1u, 1u);
             phaseBarrier();
-            if (ctx.debugReadbacks != nullptr &&
-                ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestReadbacks.size() &&
-                ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestValid.size())
+            if (ctx.debugReadbacks != nullptr)
             {
-                const VkBuffer readback =
-                    ctx.debugReadbacks->virtualPageRequestReadbacks[ctx.currentFrame].buffer;
-                const std::uint32_t requestCapacity = std::min<std::uint32_t>(
-                    gpu->virtualPageCount,
-                    DebugReadbackManager::VirtualPageRequestCapacity);
-                if (readback != VK_NULL_HANDLE && requestCapacity != 0u)
+                if (ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestReadbacks.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestValid.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestFrameIndices.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestPageCounts.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageRequestMeshIds.size())
                 {
-                    std::array<VkBufferMemoryBarrier2, 2> requestBarriers{};
-                    for (auto& barrier : requestBarriers)
+                    const VkBuffer readback =
+                        ctx.debugReadbacks->virtualPageRequestReadbacks[ctx.currentFrame].buffer;
+                    const std::uint32_t requestCapacity = std::min<std::uint32_t>(
+                        gpu->virtualPageCount,
+                        DebugReadbackManager::VirtualPageRequestCapacity);
+                    if (readback != VK_NULL_HANDLE && requestCapacity != 0u)
                     {
-                        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                        barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        std::array<VkBufferMemoryBarrier2, 2> requestBarriers{};
+                        for (auto& barrier : requestBarriers)
+                        {
+                            barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                            barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                            barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        }
+                        requestBarriers[0].buffer = pageRequestCountBuffer;
+                        requestBarriers[0].size = sizeof(std::uint32_t);
+                        requestBarriers[1].buffer = pageRequestBuffer;
+                        requestBarriers[1].size =
+                            static_cast<VkDeviceSize>(requestCapacity) * sizeof(std::uint32_t) * 4u;
+                        VkDependencyInfo requestDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        requestDependency.bufferMemoryBarrierCount =
+                            static_cast<std::uint32_t>(requestBarriers.size());
+                        requestDependency.pBufferMemoryBarriers = requestBarriers.data();
+                        vkCmdPipelineBarrier2(ctx.commandBuffer(), &requestDependency);
+                        const VkBufferCopy countCopy{0u, 0u, sizeof(std::uint32_t)};
+                        const VkBufferCopy pagesCopy{0u, sizeof(std::uint32_t),
+                            static_cast<VkDeviceSize>(requestCapacity) * sizeof(std::uint32_t) * 4u};
+                        vkCmdCopyBuffer(ctx.commandBuffer(), pageRequestCountBuffer,
+                            readback, 1u, &countCopy);
+                        vkCmdCopyBuffer(ctx.commandBuffer(), pageRequestBuffer,
+                            readback, 1u, &pagesCopy);
+                        ctx.debugReadbacks->virtualPageRequestValid[ctx.currentFrame] = true;
+                        ctx.debugReadbacks->virtualPageRequestFrameIndices[ctx.currentFrame] =
+                            ctx.packet->frameIndex;
+                        ctx.debugReadbacks->virtualPageRequestPageCounts[ctx.currentFrame] =
+                            gpu->virtualPageCount;
+                        ctx.debugReadbacks->virtualPageRequestMeshIds[ctx.currentFrame] =
+                            selection.meshId;
                     }
-                    requestBarriers[0].buffer = pageRequestCountBuffer;
-                    requestBarriers[0].size = sizeof(std::uint32_t);
-                    requestBarriers[1].buffer = pageRequestBuffer;
-                    requestBarriers[1].size =
-                        static_cast<VkDeviceSize>(requestCapacity) * sizeof(std::uint32_t);
-                    VkDependencyInfo requestDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    requestDependency.bufferMemoryBarrierCount =
-                        static_cast<std::uint32_t>(requestBarriers.size());
-                    requestDependency.pBufferMemoryBarriers = requestBarriers.data();
-                    vkCmdPipelineBarrier2(ctx.commandBuffer(), &requestDependency);
-                    const VkBufferCopy countCopy{0u, 0u, sizeof(std::uint32_t)};
-                    const VkBufferCopy pagesCopy{0u, sizeof(std::uint32_t),
-                        static_cast<VkDeviceSize>(requestCapacity) * sizeof(std::uint32_t)};
-                    vkCmdCopyBuffer(ctx.commandBuffer(), pageRequestCountBuffer,
-                        readback, 1u, &countCopy);
-                    vkCmdCopyBuffer(ctx.commandBuffer(), pageRequestBuffer,
-                        readback, 1u, &pagesCopy);
-                    ctx.debugReadbacks->virtualPageRequestValid[ctx.currentFrame] = true;
-                    ctx.debugReadbacks->virtualPageRequestFrameIndices[ctx.currentFrame] =
-                        ctx.packet->frameIndex;
-                    ctx.debugReadbacks->virtualPageRequestPageCounts[ctx.currentFrame] =
-                        gpu->virtualPageCount;
-                    ctx.debugReadbacks->virtualPageRequestMeshIds[ctx.currentFrame] =
-                        selection.meshId;
+                }
+                if (ctx.currentFrame < ctx.debugReadbacks->virtualPageUsageReadbacks.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageUsageValid.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageUsageFrameIndices.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageUsagePageCounts.size() &&
+                    ctx.currentFrame < ctx.debugReadbacks->virtualPageUsageMeshIds.size())
+                {
+                    const std::uint32_t usageCapacity = std::min<std::uint32_t>(
+                        gpu->virtualPageCount,
+                        DebugReadbackManager::VirtualPageRequestCapacity);
+                    const VkBuffer usageReadback =
+                        ctx.debugReadbacks->virtualPageUsageReadbacks[ctx.currentFrame].buffer;
+                    if (usageReadback != VK_NULL_HANDLE && usageCapacity != 0u)
+                    {
+                        VkBufferMemoryBarrier2 usageBarriers[2]{};
+                        for (auto& barrier : usageBarriers)
+                        {
+                            barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                            barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                            barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        }
+                        usageBarriers[0].buffer = pageUsageCountBuffer;
+                        usageBarriers[0].size = sizeof(std::uint32_t);
+                        usageBarriers[1].buffer = pageUsageBuffer;
+                        usageBarriers[1].size = static_cast<VkDeviceSize>(usageCapacity) *
+                            sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage);
+                        VkDependencyInfo usageDependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        usageDependency.bufferMemoryBarrierCount = 2u;
+                        usageDependency.pBufferMemoryBarriers = usageBarriers;
+                        vkCmdPipelineBarrier2(ctx.commandBuffer(), &usageDependency);
+                        const VkBufferCopy usageCountCopy{0u, 0u, sizeof(std::uint32_t)};
+                        const VkBufferCopy usageCopy{0u, sizeof(std::uint32_t),
+                            static_cast<VkDeviceSize>(usageCapacity) *
+                                sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage)};
+                        vkCmdCopyBuffer(ctx.commandBuffer(), pageUsageCountBuffer, usageReadback, 1u,
+                            &usageCountCopy);
+                        vkCmdCopyBuffer(ctx.commandBuffer(), pageUsageBuffer, usageReadback, 1u,
+                            &usageCopy);
+                        ctx.debugReadbacks->virtualPageUsageValid[ctx.currentFrame] = true;
+                        ctx.debugReadbacks->virtualPageUsageFrameIndices[ctx.currentFrame] =
+                            ctx.packet->frameIndex;
+                        ctx.debugReadbacks->virtualPageUsagePageCounts[ctx.currentFrame] =
+                            gpu->virtualPageCount;
+                        ctx.debugReadbacks->virtualPageUsageMeshIds[ctx.currentFrame] = selection.meshId;
+                    }
                 }
             }
         });
@@ -942,7 +1024,7 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
                 ctx.sceneResources == nullptr || ctx.packet == nullptr ||
                 (!meshShaderPath && ctx.pipelines->visibilityPipeline.pipeline() == VK_NULL_HANDLE) ||
                 (meshShaderPath && (ctx.pipelines->virtualGeometryMeshPipeline.pipeline() == VK_NULL_HANDLE ||
-                    ctx.cmdDrawMeshTasksIndirectCount == nullptr)))
+                    ctx.cmdDrawMeshTasksIndirect == nullptr)))
                 return;
             const auto info = resources.getRenderPassInfo(0);
             const auto* target = static_cast<const VulkanFrameGraphRenderTarget*>(info.target.token);
@@ -1123,9 +1205,13 @@ void addVirtualGeometryPasses(Graph::FrameGraph& graph, FramePassContext& ctx)
             vkCmdSetScissor(ctx.commandBuffer(), 0, 1, &scissor);
              if (meshShaderPath)
              {
-                 ctx.cmdDrawMeshTasksIndirectCount(ctx.commandBuffer(), indirectBuffer, 0,
-                     countBuffer, 0, 1u,
-                     sizeof(VkDrawMeshTasksIndirectCommandEXT));
+                 // The compute pass writes a single mesh-task command whose
+                 // groupCountX is the visible-meshlet count. Issuing the
+                 // direct-indirect form avoids relying on the optional
+                 // indirect-count entry point while retaining GPU-generated
+                 // work sizing and the same command ABI.
+                 ctx.cmdDrawMeshTasksIndirect(ctx.commandBuffer(), indirectBuffer, 0,
+                     1u, sizeof(VkDrawMeshTasksIndirectCommandEXT));
              }
              else
              {

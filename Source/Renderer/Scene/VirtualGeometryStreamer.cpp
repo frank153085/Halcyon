@@ -273,6 +273,8 @@ bool VirtualGeometryStreamer::markResident(std::uint32_t pageIndex,
     page.lastUsedFrame = frameIndex;
     page.lastUseTimeline = lastUseTimeline;
     ++impl_->stats.residentPages;
+    impl_->stats.residentPagePeak = std::max(impl_->stats.residentPagePeak,
+        impl_->stats.residentPages);
     impl_->condition.notify_all();
     return true;
 }
@@ -288,6 +290,8 @@ bool VirtualGeometryStreamer::abandonUpload(
         page.generation != generation)
         return false;
     page.state = VirtualGeometryPageState::Unloaded;
+    page.retries = 0u;
+    impl_->condition.notify_all();
     return true;
 }
 
@@ -303,6 +307,7 @@ bool VirtualGeometryStreamer::touchResident(std::uint32_t pageIndex,
         return false;
     page.lastUsedFrame = std::max(page.lastUsedFrame, frameIndex);
     page.lastUseTimeline = std::max(page.lastUseTimeline, lastUseTimeline);
+    ++impl_->stats.usageTouches;
     return true;
 }
 
@@ -320,9 +325,19 @@ std::uint32_t VirtualGeometryStreamer::beginEviction(
             continue;
         const bool protectedByFrame = page.lastUsedFrame > frameIndex ||
             frameIndex - page.lastUsedFrame <= impl_->config.protectedFrameCount;
-        if (page.state == VirtualGeometryPageState::Resident &&
-            page.lastUseTimeline <= completedTimeline && !protectedByFrame &&
-            page.lastUsedFrame < oldestFrame)
+        if (page.state != VirtualGeometryPageState::Resident)
+            continue;
+        if (protectedByFrame)
+        {
+            ++impl_->stats.evictionFrameProtected;
+            continue;
+        }
+        if (page.lastUseTimeline > completedTimeline)
+        {
+            ++impl_->stats.evictionTimelineBlocked;
+            continue;
+        }
+        if (page.lastUsedFrame < oldestFrame)
         {
             candidate = pageIndex;
             oldestFrame = page.lastUsedFrame;
@@ -348,6 +363,7 @@ bool VirtualGeometryStreamer::finishEviction(
         1u : page.generation + 1u;
     --impl_->stats.residentPages;
     ++impl_->stats.evictedPages;
+    impl_->condition.notify_all();
     return true;
 }
 

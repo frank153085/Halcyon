@@ -947,16 +947,19 @@ VoidResult VulkanDevice::createDevice()
 
         if (canUseMeshShader)
         {
+            cmdDrawMeshTasksIndirect =
+                reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(
+                    vkGetDeviceProcAddr(device, "vkCmdDrawMeshTasksIndirectEXT"));
             cmdDrawMeshTasksIndirectCount =
                 reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectCountEXT>(
                     vkGetDeviceProcAddr(device, "vkCmdDrawMeshTasksIndirectCountEXT"));
-            if (cmdDrawMeshTasksIndirectCount == nullptr)
+            if (cmdDrawMeshTasksIndirect == nullptr || cmdDrawMeshTasksIndirectCount == nullptr)
             {
                 capabilities.meshShader = false;
                 capabilities.maxMeshWorkGroupCountX = 0u;
                 if (config.meshShader == FeatureMode::Required)
                     return fail("Mesh Shader was required but "
-                        "vkCmdDrawMeshTasksIndirectCountEXT is unavailable");
+                        "mesh indirect draw commands are unavailable");
             }
         }
 
@@ -1003,6 +1006,7 @@ void VulkanDevice::cleanup() noexcept
     physicalDevice = VK_NULL_HANDLE;
     graphicsQueue = VK_NULL_HANDLE;
     presentQueue = VK_NULL_HANDLE;
+    cmdDrawMeshTasksIndirect = nullptr;
     cmdDrawMeshTasksIndirectCount = nullptr;
     graphicsQueueFamily = VK_QUEUE_FAMILY_IGNORED;
     presentQueueFamily = VK_QUEUE_FAMILY_IGNORED;

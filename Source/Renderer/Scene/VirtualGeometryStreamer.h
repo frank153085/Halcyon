@@ -50,8 +50,12 @@ struct VirtualGeometryStreamingStats
     std::uint64_t retriedReads = 0;
     std::uint64_t evictedPages = 0;
     std::uint64_t readyBytes = 0;
+    std::uint64_t usageTouches = 0;
+    std::uint64_t evictionFrameProtected = 0;
+    std::uint64_t evictionTimelineBlocked = 0;
     std::uint32_t queuedPages = 0;
     std::uint32_t residentPages = 0;
+    std::uint32_t residentPagePeak = 0;
 };
 
 class VirtualGeometryStreamer final

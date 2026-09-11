@@ -56,9 +56,11 @@
 #include <fstream>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <new>
 #include <limits>
 #include <utility>
+#include <unordered_set>
 #include <vector>
 
 namespace Halcyon::Vulkan
@@ -344,6 +346,8 @@ struct Renderer::Impl
     VkDescriptorPool frameDescriptorPool = VK_NULL_HANDLE;
     std::vector<VkDescriptorPool> frameDescriptorPools;
     VkSampler linearSampler = VK_NULL_HANDLE;
+    PFN_vkCmdDrawMeshTasksIndirectEXT& cmdDrawMeshTasksIndirect =
+        deviceState.cmdDrawMeshTasksIndirect;
 
     VkExtent2D& requestedExtent = swapchainState.requestedExtent;
     bool& framebufferResized = swapchainState.framebufferResized;
@@ -369,6 +373,15 @@ struct Renderer::Impl
         debugReadbacks.virtualPageRequestPageCounts;
     std::vector<std::uint32_t>& virtualPageRequestMeshIds =
         debugReadbacks.virtualPageRequestMeshIds;
+    std::vector<BufferAllocation>& virtualPageUsageReadbacks =
+        debugReadbacks.virtualPageUsageReadbacks;
+    std::vector<bool>& virtualPageUsageValid = debugReadbacks.virtualPageUsageValid;
+    std::vector<std::uint64_t>& virtualPageUsageFrameIndices =
+        debugReadbacks.virtualPageUsageFrameIndices;
+    std::vector<std::uint32_t>& virtualPageUsagePageCounts =
+        debugReadbacks.virtualPageUsagePageCounts;
+    std::vector<std::uint32_t>& virtualPageUsageMeshIds =
+        debugReadbacks.virtualPageUsageMeshIds;
     std::vector<std::vector<std::uint32_t>>& gpuReferenceVisible = debugReadbacks.gpuReferenceVisible;
     std::vector<BufferAllocation>& instanceIdReadbacks = debugReadbacks.instanceIdReadbacks;
     std::vector<bool>& instanceIdReadbackValid = debugReadbacks.instanceIdReadbackValid;
@@ -594,6 +607,8 @@ struct Renderer::Impl
             gpuAllocator.destroy(readback);
         for (auto& readback : virtualPageRequestReadbacks)
             gpuAllocator.destroy(readback);
+        for (auto& readback : debugReadbacks.virtualPageUsageReadbacks)
+            gpuAllocator.destroy(readback);
         clusterOverflowReadbacks.clear();
         clusterOverflowReadbacks.reserve(frames.size());
         gpuVisibilityReadbacks.clear();
@@ -608,6 +623,13 @@ struct Renderer::Impl
         virtualPageRequestFrameIndices.assign(frames.size(), 0u);
         virtualPageRequestPageCounts.assign(frames.size(), 0u);
         virtualPageRequestMeshIds.assign(frames.size(),
+            std::numeric_limits<std::uint32_t>::max());
+        debugReadbacks.virtualPageUsageReadbacks.clear();
+        debugReadbacks.virtualPageUsageReadbacks.reserve(frames.size());
+        debugReadbacks.virtualPageUsageValid.assign(frames.size(), false);
+        debugReadbacks.virtualPageUsageFrameIndices.assign(frames.size(), 0u);
+        debugReadbacks.virtualPageUsagePageCounts.assign(frames.size(), 0u);
+        debugReadbacks.virtualPageUsageMeshIds.assign(frames.size(),
             std::numeric_limits<std::uint32_t>::max());
         gpuReferenceVisible.assign(frames.size(), {});
         instanceIdReadbacks.assign(frames.size(), {});
@@ -637,6 +659,9 @@ struct Renderer::Impl
                 for (auto& readback : virtualPageRequestReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualPageRequestReadbacks.clear();
+                for (auto& readback : virtualPageUsageReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageUsageReadbacks.clear();
                 return allocation.error();
             }
             clusterOverflowReadbacks.push_back(allocation.value());
@@ -662,6 +687,9 @@ struct Renderer::Impl
                 for (auto& readback : virtualPageRequestReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualPageRequestReadbacks.clear();
+                for (auto& readback : virtualPageUsageReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageUsageReadbacks.clear();
                 return visibility.error();
             }
             gpuVisibilityReadbacks.push_back(visibility.value());
@@ -683,11 +711,14 @@ struct Renderer::Impl
                 for (auto& readback : virtualPageRequestReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualPageRequestReadbacks.clear();
+                for (auto& readback : virtualPageUsageReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageUsageReadbacks.clear();
                 return virtualCounters.error();
             }
             virtualGeometryReadbacks.push_back(virtualCounters.value());
             info.size = sizeof(std::uint32_t) *
-                (1ull + DebugReadbackManager::VirtualPageRequestCapacity);
+                (1ull + DebugReadbackManager::VirtualPageRequestCapacity * 4ull);
             const auto pageRequests = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
             if (!pageRequests)
             {
@@ -703,9 +734,35 @@ struct Renderer::Impl
                 for (auto& readback : virtualPageRequestReadbacks)
                     gpuAllocator.destroy(readback);
                 virtualPageRequestReadbacks.clear();
+                for (auto& readback : virtualPageUsageReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageUsageReadbacks.clear();
                 return pageRequests.error();
             }
             virtualPageRequestReadbacks.push_back(pageRequests.value());
+            info.size = sizeof(std::uint32_t) *
+                (1ull + DebugReadbackManager::VirtualPageRequestCapacity * 2ull);
+            const auto pageUsage = gpuAllocator.createBuffer(info, MemoryUsage::GpuToCpu);
+            if (!pageUsage)
+            {
+                for (auto& readback : clusterOverflowReadbacks)
+                    gpuAllocator.destroy(readback);
+                clusterOverflowReadbacks.clear();
+                for (auto& readback : gpuVisibilityReadbacks)
+                    gpuAllocator.destroy(readback);
+                gpuVisibilityReadbacks.clear();
+                for (auto& readback : virtualGeometryReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualGeometryReadbacks.clear();
+                for (auto& readback : virtualPageRequestReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageRequestReadbacks.clear();
+                for (auto& readback : virtualPageUsageReadbacks)
+                    gpuAllocator.destroy(readback);
+                virtualPageUsageReadbacks.clear();
+                return pageUsage.error();
+            }
+            debugReadbacks.virtualPageUsageReadbacks.push_back(pageUsage.value());
         }
         return ok();
     }
@@ -1267,7 +1324,7 @@ struct Renderer::Impl
         result = meshletCullPipeline.createCompute(device, meshletCullDesc);
         if (!result) return result;
 
-        const std::array<VkDescriptorSetLayoutBinding, 13> lodSelectBindings = {
+        const std::array<VkDescriptorSetLayoutBinding, 15> lodSelectBindings = {
             VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -1280,10 +1337,12 @@ struct Renderer::Impl
             VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             VkDescriptorSetLayoutBinding{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutBinding{12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{13, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            VkDescriptorSetLayoutBinding{14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         result = makeLayout(lodSelectBindings, lodSelectLayout);
         if (!result) return result;
-        const std::array<DescriptorBindingDesc, 13> lodSelectAbi = {
+        const std::array<DescriptorBindingDesc, 15> lodSelectAbi = {
             DescriptorBindingDesc{0, lodSelectBindings[0], sizeof(VulkanSceneResources::VirtualGeometryGpuDagNode)},
             DescriptorBindingDesc{0, lodSelectBindings[1], sizeof(Halcyon::Renderer::Scene::VirtualGeometryDagEdge)},
             DescriptorBindingDesc{0, lodSelectBindings[2], 16},
@@ -1295,8 +1354,12 @@ struct Renderer::Impl
             DescriptorBindingDesc{0, lodSelectBindings[8], sizeof(VulkanSceneResources::VirtualGeometryGpuPageTableEntry)},
             DescriptorBindingDesc{0, lodSelectBindings[9], sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageDependencyRange)},
             DescriptorBindingDesc{0, lodSelectBindings[10], sizeof(std::uint32_t)},
-            DescriptorBindingDesc{0, lodSelectBindings[11], sizeof(std::uint32_t)},
-            DescriptorBindingDesc{0, lodSelectBindings[12], sizeof(std::uint32_t)}};
+            DescriptorBindingDesc{0, lodSelectBindings[11],
+                sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageRequest)},
+            DescriptorBindingDesc{0, lodSelectBindings[12], sizeof(std::uint32_t)},
+            DescriptorBindingDesc{0, lodSelectBindings[13],
+                sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage)},
+            DescriptorBindingDesc{0, lodSelectBindings[14], sizeof(std::uint32_t)}};
         ComputePipelineDesc lodSelectDesc{};
         lodSelectDesc.shader = "lod_select.comp.spv";
         lodSelectDesc.descriptorLayouts = std::span<const VkDescriptorSetLayout>{&lodSelectLayout, 1};
@@ -1704,6 +1767,113 @@ struct Renderer::Impl
         return ok();
     }
 
+    std::uint32_t scheduleVirtualGeometryPrefetch(const FramePacket& packet,
+        std::uint32_t meshId)
+    {
+        if (framebufferResized || !virtualHiZInitialized)
+            return 0u;
+        if (packet.cameraMotion.angularVelocityAndValid.w <= 0.5f ||
+            packet.cameraMotion.linearVelocityAndDt.w <= 1.0e-5f ||
+            !std::isfinite(packet.cameraMotion.linearVelocityAndDt.x) ||
+            !std::isfinite(packet.cameraMotion.linearVelocityAndDt.y) ||
+            !std::isfinite(packet.cameraMotion.linearVelocityAndDt.z))
+            return 0u;
+        const auto* asset = sceneResources.virtualGeometry(meshId);
+        auto* streamer = sceneResources.virtualGeometryStreamer(meshId);
+        if (asset == nullptr || streamer == nullptr || packet.instances.empty())
+            return 0u;
+        const auto& layout = streamer->metadata().pageLayout;
+        if (layout.nodeDependencies.size() < asset->dagNodes.size())
+            return 0u;
+        const glm::mat4 model = glm::make_mat4(packet.instances.front().transform.data());
+        const glm::mat4 inverseModel = glm::inverse(model);
+        const glm::vec3 predictedWorld = glm::vec3(packet.camera.positionAndNear) +
+            glm::vec3(packet.cameraMotion.linearVelocityAndDt) * 0.25f;
+        const glm::vec3 predictedObject =
+            glm::vec3(inverseModel * glm::vec4(predictedWorld, 1.0f));
+        glm::mat4 predictedViewRotation = packet.camera.view;
+        predictedViewRotation[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        const glm::vec3 angularVelocity =
+            glm::vec3(packet.cameraMotion.angularVelocityAndValid);
+        const float angularSpeed = glm::length(angularVelocity);
+        if (angularSpeed > 1.0e-5f)
+        {
+            const glm::quat delta = glm::angleAxis(angularSpeed * 0.25f,
+                angularVelocity / angularSpeed);
+            predictedViewRotation = predictedViewRotation *
+                glm::mat4_cast(glm::conjugate(delta));
+        }
+        const glm::mat4 predictedView = predictedViewRotation *
+            glm::translate(glm::mat4{1.0f}, -predictedWorld);
+        const glm::mat4 predictedViewProjection = packet.camera.projection * predictedView;
+        const float modelScale = std::max({glm::length(glm::vec3(model[0])),
+            glm::length(glm::vec3(model[1])), glm::length(glm::vec3(model[2]))});
+        const float projectionY = std::abs(packet.camera.projection[1][1]);
+        const float fov = projectionY > 1.0e-6f
+            ? 2.0f * std::atan(1.0f / projectionY) : glm::radians(60.0f);
+        const float viewportHeight = std::max(1.0f, packet.camera.viewportAndInvViewport.y);
+        std::vector<std::uint32_t> stack;
+        stack.reserve(asset->dagNodes.size());
+        for (std::uint32_t nodeIndex = 0u;
+             nodeIndex < asset->dagNodes.size(); ++nodeIndex)
+        {
+            if (asset->dagNodes[nodeIndex].parentIndex ==
+                std::numeric_limits<std::uint32_t>::max())
+                stack.push_back(nodeIndex);
+        }
+        std::uint32_t prefetchBudget = 32u;
+        std::uint32_t scheduled = 0u;
+        while (!stack.empty() && prefetchBudget != 0u)
+        {
+            const std::uint32_t nodeIndex = stack.back();
+            stack.pop_back();
+            const auto& node = asset->dagNodes[nodeIndex];
+            const glm::vec3 worldCenter = glm::vec3(model * glm::vec4(glm::vec3(node.sphere), 1.0f));
+            const glm::vec4 clipCenter = predictedViewProjection * glm::vec4(worldCenter, 1.0f);
+            const float clipRadius = std::max(0.0f, node.sphere.w * modelScale);
+            // Skip only nodes wholly behind the predicted near plane. The
+            // remaining traversal is intentionally conservative at side
+            // planes so prefetch cannot hide a page that may become visible.
+            if (clipCenter.w <= -clipRadius)
+                continue;
+            const float distance = std::max(1.0e-5f,
+                glm::length(glm::vec3(node.sphere) - predictedObject));
+            const float error = Halcyon::Renderer::Scene::virtualGeometryScreenError(
+                node.geometricError, distance, viewportHeight, fov);
+            // The sphere test is deliberately conservative: nodes outside the
+            // predicted frustum may still be prefetched, but no visible page
+            // can be displaced by this budgeted background work.
+            if (error >= 0.75f)
+            {
+                const auto dependency = layout.nodeDependencies[nodeIndex];
+                const std::uint64_t end = static_cast<std::uint64_t>(dependency.offset) +
+                    dependency.count;
+                if (end <= layout.dependencyPageIndices.size())
+                {
+                    for (std::uint32_t i = 0u;
+                         i < dependency.count && prefetchBudget != 0u; ++i)
+                    {
+                        const auto page = layout.dependencyPageIndices[
+                            dependency.offset + i];
+                        if (streamer->requestPage(page, error * 0.25f, packet.frameIndex))
+                        {
+                            --prefetchBudget;
+                            ++scheduled;
+                        }
+                    }
+                }
+            }
+            const std::uint64_t childEnd = static_cast<std::uint64_t>(node.firstChild) +
+                node.childCount;
+            if (childEnd <= asset->dagEdges.size())
+            {
+                for (std::uint32_t i = 0u; i < node.childCount; ++i)
+                    stack.push_back(asset->dagEdges[node.firstChild + i].child);
+            }
+        }
+        return scheduled;
+    }
+
     [[nodiscard]] FrameStats render(const FramePacket& packet)
     {
         HALCYON_PROFILE_SCOPE("Renderer::render");
@@ -1926,6 +2096,7 @@ struct Renderer::Impl
                     counters.value().data() + sizeof(std::uint32_t) * 4u, sizeof(std::uint32_t));
             }
         }
+        bool predictionPrefetchIssued = false;
         if (frame.submitted && currentFrame < virtualPageRequestReadbacks.size() &&
             currentFrame < virtualPageRequestValid.size() &&
             virtualPageRequestValid[currentFrame])
@@ -1946,23 +2117,59 @@ struct Renderer::Impl
                     ? rawCount - capacity : 0u;
                 if (copiedCount != 0u)
                 {
-                    const auto requestBytes = gpuAllocator.readBuffer(
-                        virtualPageRequestReadbacks[currentFrame], sizeof(std::uint32_t),
-                        static_cast<VkDeviceSize>(copiedCount) * sizeof(std::uint32_t));
+                        const auto requestBytes = gpuAllocator.readBuffer(
+                            virtualPageRequestReadbacks[currentFrame], sizeof(std::uint32_t),
+                        static_cast<VkDeviceSize>(copiedCount) * sizeof(
+                            Halcyon::Renderer::Scene::VirtualGeometryPageRequest));
                     if (requestBytes && requestBytes->size() >=
-                            static_cast<std::size_t>(copiedCount) * sizeof(std::uint32_t))
+                            static_cast<std::size_t>(copiedCount) * sizeof(
+                                Halcyon::Renderer::Scene::VirtualGeometryPageRequest))
                     {
-                        std::vector<std::uint32_t> requests(copiedCount);
+                        std::vector<Halcyon::Renderer::Scene::VirtualGeometryPageRequest> requests(copiedCount);
                         std::memcpy(requests.data(), requestBytes->data(),
                             requests.size() * sizeof(requests[0]));
                         const auto invalid = std::remove_if(requests.begin(), requests.end(),
-                            [pageCount](std::uint32_t page) { return page >= pageCount; });
+                            [pageCount](const auto& request) { return request.pageIndex >= pageCount; });
                         stats.virtualPageRequestOverflowCount +=
                             static_cast<std::uint32_t>(requests.end() - invalid);
                         requests.erase(invalid, requests.end());
-                        std::sort(requests.begin(), requests.end());
-                        requests.erase(std::unique(requests.begin(), requests.end()),
-                            requests.end());
+                        std::sort(requests.begin(), requests.end(), [](const auto& left, const auto& right)
+                        {
+                            const auto reasonRank = [](std::uint32_t reason)
+                            {
+                                using namespace Halcyon::Renderer::Scene;
+                                if ((reason & VirtualGeometryPageRequestVisible) != 0u)
+                                    return 0u;
+                                if ((reason & VirtualGeometryPageRequestDependency) != 0u)
+                                    return 1u;
+                                if ((reason & VirtualGeometryPageRequestPrefetch) != 0u)
+                                    return 2u;
+                                return 3u;
+                            };
+                            const auto leftRank = reasonRank(left.reason);
+                            const auto rightRank = reasonRank(right.reason);
+                            if (leftRank != rightRank)
+                                return leftRank < rightRank;
+                            const float leftPriorityRaw = std::bit_cast<float>(left.priorityBits);
+                            const float rightPriorityRaw = std::bit_cast<float>(right.priorityBits);
+                            const float leftPriority = std::isfinite(leftPriorityRaw)
+                                ? leftPriorityRaw : -std::numeric_limits<float>::infinity();
+                            const float rightPriority = std::isfinite(rightPriorityRaw)
+                                ? rightPriorityRaw : -std::numeric_limits<float>::infinity();
+                            if (leftPriority != rightPriority)
+                                return leftPriority > rightPriority;
+                            return left.pageIndex < right.pageIndex;
+                        });
+                        std::unordered_set<std::uint32_t> seenPages;
+                        seenPages.reserve(requests.size());
+                        std::vector<Halcyon::Renderer::Scene::VirtualGeometryPageRequest> uniqueRequests;
+                        uniqueRequests.reserve(requests.size());
+                        for (const auto& request : requests)
+                        {
+                            if (seenPages.insert(request.pageIndex).second)
+                                uniqueRequests.push_back(request);
+                        }
+                        requests.swap(uniqueRequests);
                         stats.virtualPageRequestCount =
                             static_cast<std::uint32_t>(requests.size());
                         const std::uint32_t meshId = currentFrame <
@@ -1977,16 +2184,89 @@ struct Renderer::Impl
                                 // production. Preserve the GPU ordering while
                                 // assigning a deterministic priority within
                                 // this readback batch.
-                                for (std::size_t i = 0u; i < requests.size(); ++i)
-                                    (void)streamer->requestPage(requests[i],
-                                        1000000.0f - static_cast<float>(i),
-                                        packet.frameIndex);
+                                const std::uint64_t requestFrame = currentFrame <
+                                        virtualPageRequestFrameIndices.size()
+                                    ? virtualPageRequestFrameIndices[currentFrame]
+                                    : packet.frameIndex;
+                                for (const auto& request : requests)
+                                {
+                                    const float priority = std::bit_cast<float>(request.priorityBits);
+                                    (void)streamer->requestPage(request.pageIndex,
+                                        std::isfinite(priority) ? priority : 0.0f,
+                                        requestFrame);
+                                }
+
+                                if (sceneResources.virtualGeometry(meshId) != nullptr)
+                                {
+                                    stats.virtualPagePrefetchCount +=
+                                        scheduleVirtualGeometryPrefetch(packet, meshId);
+                                    predictionPrefetchIssued = true;
+                                }
                             }
                         }
                     }
                 }
             }
             virtualPageRequestValid[currentFrame] = false;
+        }
+        if (!predictionPrefetchIssued && !packet.instances.empty())
+            stats.virtualPagePrefetchCount += scheduleVirtualGeometryPrefetch(
+                packet, packet.instances.front().meshId);
+        if (frame.submitted && currentFrame < virtualPageUsageReadbacks.size() &&
+            currentFrame < virtualPageUsageValid.size() && virtualPageUsageValid[currentFrame])
+        {
+            const auto countBytes = gpuAllocator.readBuffer(
+                virtualPageUsageReadbacks[currentFrame], 0u, sizeof(std::uint32_t));
+            if (countBytes && countBytes->size() >= sizeof(std::uint32_t))
+            {
+                std::uint32_t rawCount = 0u;
+                std::memcpy(&rawCount, countBytes->data(), sizeof(rawCount));
+                const std::uint32_t pageCount = currentFrame < virtualPageUsagePageCounts.size()
+                    ? virtualPageUsagePageCounts[currentFrame] : 0u;
+                const std::uint32_t copiedCount = std::min(rawCount,
+                    std::min(pageCount, DebugReadbackManager::VirtualPageRequestCapacity));
+                if (copiedCount != 0u)
+                {
+                    const auto bytes = gpuAllocator.readBuffer(virtualPageUsageReadbacks[currentFrame],
+                        sizeof(std::uint32_t), static_cast<VkDeviceSize>(copiedCount) *
+                            sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage));
+                    const std::uint32_t meshId = currentFrame < virtualPageUsageMeshIds.size()
+                        ? virtualPageUsageMeshIds[currentFrame]
+                        : std::numeric_limits<std::uint32_t>::max();
+                    if (bytes && bytes->size() >= static_cast<std::size_t>(copiedCount) *
+                            sizeof(Halcyon::Renderer::Scene::VirtualGeometryPageUsage) &&
+                        meshId != std::numeric_limits<std::uint32_t>::max())
+                    {
+                        if (auto* streamer = sceneResources.virtualGeometryStreamer(meshId))
+                        {
+                            std::vector<Halcyon::Renderer::Scene::VirtualGeometryPageUsage> used(copiedCount);
+                            std::memcpy(used.data(), bytes->data(), used.size() * sizeof(used[0]));
+                            std::sort(used.begin(), used.end(), [](const auto& left, const auto& right)
+                            {
+                                if (left.pageIndex != right.pageIndex)
+                                    return left.pageIndex < right.pageIndex;
+                                return left.generation < right.generation;
+                            });
+                            used.erase(std::unique(used.begin(), used.end(),
+                                [](const auto& left, const auto& right)
+                                {
+                                    return left.pageIndex == right.pageIndex &&
+                                        left.generation == right.generation;
+                                }), used.end());
+                            const std::uint64_t usageFrame = currentFrame <
+                                    virtualPageUsageFrameIndices.size()
+                                ? virtualPageUsageFrameIndices[currentFrame]
+                                : packet.frameIndex;
+                            for (const auto& usage : used)
+                            {
+                                (void)streamer->touchResident(usage.pageIndex, usage.generation, usageFrame,
+                                    frame.timelineValue);
+                            }
+                        }
+                    }
+                }
+            }
+            virtualPageUsageValid[currentFrame] = false;
         }
         const std::uint64_t requestedPages =
             static_cast<std::uint64_t>(stats.virtualPageRequestCount) +
@@ -2003,6 +2283,12 @@ struct Renderer::Impl
         stats.virtualGeometryResidentPages = streamingStats.residentPages;
         stats.virtualGeometryEvictedPages = streamingStats.evictedPages;
         stats.virtualGeometryUploadedBytes = sceneResources.virtualGeometryUploadedBytes();
+        stats.virtualPageUsageTouchCount = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(streamingStats.usageTouches,
+                std::numeric_limits<std::uint32_t>::max()));
+        stats.virtualPagePoolPeakPages = streamingStats.residentPagePeak;
+        stats.virtualPageEvictionFrameProtected = streamingStats.evictionFrameProtected;
+        stats.virtualPageEvictionTimelineBlocked = streamingStats.evictionTimelineBlocked;
         if (frame.submitted && config.enableGpuDrivenScene &&
             currentFrame < gpuVisibilityReadbacks.size() &&
             currentFrame < gpuVisibilityValid.size() && gpuVisibilityValid[currentFrame])
@@ -2286,6 +2572,8 @@ struct Renderer::Impl
             virtualGeometryValid[currentFrame] = false;
         if (currentFrame < virtualPageRequestValid.size())
             virtualPageRequestValid[currentFrame] = false;
+        if (currentFrame < virtualPageUsageValid.size())
+            virtualPageUsageValid[currentFrame] = false;
         const VoidResult recordResult = recordFrame(frame, stats.swapchainImageIndex, packet,
             screenshotReadback.buffer);
         if (!recordResult)
@@ -2705,6 +2993,7 @@ VoidResult Renderer::Impl::recordFrame(
 
     FramePassContext ctx{};
     ctx.device = device;
+    ctx.cmdDrawMeshTasksIndirect = cmdDrawMeshTasksIndirect;
     ctx.cmdDrawMeshTasksIndirectCount = cmdDrawMeshTasksIndirectCount;
     ctx.frame = &frame;
     ctx.packet = &packet;
@@ -2867,6 +3156,8 @@ VoidResult Renderer::Impl::recordFrame(
     ctx.lodBalanceDepth = m3.lodBalanceDepth;
     ctx.virtualPageRequests = m3.virtualPageRequests;
     ctx.virtualPageRequestCount = m3.virtualPageRequestCount;
+    ctx.virtualPageUsage = m3.virtualPageUsage;
+    ctx.virtualPageUsageCount = m3.virtualPageUsageCount;
     ctx.meshletIndirect = m3.meshletIndirect;
     ctx.meshletIndirectCount = m3.meshletIndirectCount;
     ctx.meshletMeshIndirect = m3.meshletMeshIndirect;

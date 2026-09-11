@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace Halcyon::Renderer::Scene
@@ -12,6 +13,34 @@ namespace Halcyon::Renderer::Scene
 
 inline constexpr std::uint32_t kVirtualGeometryDefaultPageSize = 128u * 1024u;
 inline constexpr std::uint32_t kVirtualGeometryPageHeaderSize = 16u;
+
+enum VirtualGeometryPageRequestReason : std::uint32_t
+{
+    VirtualGeometryPageRequestVisible = 1u << 0u,
+    VirtualGeometryPageRequestDependency = 1u << 1u,
+    VirtualGeometryPageRequestPrefetch = 1u << 2u,
+};
+
+struct alignas(16) VirtualGeometryPageRequest
+{
+    std::uint32_t pageIndex = 0u;
+    std::uint32_t priorityBits = 0u;
+    std::uint32_t reason = VirtualGeometryPageRequestVisible;
+    std::uint32_t reserved = 0u;
+};
+
+static_assert(sizeof(VirtualGeometryPageRequest) == 16u);
+static_assert(alignof(VirtualGeometryPageRequest) == 16u);
+static_assert(std::is_standard_layout_v<VirtualGeometryPageRequest>);
+
+struct VirtualGeometryPageUsage
+{
+    std::uint32_t pageIndex = 0u;
+    std::uint32_t generation = 0u;
+};
+
+static_assert(sizeof(VirtualGeometryPageUsage) == 8u);
+static_assert(std::is_standard_layout_v<VirtualGeometryPageUsage>);
 
 struct VirtualGeometryStreamRange
 {

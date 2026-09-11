@@ -26,11 +26,6 @@ struct MeshVertex
     nointerpolation uint visibility : TEXCOORD0;
 };
 
-struct MeshPrimitive
-{
-    nointerpolation uint primitive : TEXCOORD1;
-};
-
 uint triangleByte(uint pageIndex, uint byteOffset)
 {
     uint value = 0u;
@@ -43,8 +38,7 @@ uint triangleByte(uint pageIndex, uint byteOffset)
 void main(uint3 groupThreadId : SV_GroupThreadID,
     uint3 groupId : SV_GroupID,
     out vertices MeshVertex outputVertices[64],
-    out indices uint3 outputTriangles[124],
-    out primitives MeshPrimitive outputPrimitives[124])
+    out indices uint3 outputTriangles[124])
 {
     const uint drawToken = groupId.x < visibleCount[0] ? visibleMeshlets[groupId.x] : 0u;
     const uint meshletIndex = vgDrawTokenMeshlet(drawToken);
@@ -90,6 +84,5 @@ void main(uint3 groupThreadId : SV_GroupThreadID,
             triangleByte(meshlet.pageIndex, triangleOffset),
             triangleByte(meshlet.pageIndex, triangleOffset + 1u),
             triangleByte(meshlet.pageIndex, triangleOffset + 2u));
-        outputPrimitives[triangleIndex].primitive = triangleIndex;
     }
 }

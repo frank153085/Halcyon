@@ -10,7 +10,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$output = [System.IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
+$output = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
+    [System.IO.Path]::GetFullPath($OutputDirectory)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
+}
 $framesToRun = [Math]::Max(2100, $Frames)
 $cache = Join-Path $root "assets/models/lucy/lucy.ply.halcyon.vgcache"
 if (-not (Test-Path -LiteralPath $cache)) {
@@ -46,6 +50,18 @@ foreach ($path in $paths) {
         throw "Missing M6 acceptance output for $($path.Name): $csv or $png"
     }
     $rows = @(Import-Csv -LiteralPath $csv | Where-Object { $_.frame -match '^\d+$' })
+    $requiredColumns = @(
+        "virtual_page_usage_touch_count",
+        "virtual_page_prefetch_count",
+        "virtual_page_pool_peak_pages",
+        "virtual_page_eviction_frame_protected",
+        "virtual_page_eviction_timeline_blocked"
+    )
+    foreach ($column in $requiredColumns) {
+        if (-not ($rows[0].PSObject.Properties.Name -contains $column)) {
+            throw "$($path.Name) CSV is missing M6 streaming column '$column'."
+        }
+    }
     # The application intentionally omits the 300-frame warmup from the CSV,
     # so a 2100-frame run contains exactly 1800 measured rows (300..2099).
     if ($rows.Count -lt 1800) {

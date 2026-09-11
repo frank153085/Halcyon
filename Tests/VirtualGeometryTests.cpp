@@ -3,9 +3,11 @@
 #include "Renderer/Scene/VirtualGeometryCache.h"
 #include "Renderer/Scene/VirtualGeometryPages.h"
 #include "Renderer/Scene/VirtualGeometryStreamer.h"
+#include "Renderer/Scene/FramePacket.h"
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -14,6 +16,7 @@
 #include <limits>
 #include <string>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 using namespace Halcyon::Renderer::Scene;
@@ -90,6 +93,30 @@ StaticScene makeGridScene(std::uint32_t cells)
 
 void buildTests()
 {
+    EXPECT(alignof(CameraMotionData) == 16u);
+    EXPECT(sizeof(CameraMotionData) == 32u);
+    EXPECT(sizeof(VirtualGeometryPageRequest) == 16u);
+    EXPECT(sizeof(VirtualGeometryPageUsage) == 8u);
+    std::vector<VirtualGeometryPageRequest> requestAbi = {
+        {4u, std::bit_cast<std::uint32_t>(1.0f), VirtualGeometryPageRequestPrefetch, 0u},
+        {2u, std::bit_cast<std::uint32_t>(2.0f), VirtualGeometryPageRequestDependency, 0u},
+        {1u, std::bit_cast<std::uint32_t>(3.0f), VirtualGeometryPageRequestVisible, 0u},
+        {1u, std::bit_cast<std::uint32_t>(0.5f), VirtualGeometryPageRequestPrefetch, 0u}};
+    std::sort(requestAbi.begin(), requestAbi.end(), [](const auto& left, const auto& right)
+    {
+        if (left.reason != right.reason) return left.reason < right.reason;
+        const float leftPriority = std::bit_cast<float>(left.priorityBits);
+        const float rightPriority = std::bit_cast<float>(right.priorityBits);
+        if (leftPriority != rightPriority) return leftPriority > rightPriority;
+        return left.pageIndex < right.pageIndex;
+    });
+    EXPECT(requestAbi[0].reason == VirtualGeometryPageRequestVisible);
+    EXPECT(requestAbi[1].reason == VirtualGeometryPageRequestDependency);
+    std::unordered_set<std::uint32_t> requestPages;
+    requestAbi.erase(std::remove_if(requestAbi.begin(), requestAbi.end(),
+        [&requestPages](const auto& request)
+        { return !requestPages.insert(request.pageIndex).second; }), requestAbi.end());
+    EXPECT(requestAbi.size() == 3u);
     const auto encoded = encodeVirtualVisibility(3u, 0u, 2u);
     EXPECT(encoded != 0u);
     EXPECT((encoded & kVirtualVisibilityInstanceMask) == 3u);
@@ -740,9 +767,13 @@ void streamerTests()
         EXPECT(!streamer.value()->markResident(
             nonRootPage, generation + 1u, 1u, 3u));
         EXPECT(streamer.value()->markResident(nonRootPage, generation, 1u, 3u));
+        EXPECT(streamer.value()->touchResident(nonRootPage, generation, 9u, 3u));
+        EXPECT(streamer.value()->beginEviction(3u, 10u) ==
+            std::numeric_limits<std::uint32_t>::max());
+        EXPECT(streamer.value()->touchResident(nonRootPage, generation, 1u, 3u));
         EXPECT(streamer.value()->beginEviction(2u, 10u) ==
             std::numeric_limits<std::uint32_t>::max());
-        EXPECT(streamer.value()->beginEviction(3u, 10u) == nonRootPage);
+        EXPECT(streamer.value()->beginEviction(3u, 12u) == nonRootPage);
         EXPECT(streamer.value()->finishEviction(nonRootPage, generation));
         EXPECT(streamer.value()->pageGeneration(nonRootPage) == generation + 1u);
         EXPECT(streamer.value()->pageState(nonRootPage) ==

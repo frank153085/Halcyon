@@ -7,7 +7,10 @@
 #include "Core/Profiler.h"
 
 #include <chrono>
+#include <algorithm>
+#include <cmath>
 #include <exception>
+#include <glm/gtc/quaternion.hpp>
 #include <new>
 #include <utility>
 
@@ -24,6 +27,57 @@ struct Engine::Impl
     bool initialized = false;
     bool enableTransparency = true;
     bool virtualGeometryRequested = false;
+    float fixedDeltaSeconds = 1.0f / 60.0f;
+    bool previousCameraValid = false;
+    std::uint64_t previousCameraFrame = 0u;
+    glm::vec3 previousCameraPosition{0.0f};
+    glm::vec3 previousCameraForward{0.0f, 0.0f, -1.0f};
+    glm::vec2 previousViewport{0.0f};
+
+    void updateCameraMotion(OwnedSceneFramePacket& packet)
+    {
+        packet.cameraMotion = {};
+        const glm::vec3 position = glm::vec3(packet.camera.positionAndNear);
+        const glm::vec3 rawForward = glm::vec3(packet.camera.forwardAndFar);
+        const float forwardLength = glm::length(rawForward);
+        const glm::vec3 forward = forwardLength > 1.0e-5f
+            ? rawForward / forwardLength : glm::vec3{0.0f, 0.0f, -1.0f};
+        const glm::vec2 viewport = glm::vec2(packet.camera.viewportAndInvViewport);
+        const float dt = fixedDeltaSeconds;
+        const bool finitePose = std::all_of(&position.x, &position.x + 3,
+            [](float value) { return std::isfinite(value); }) &&
+            std::all_of(&forward.x, &forward.x + 3,
+                [](float value) { return std::isfinite(value); });
+        const bool finiteViewport = std::isfinite(viewport.x) &&
+            std::isfinite(viewport.y) && viewport.x > 0.0f && viewport.y > 0.0f;
+        const bool contiguous = previousCameraValid &&
+            packet.frameIndex > previousCameraFrame &&
+            packet.frameIndex - previousCameraFrame <= 2u &&
+            glm::all(glm::equal(viewport, previousViewport));
+        if (finitePose && finiteViewport && contiguous && std::isfinite(dt) && dt > 1.0e-5f)
+        {
+            const glm::vec3 displacement = position - previousCameraPosition;
+            const float distance = glm::length(displacement);
+            const float cosine = std::clamp(glm::dot(forward, previousCameraForward), -1.0f, 1.0f);
+            const float angle = std::acos(cosine);
+            if (distance <= 25.0f && angle <= glm::radians(90.0f))
+            {
+                const glm::vec3 rotationAxis = glm::cross(previousCameraForward, forward);
+                const float axisLength = glm::length(rotationAxis);
+                const glm::vec3 angularVelocity = axisLength > 1.0e-5f
+                    ? rotationAxis * (angle / (dt * axisLength)) : glm::vec3{0.0f};
+                packet.cameraMotion.linearVelocityAndDt =
+                    glm::vec4(displacement / dt, dt);
+                packet.cameraMotion.angularVelocityAndValid =
+                    glm::vec4(angularVelocity, 1.0f);
+            }
+        }
+        previousCameraPosition = position;
+        previousCameraForward = finitePose ? forward : glm::vec3{0.0f, 0.0f, -1.0f};
+        previousViewport = viewport;
+        previousCameraFrame = packet.frameIndex;
+        previousCameraValid = finitePose && finiteViewport;
+    }
 };
 
 namespace
@@ -79,11 +133,16 @@ namespace
     result.virtualLodSwitchCount = source.virtualLodSwitchCount;
     result.virtualPageRequestCount = source.virtualPageRequestCount;
     result.virtualPageRequestOverflowCount = source.virtualPageRequestOverflowCount;
+    result.virtualPageUsageTouchCount = source.virtualPageUsageTouchCount;
+    result.virtualPagePrefetchCount = source.virtualPagePrefetchCount;
     result.virtualGeometryQualityScale = source.virtualGeometryQualityScale;
     result.virtualGeometryStreamingPressure = source.virtualGeometryStreamingPressure;
     result.virtualGeometryResidentPages = source.virtualGeometryResidentPages;
     result.virtualGeometryEvictedPages = source.virtualGeometryEvictedPages;
     result.virtualGeometryUploadedBytes = source.virtualGeometryUploadedBytes;
+    result.virtualPagePoolPeakPages = source.virtualPagePoolPeakPages;
+    result.virtualPageEvictionFrameProtected = source.virtualPageEvictionFrameProtected;
+    result.virtualPageEvictionTimelineBlocked = source.virtualPageEvictionTimelineBlocked;
     result.meshShaderActive = source.meshShaderActive;
     result.meshShaderFallbackReason = source.meshShaderFallbackReason;
     result.virtualInvalidVisibilityCount = source.virtualInvalidVisibilityCount;
@@ -184,6 +243,7 @@ Result<std::unique_ptr<Engine>> Engine::create(Platform::Window& window, const E
     backendConfig.instanceIdReportPath = config.instanceIdReportPath;
 
     impl->enableTransparency = config.enableTransparency;
+    impl->fixedDeltaSeconds = config.fixedDeltaSeconds;
     impl->virtualGeometryRequested =
         config.renderPath == RenderPathMode::VirtualGeometryIndexed ||
         config.renderPath == RenderPathMode::VirtualGeometryMeshShader;
@@ -326,6 +386,7 @@ Result<FrameStats> Engine::render(std::uint64_t frameIndex)
         {
             return Result<FrameStats>::failure(packet.error().withContext("Engine::render"));
         }
+        impl_->updateCameraMotion(packet.value());
         const Vulkan::FrameStats backendStats = impl_->renderer.render(packet.value().view());
         FrameStats stats = translateStats(backendStats);
         stats.cpuVisibilityMs = cpuVisibilityMs;

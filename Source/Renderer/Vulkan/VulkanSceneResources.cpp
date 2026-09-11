@@ -704,11 +704,27 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
             auto& ready = readyPages[readyIndex];
             if (ready.pageIndex >= gpu.virtualToPhysical.size() ||
                 ready.pageIndex >= gpu.pageTableCpu.size() ||
-                ready.bytes.size() != gpu.virtualPageSize)
+                ready.bytes.size() != gpu.virtualPageSize ||
+                streamer.pageGeneration(ready.pageIndex) != ready.generation)
             {
                 abandonFrom(readyIndex);
                 return resourceError(Halcyon::ErrorCode::InvalidState,
                     "streamer returned an invalid virtual geometry page");
+            }
+
+            // A ready page must correspond to an unmapped CPU page-table slot.
+            // If a stale upload races with eviction, reject it before touching
+            // the physical pool or publishing a generation that the streamer
+            // no longer owns.
+            if (gpu.virtualToPhysical[ready.pageIndex] != invalidPage ||
+                (gpu.pageTableCpu[ready.pageIndex].flags & VirtualGeometryPageResident) != 0u ||
+                gpu.pageTableCpu[ready.pageIndex].generation != ready.generation ||
+                std::find(gpu.physicalToVirtual.begin(), gpu.physicalToVirtual.end(),
+                    ready.pageIndex) != gpu.physicalToVirtual.end())
+            {
+                abandonFrom(readyIndex);
+                return resourceError(Halcyon::ErrorCode::InvalidState,
+                    "virtual geometry ready page is already mapped");
             }
 
             auto freeSlot = std::find(
@@ -727,7 +743,10 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                 const std::uint32_t victimGeneration =
                     streamer.pageGeneration(victim);
                 if (physical >= gpu.physicalToVirtual.size() ||
-                    gpu.physicalToVirtual[physical] != victim)
+                    gpu.physicalToVirtual[physical] != victim ||
+                    gpu.pageTableCpu[victim].physicalPage != physical ||
+                    gpu.pageTableCpu[victim].generation != victimGeneration ||
+                    (gpu.pageTableCpu[victim].flags & VirtualGeometryPageResident) == 0u)
                 {
                     abandonFrom(readyIndex);
                     return resourceError(Halcyon::ErrorCode::InvalidState,
@@ -754,6 +773,10 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                     sizeof(unpublished));
                 if (!streamer.finishEviction(victim, victimGeneration))
                 {
+                    unpublished.generation = streamer.pageGeneration(victim);
+                    gpu.virtualToPhysical[victim] = invalidPage;
+                    gpu.physicalToVirtual[physical] = invalidPage;
+                    gpu.pageTableCpu[victim] = unpublished;
                     abandonFrom(readyIndex);
                     return resourceError(Halcyon::ErrorCode::InvalidState,
                         "virtual geometry streamer rejected a completed eviction");
@@ -801,6 +824,24 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
             if (!streamer.markResident(
                     ready.pageIndex, ready.generation, frameIndex, publishTimeline))
             {
+                (void)streamer.abandonUpload(ready.pageIndex, ready.generation);
+                VirtualGeometryGpuPageTableEntry cleared{};
+                cleared.physicalPage = invalidPage;
+                cleared.generation = streamer.pageGeneration(ready.pageIndex);
+                cleared.lastRequestedFrame = std::numeric_limits<std::uint32_t>::max();
+                if (const auto clear = copyBytes(gpu.pageTable,
+                        std::as_bytes(std::span<const VirtualGeometryGpuPageTableEntry>{
+                            &cleared, 1u}),
+                        static_cast<VkDeviceSize>(ready.pageIndex) * sizeof(cleared));
+                    clear)
+                {
+                    barrierAfterCopy(gpu.pageTable.buffer,
+                        static_cast<VkDeviceSize>(ready.pageIndex) * sizeof(cleared),
+                        sizeof(cleared));
+                }
+                gpu.virtualToPhysical[ready.pageIndex] = invalidPage;
+                gpu.physicalToVirtual[physical] = invalidPage;
+                gpu.pageTableCpu[ready.pageIndex] = cleared;
                 abandonFrom(readyIndex);
                 return resourceError(Halcyon::ErrorCode::InvalidState,
                     "virtual geometry streamer rejected a published page");
@@ -853,8 +894,13 @@ VulkanSceneResources::virtualGeometryStreamingStats() const
         aggregate.retriedReads += stats.retriedReads;
         aggregate.evictedPages += stats.evictedPages;
         aggregate.readyBytes += stats.readyBytes;
+        aggregate.usageTouches += stats.usageTouches;
+        aggregate.evictionFrameProtected += stats.evictionFrameProtected;
+        aggregate.evictionTimelineBlocked += stats.evictionTimelineBlocked;
         aggregate.queuedPages += stats.queuedPages;
         aggregate.residentPages += stats.residentPages;
+        aggregate.residentPagePeak = std::max(aggregate.residentPagePeak,
+            stats.residentPagePeak);
     }
     return aggregate;
 }

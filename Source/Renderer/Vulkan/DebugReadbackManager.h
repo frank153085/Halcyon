@@ -30,13 +30,18 @@ public:
     std::vector<bool> gpuVisibilityValid;
     std::vector<BufferAllocation> virtualGeometryReadbacks;
     std::vector<bool> virtualGeometryValid;
-    // Count followed by VirtualPageRequestCapacity virtual page indices.
+    // Count followed by VirtualPageRequestCapacity fixed-layout request records.
     // Each slot is consumed only after its frame fence has completed.
     std::vector<BufferAllocation> virtualPageRequestReadbacks;
     std::vector<bool> virtualPageRequestValid;
     std::vector<std::uint64_t> virtualPageRequestFrameIndices;
     std::vector<std::uint32_t> virtualPageRequestPageCounts;
     std::vector<std::uint32_t> virtualPageRequestMeshIds;
+    std::vector<BufferAllocation> virtualPageUsageReadbacks;
+    std::vector<bool> virtualPageUsageValid;
+    std::vector<std::uint64_t> virtualPageUsageFrameIndices;
+    std::vector<std::uint32_t> virtualPageUsagePageCounts;
+    std::vector<std::uint32_t> virtualPageUsageMeshIds;
     std::vector<std::vector<std::uint32_t>> gpuReferenceVisible;
     std::vector<BufferAllocation> instanceIdReadbacks;
     std::vector<bool> instanceIdReadbackValid;

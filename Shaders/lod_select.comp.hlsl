@@ -45,13 +45,19 @@ struct LodFrame
 [[vk::binding(8, 0)]] RWStructuredBuffer<PageTableEntry> pageTable;
 [[vk::binding(9, 0)]] StructuredBuffer<PageDependencyRange> nodePageRanges;
 [[vk::binding(10, 0)]] StructuredBuffer<uint> pageDependencies;
-[[vk::binding(11, 0)]] RWStructuredBuffer<uint> pageRequests;
+[[vk::binding(11, 0)]] RWStructuredBuffer<uint4> pageRequests;
 [[vk::binding(12, 0)]] RWStructuredBuffer<uint> pageRequestCount;
+[[vk::binding(13, 0)]] RWStructuredBuffer<uint2> pageUsage;
+[[vk::binding(14, 0)]] RWStructuredBuffer<uint> pageUsageCount;
 [[vk::push_constant]] ConstantBuffer<LodFrame> frame;
 
 static const uint VG_PAGE_RESIDENT = 1u;
+static const uint VG_PAGE_REQUEST_VISIBLE = 1u;
+static const uint VG_PAGE_REQUEST_DEPENDENCY = 2u;
 
-bool nodePagesResident(uint nodeIndex)
+float projectedError(DagNode node);
+
+bool nodePagesResident(uint nodeIndex, uint requestReason)
 {
     const PageDependencyRange range = nodePageRanges[nodeIndex];
     bool resident = true;
@@ -65,17 +71,36 @@ bool nodePagesResident(uint nodeIndex)
             continue;
         }
         if ((pageTable[pageIndex].flags & VG_PAGE_RESIDENT) != 0u)
+        {
+            uint previousFrame = 0u;
+            InterlockedExchange(pageTable[pageIndex].lastRequestedFrame,
+                frame.outputAndRoot.w, previousFrame);
+            if (previousFrame != frame.outputAndRoot.w)
+            {
+                uint usageIndex = 0u;
+                InterlockedAdd(pageUsageCount[0], 1u, usageIndex);
+                if (usageIndex < asuint(frame.thresholds.z))
+                    pageUsage[usageIndex] = uint2(pageIndex, pageTable[pageIndex].generation);
+            }
             continue;
+        }
         resident = false;
         uint previousFrame = 0u;
         InterlockedExchange(pageTable[pageIndex].lastRequestedFrame,
             frame.outputAndRoot.w, previousFrame);
-        if (previousFrame != frame.outputAndRoot.w)
+        // A dependency walk can encounter a page before the page is reached
+        // through the visible frontier. Preserve the higher-priority visible
+        // reason so CPU-side ordering cannot be defeated by GPU traversal
+        // order. CPU readback folds the resulting duplicate by page index.
+        if (previousFrame != frame.outputAndRoot.w ||
+            requestReason == VG_PAGE_REQUEST_VISIBLE)
         {
             uint requestIndex = 0u;
             InterlockedAdd(pageRequestCount[0], 1u, requestIndex);
-            if (requestIndex < frame.outputAndRoot.x)
-                pageRequests[requestIndex] = pageIndex;
+            if (requestIndex < asuint(frame.thresholds.w))
+                pageRequests[requestIndex] = uint4(pageIndex,
+                    asuint(projectedError(dagNodes[nodeIndex])),
+                    requestReason, 0u);
         }
     }
     return resident;
@@ -152,7 +177,8 @@ void main(uint3 id : SV_DispatchThreadID)
                     childEdge < frame.counts.z; ++childEdge)
             {
                 const uint child = dagEdges[childEdge].child;
-                if (child >= frame.counts.y || !nodePagesResident(child))
+                if (child >= frame.counts.y ||
+                    !nodePagesResident(child, VG_PAGE_REQUEST_DEPENDENCY))
                 {
                     decision = 0u;
                     break;
@@ -221,7 +247,11 @@ void main(uint3 id : SV_DispatchThreadID)
         ancestor = dagNodes[ancestor].parentIndex;
     }
     lodStates[id.x].pad = decision | (active ? 2u : 0u);
-    if (!active) return;
+    if (!active || !nodePagesResident(id.x, VG_PAGE_REQUEST_VISIBLE))
+    {
+        lodStates[id.x].pad = decision;
+        return;
+    }
     uint output = 0u;
     InterlockedAdd(selectionCounters[0], 1u, output);
     if (output < frame.outputAndRoot.x) selectedNodes[output] = id.x;

@@ -7,10 +7,10 @@ struct PSOut
     uint barycentrics : SV_Target2;
 };
 
-// Mesh pipelines carry the meshlet-local primitive through a per-primitive
-// output. SV_PrimitiveID is not used here because Vulkan mesh pipelines do not
-// guarantee that it contains the local meshlet primitive index.
-PSOut main(uint visibility : TEXCOORD0, nointerpolation uint primitiveIndex : TEXCOORD1,
+// Mesh pipelines use the fragment primitive built-in directly. This avoids
+// the DXC HLSL limitation that otherwise emits PerPrimitiveEXT on the mesh
+// output but cannot reproduce it on the fragment input.
+PSOut main(uint visibility : TEXCOORD0, uint primitiveIndex : SV_PrimitiveID,
     float3 bary : SV_Barycentrics)
 {
     PSOut o;
