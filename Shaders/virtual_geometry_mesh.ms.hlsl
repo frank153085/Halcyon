@@ -31,10 +31,10 @@ struct MeshPrimitive
     nointerpolation uint primitive : TEXCOORD1;
 };
 
-uint triangleByte(uint byteOffset)
+uint triangleByte(uint pageIndex, uint byteOffset)
 {
     uint value = 0u;
-    (void)vgLoadTriangleByte(byteOffset, value);
+    (void)vgLoadTriangleByte(pageIndex, byteOffset, value);
     return value;
 }
 
@@ -68,9 +68,9 @@ void main(uint3 groupThreadId : SV_GroupThreadID,
     {
         uint sourceIndex = 0u;
         Vertex sourceVertex;
-        const bool validVertex = vgLoadMeshletVertex(
+        const bool validVertex = vgLoadMeshletVertex(meshlet.pageIndex,
             meshlet.vertexOffset + vertexIndex, sourceIndex) &&
-            vgLoadVertex(sourceIndex, sourceVertex);
+            vgLoadVertex(meshlet.pageIndex, sourceIndex, sourceVertex);
         MeshVertex output;
         output.position = validVertex
             ? mul(constants.viewProjection, mul(model, float4(sourceVertex.position, 1.0)))
@@ -87,8 +87,9 @@ void main(uint3 groupThreadId : SV_GroupThreadID,
     {
         const uint triangleOffset = meshlet.triangleOffset + triangleIndex * 3u;
         outputTriangles[triangleIndex] = uint3(
-            triangleByte(triangleOffset), triangleByte(triangleOffset + 1u),
-            triangleByte(triangleOffset + 2u));
+            triangleByte(meshlet.pageIndex, triangleOffset),
+            triangleByte(meshlet.pageIndex, triangleOffset + 1u),
+            triangleByte(meshlet.pageIndex, triangleOffset + 2u));
         outputPrimitives[triangleIndex].primitive = triangleIndex;
     }
 }

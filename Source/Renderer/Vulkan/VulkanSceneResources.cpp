@@ -164,10 +164,11 @@ VulkanSceneResources::uploadVirtualGeometry(
     // programmatic SceneDatabase users. Recheck the GPU-facing spans here so
     // a malformed asset cannot create descriptors whose shader-visible range
     // disagrees with its meshlet metadata.
-    if (asset.vertices.empty() || asset.meshlets.empty() || asset.lods.empty() ||
-        asset.clusters.empty() || asset.dagNodes.empty() ||
+    if (asset.meshlets.empty() || asset.lods.empty() || asset.clusters.empty() ||
+        asset.dagNodes.empty() ||
         (asset.dagNodes.size() > 1u && asset.dagEdges.empty()) ||
-        asset.meshlets.size() > (1u << 20u) - 1u)
+        asset.meshlets.size() > (1u << 20u) - 1u ||
+        (streamer == nullptr && asset.vertices.empty()))
     {
         return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
             {Halcyon::ErrorCode::InvalidArgument,
@@ -183,8 +184,15 @@ VulkanSceneResources::uploadVirtualGeometry(
     {
         if (meshlet.vertexCount == 0u || meshlet.vertexCount > 64u ||
             meshlet.triangleCount == 0u || meshlet.triangleCount > 124u ||
-            meshlet.indexCount != meshlet.triangleCount * 3u ||
-            !inRange(meshlet.vertexOffset, meshlet.vertexCount, asset.meshletVertices.size()) ||
+            meshlet.indexCount != meshlet.triangleCount * 3u)
+        {
+            return Halcyon::Result<VirtualGeometryGpuBuffers>::failure(
+                {Halcyon::ErrorCode::InvalidArgument,
+                    "virtual geometry meshlet range is outside its upload table"});
+        }
+        if (streamer != nullptr)
+            continue;
+        if (!inRange(meshlet.vertexOffset, meshlet.vertexCount, asset.meshletVertices.size()) ||
             !inRange(meshlet.triangleOffset, meshlet.indexCount, asset.meshletTriangles.size()) ||
             !inRange(meshlet.indexOffset, meshlet.indexCount, asset.indices.size()))
         {
@@ -244,24 +252,46 @@ VulkanSceneResources::uploadVirtualGeometry(
         output = count * elementSize;
         return true;
     };
+    Halcyon::Renderer::Scene::VirtualGeometryPageLayout pageLayout;
+    if (streamer != nullptr)
+    {
+        pageLayout = streamer->metadata().pageLayout;
+    }
+    else
+    {
+        const auto pageLayoutResult =
+            Halcyon::Renderer::Scene::buildVirtualGeometryPageLayout(asset);
+        if (!pageLayoutResult)
+            return fail(Halcyon::Result<void>::failure(pageLayoutResult.error()));
+        pageLayout = pageLayoutResult.value();
+    }
+    if (pageLayout.meshletAddresses.size() != asset.meshlets.size())
+    {
+        return fail(Halcyon::Result<void>::failure({Halcyon::ErrorCode::InvalidArgument,
+            "virtual geometry Meshlet page addresses are incomplete"}));
+    }
     std::vector<VirtualGeometryGpuMeshlet> gpuMeshlets;
     try
     {
         gpuMeshlets.reserve(asset.meshlets.size());
-        for (const auto& source : asset.meshlets)
+        for (std::size_t meshletIndex = 0; meshletIndex < asset.meshlets.size();
+             ++meshletIndex)
         {
+            const auto& source = asset.meshlets[meshletIndex];
+            const auto& address = pageLayout.meshletAddresses[meshletIndex];
             VirtualGeometryGpuMeshlet destination{};
-            destination.vertexOffset = source.vertexOffset;
+            destination.vertexOffset = address.vertexOffset;
             destination.vertexCount = source.vertexCount;
-            destination.triangleOffset = source.triangleOffset;
+            destination.triangleOffset = address.triangleOffset;
             destination.triangleCount = source.triangleCount;
-            destination.indexOffset = source.indexOffset;
+            destination.indexOffset = address.triangleOffset;
             destination.indexCount = source.indexCount;
             destination.primitiveIndex = source.primitiveIndex;
             destination.lodIndex = source.lodIndex;
             destination.sphere = source.sphere;
             destination.cone = source.cone;
             destination.geometricError = source.geometricError;
+            destination.pageIndex = address.pageIndex;
             gpuMeshlets.push_back(destination);
         }
     }
@@ -290,11 +320,6 @@ VulkanSceneResources::uploadVirtualGeometry(
     std::vector<std::uint32_t> meshletDagNodes;
     std::vector<std::uint32_t> clusterAdjacencyOffsets;
     std::vector<std::uint32_t> clusterAdjacencyIndices;
-    const auto pageLayoutResult =
-        Halcyon::Renderer::Scene::buildVirtualGeometryPageLayout(asset);
-    if (!pageLayoutResult)
-        return fail(Halcyon::Result<void>::failure(pageLayoutResult.error()));
-    const auto& pageLayout = pageLayoutResult.value();
     constexpr std::uint32_t invalidPhysicalPage = std::numeric_limits<std::uint32_t>::max();
     std::vector<VirtualGeometryGpuPageTableEntry> pageTable;
     try
@@ -587,14 +612,77 @@ VulkanSceneResources::uploadVirtualGeometry(
 }
 
 Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
-    std::uint64_t frameIndex)
+    std::uint64_t frameIndex, VkCommandBuffer commandBuffer,
+    std::vector<BufferAllocation>& frameUploads,
+    std::uint64_t completedTimeline, std::uint64_t publishTimeline)
 {
-    if (allocator_ == nullptr || uploader_ == nullptr || device_ == VK_NULL_HANDLE ||
-        uploadCommandPool_ == VK_NULL_HANDLE || graphicsQueue_ == VK_NULL_HANDLE)
+    if (allocator_ == nullptr || device_ == VK_NULL_HANDLE ||
+        commandBuffer == VK_NULL_HANDLE)
     {
         return resourceError(Halcyon::ErrorCode::InvalidState,
             "virtual geometry streaming resources are not initialized");
     }
+
+    const auto copyBytes = [&](BufferAllocation destination,
+        std::span<const std::byte> data, VkDeviceSize destinationOffset)
+        -> Halcyon::Result<void>
+    {
+        if (data.empty() || destination.buffer == VK_NULL_HANDLE)
+            return resourceError(Halcyon::ErrorCode::InvalidArgument,
+                "virtual geometry streaming copy is empty");
+        VkBufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        info.size = data.size_bytes();
+        info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        const auto stagingResult = allocator_->createBuffer(info, MemoryUsage::CpuToGpu);
+        if (!stagingResult)
+            return Halcyon::Result<void>::failure(stagingResult.error());
+        BufferAllocation staging = stagingResult.value();
+        const auto write = allocator_->writeBuffer(staging, data);
+        if (!write)
+        {
+            allocator_->destroy(staging);
+            return Halcyon::Result<void>::failure(write.error());
+        }
+        try
+        {
+            frameUploads.push_back(staging);
+        }
+        catch (...)
+        {
+            allocator_->destroy(staging);
+            return resourceError(Halcyon::ErrorCode::OutOfMemory,
+                "failed to retain virtual geometry streaming staging");
+        }
+        VkBufferCopy copy{};
+        copy.dstOffset = destinationOffset;
+        copy.size = data.size_bytes();
+        vkCmdCopyBuffer(commandBuffer, staging.buffer, destination.buffer, 1, &copy);
+        return Halcyon::Result<void>::success();
+    };
+    const auto barrierAfterCopy = [&](VkBuffer buffer, VkDeviceSize offset,
+        VkDeviceSize size)
+    {
+        VkBufferMemoryBarrier2 ready{};
+        ready.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        ready.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        ready.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        ready.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT |
+            VK_PIPELINE_STAGE_2_COPY_BIT;
+        ready.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+            VK_ACCESS_2_TRANSFER_READ_BIT;
+        ready.buffer = buffer;
+        ready.offset = offset;
+        ready.size = size;
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.bufferMemoryBarrierCount = 1;
+        dependency.pBufferMemoryBarriers = &ready;
+        vkCmdPipelineBarrier2(commandBuffer, &dependency);
+    };
 
     constexpr std::uint32_t invalidPage = std::numeric_limits<std::uint32_t>::max();
     for (auto& [meshIndex, gpu] : virtualGeometryGpuByMesh_)
@@ -627,25 +715,11 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                 gpu.physicalToVirtual.begin(), gpu.physicalToVirtual.end(), invalidPage);
             if (freeSlot == gpu.physicalToVirtual.end())
             {
-                // GpuUploader submissions are synchronous. Waiting here before
-                // selecting a victim also covers frames that did not upload a
-                // page, so overwriting a physical slot can never race a draw.
-                const VkResult idle = vkQueueWaitIdle(graphicsQueue_);
-                if (idle != VK_SUCCESS)
-                {
-                    abandonFrom(readyIndex);
-                    return resourceError(idle == VK_ERROR_DEVICE_LOST
-                            ? Halcyon::ErrorCode::DeviceLost
-                            : Halcyon::ErrorCode::Backend,
-                        "failed to wait for virtual geometry page eviction");
-                }
                 const std::uint32_t victim = streamer.beginEviction(
-                    std::numeric_limits<std::uint64_t>::max(), frameIndex);
+                    completedTimeline, frameIndex);
                 if (victim == invalidPage || victim >= gpu.virtualToPhysical.size() ||
                     victim >= gpu.pageTableCpu.size())
                 {
-                    // All slots are pinned or protected. Return the pages to
-                    // Unloaded so a later GPU request can retry them.
                     abandonFrom(readyIndex);
                     break;
                 }
@@ -665,8 +739,7 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                 unpublished.generation = victimGeneration;
                 unpublished.lastRequestedFrame =
                     std::numeric_limits<std::uint32_t>::max();
-                const auto unpublish = uploader_->uploadBuffer(device_,
-                    uploadCommandPool_, graphicsQueue_, *allocator_, gpu.pageTable,
+                const auto unpublish = copyBytes(gpu.pageTable,
                     std::as_bytes(std::span<const VirtualGeometryGpuPageTableEntry>{
                         &unpublished, 1u}),
                     static_cast<VkDeviceSize>(victim) * sizeof(unpublished));
@@ -676,6 +749,9 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                     return Halcyon::Result<void>::failure(
                         unpublish.error().withContext("unpublish virtual geometry page"));
                 }
+                barrierAfterCopy(gpu.pageTable.buffer,
+                    static_cast<VkDeviceSize>(victim) * sizeof(unpublished),
+                    sizeof(unpublished));
                 if (!streamer.finishEviction(victim, victimGeneration))
                 {
                     abandonFrom(readyIndex);
@@ -691,8 +767,7 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
 
             const std::uint32_t physical = static_cast<std::uint32_t>(
                 std::distance(gpu.physicalToVirtual.begin(), freeSlot));
-            const auto uploadPage = uploader_->uploadBuffer(device_, uploadCommandPool_,
-                graphicsQueue_, *allocator_, gpu.geometryPagePool, ready.bytes,
+            const auto uploadPage = copyBytes(gpu.geometryPagePool, ready.bytes,
                 static_cast<VkDeviceSize>(physical) * gpu.virtualPageSize);
             if (!uploadPage)
             {
@@ -700,6 +775,9 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                 return Halcyon::Result<void>::failure(
                     uploadPage.error().withContext("upload virtual geometry page"));
             }
+            barrierAfterCopy(gpu.geometryPagePool.buffer,
+                static_cast<VkDeviceSize>(physical) * gpu.virtualPageSize,
+                ready.bytes.size());
             virtualGeometryUploadedBytes_ += ready.bytes.size();
 
             VirtualGeometryGpuPageTableEntry published{};
@@ -707,8 +785,7 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
             published.generation = ready.generation;
             published.flags = VirtualGeometryPageResident;
             published.lastRequestedFrame = std::numeric_limits<std::uint32_t>::max();
-            const auto publish = uploader_->uploadBuffer(device_, uploadCommandPool_,
-                graphicsQueue_, *allocator_, gpu.pageTable,
+            const auto publish = copyBytes(gpu.pageTable,
                 std::as_bytes(std::span<const VirtualGeometryGpuPageTableEntry>{
                     &published, 1u}),
                 static_cast<VkDeviceSize>(ready.pageIndex) * sizeof(published));
@@ -718,19 +795,12 @@ Halcyon::Result<void> VulkanSceneResources::serviceVirtualGeometryStreaming(
                 return Halcyon::Result<void>::failure(
                     publish.error().withContext("publish virtual geometry page"));
             }
+            barrierAfterCopy(gpu.pageTable.buffer,
+                static_cast<VkDeviceSize>(ready.pageIndex) * sizeof(published),
+                sizeof(published));
             if (!streamer.markResident(
-                    ready.pageIndex, ready.generation, frameIndex, frameIndex))
+                    ready.pageIndex, ready.generation, frameIndex, publishTimeline))
             {
-                VirtualGeometryGpuPageTableEntry unpublished{};
-                unpublished.physicalPage = invalidPage;
-                unpublished.generation = ready.generation;
-                unpublished.lastRequestedFrame =
-                    std::numeric_limits<std::uint32_t>::max();
-                (void)uploader_->uploadBuffer(device_, uploadCommandPool_, graphicsQueue_,
-                    *allocator_, gpu.pageTable,
-                    std::as_bytes(std::span<const VirtualGeometryGpuPageTableEntry>{
-                        &unpublished, 1u}),
-                    static_cast<VkDeviceSize>(ready.pageIndex) * sizeof(unpublished));
                 abandonFrom(readyIndex);
                 return resourceError(Halcyon::ErrorCode::InvalidState,
                     "virtual geometry streamer rejected a published page");

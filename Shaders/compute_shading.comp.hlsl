@@ -181,8 +181,6 @@ void main(uint3 id : SV_DispatchThreadID)
     if (meshlet.vertexCount == 0u || meshlet.vertexCount > VG_MESHLET_MAX_VERTICES ||
         meshlet.triangleCount == 0u || meshlet.triangleCount > VG_MESHLET_MAX_TRIANGLES ||
         meshlet.indexCount != meshlet.triangleCount * 3u ||
-        meshlet.indexOffset > constants.indexCount ||
-        meshlet.indexCount > constants.indexCount - meshlet.indexOffset ||
         triangleIndex >= meshlet.triangleCount ||
         triangleIndex >= meshlet.indexCount / 3u)
     {
@@ -193,10 +191,9 @@ void main(uint3 id : SV_DispatchThreadID)
     uint i0 = 0u;
     uint i1 = 0u;
     uint i2 = 0u;
-    if (!vgLoadIndex(triangleBase + 0u, i0) ||
-        !vgLoadIndex(triangleBase + 1u, i1) ||
-        !vgLoadIndex(triangleBase + 2u, i2) ||
-        i0 >= constants.vertexCount || i1 >= constants.vertexCount || i2 >= constants.vertexCount)
+    if (!vgLoadIndex(meshlet.pageIndex, triangleBase + 0u, i0) ||
+        !vgLoadIndex(meshlet.pageIndex, triangleBase + 1u, i1) ||
+        !vgLoadIndex(meshlet.pageIndex, triangleBase + 2u, i2))
     {
         hdr[id.xy] = float4(0.012, 0.018, 0.028, 1.0);
         return;
@@ -213,7 +210,9 @@ void main(uint3 id : SV_DispatchThreadID)
     Vertex v0;
     Vertex v1;
     Vertex v2;
-    if (!vgLoadVertex(i0, v0) || !vgLoadVertex(i1, v1) || !vgLoadVertex(i2, v2))
+    if (!vgLoadVertex(meshlet.pageIndex, i0, v0) ||
+        !vgLoadVertex(meshlet.pageIndex, i1, v1) ||
+        !vgLoadVertex(meshlet.pageIndex, i2, v2))
     {
         hdr[id.xy] = float4(0.012, 0.018, 0.028, 1.0);
         return;

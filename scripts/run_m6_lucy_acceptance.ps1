@@ -93,7 +93,7 @@ if ($hashes["indexed"] -ne $hashes["mesh"]) {
 
 $manifest = [ordered]@{
     fixture = "Stanford Lucy"
-    cacheVersion = 4
+    cacheVersion = 5
     frames = $framesToRun
     warmupFrames = 300
     measurementFrames = 1800

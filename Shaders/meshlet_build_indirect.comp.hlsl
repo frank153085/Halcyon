@@ -16,10 +16,9 @@ struct Constants { uint meshletCount; uint commandCapacity; uint instanceCount; 
     MeshletMeta m = meshlets[meshletIndex];
     if (m.vertexCount == 0u || m.vertexCount > VG_MESHLET_MAX_VERTICES ||
         m.triangleCount == 0u || m.triangleCount > VG_MESHLET_MAX_TRIANGLES ||
-        m.indexCount != m.triangleCount * 3u ||
-        m.indexOffset > constants.indexCount ||
-        m.indexCount > constants.indexCount - m.indexOffset)
+        m.indexCount != m.triangleCount * 3u)
         return;
+    (void)constants.indexCount;
     uint commandIndex = 0u;
     InterlockedAdd(commandCount[0], 1u, commandIndex);
     if (commandIndex >= constants.commandCapacity) return;

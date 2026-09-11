@@ -11,6 +11,7 @@ namespace Halcyon::Renderer::Scene
 {
 
 inline constexpr std::uint32_t kVirtualGeometryDefaultPageSize = 128u * 1024u;
+inline constexpr std::uint32_t kVirtualGeometryPageHeaderSize = 16u;
 
 struct VirtualGeometryStreamRange
 {
@@ -24,9 +25,34 @@ struct VirtualGeometryPageDependencyRange
     std::uint32_t count = 0u;
 };
 
-// Stable virtual byte-address layout for the pageable GPU geometry streams.
-// Meshlet, Cluster, DAG and dependency metadata remain resident and therefore
-// are deliberately absent from these four ranges.
+struct VirtualGeometryPackedMeshletAddress
+{
+    std::uint32_t pageIndex = 0u;
+    std::uint32_t vertexOffset = 0u;
+    std::uint32_t triangleOffset = 0u;
+};
+
+struct VirtualGeometryPageMeshlet
+{
+    std::uint32_t meshletIndex = 0u;
+    std::uint32_t vertexOffset = 0u;
+    std::uint32_t triangleOffset = 0u;
+};
+
+struct VirtualGeometryPageDescriptor
+{
+    std::uint32_t meshletOffset = 0u;
+    std::uint32_t meshletCount = 0u;
+    std::uint32_t vertexCount = 0u;
+    std::uint32_t meshletVertexCount = 0u;
+    std::uint32_t triangleByteCount = 0u;
+};
+
+// Cluster/Meshlet-atomic GPU pages. A meshlet is never split across pages.
+// Adjacent Clusters may share a page, but each Cluster still occupies a
+// consecutive page range and is only considered resident when every dependency
+// page is present. The four logical stream ranges describe the reconstructed
+// CPU tables and are not a GPU byte-address map.
 struct VirtualGeometryPageLayout
 {
     std::uint32_t pageSize = kVirtualGeometryDefaultPageSize;
@@ -39,6 +65,9 @@ struct VirtualGeometryPageLayout
     std::vector<VirtualGeometryPageDependencyRange> nodeDependencies;
     std::vector<std::uint32_t> dependencyPageIndices;
     std::vector<std::uint32_t> rootPageIndices;
+    std::vector<VirtualGeometryPackedMeshletAddress> meshletAddresses;
+    std::vector<VirtualGeometryPageDescriptor> pages;
+    std::vector<VirtualGeometryPageMeshlet> pageMeshlets;
 };
 
 [[nodiscard]] Halcyon::Result<VirtualGeometryPageLayout>
@@ -46,11 +75,15 @@ buildVirtualGeometryPageLayout(const VirtualGeometryAsset& asset,
     std::uint32_t pageSize = kVirtualGeometryDefaultPageSize);
 
 // Materializes exactly one virtual page without building a second full-size
-// geometry payload in memory. The returned bytes use the same ABI currently
-// uploaded to Vulkan for each source stream.
+// geometry payload in memory. The returned bytes are an atomic Cluster/Meshlet
+// payload addressed through the GPU page table.
 [[nodiscard]] Halcyon::Result<std::vector<std::byte>>
 serializeVirtualGeometryPage(const VirtualGeometryAsset& asset,
     const VirtualGeometryPageLayout& layout, std::uint32_t pageIndex);
+
+[[nodiscard]] Halcyon::Result<void> unpackVirtualGeometryPage(
+    VirtualGeometryAsset& asset, const VirtualGeometryPageLayout& layout,
+    std::uint32_t pageIndex, std::span<const std::byte> page);
 
 [[nodiscard]] bool virtualGeometryNodeDependsOnPage(
     const VirtualGeometryPageLayout& layout, std::uint32_t nodeIndex,

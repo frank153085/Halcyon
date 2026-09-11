@@ -24,7 +24,7 @@ namespace
 constexpr std::array<char, 8> kMagic{'H', 'A', 'L', 'C', 'Y', 'O', 'N', 'V'};
 constexpr std::uint32_t kEndian = 0x01020304u;
 constexpr std::uint32_t kResidentMetadataMagic = 0x354d4756u; // VGM5
-constexpr std::uint32_t kResidentMetadataVersion = 2u;
+constexpr std::uint32_t kResidentMetadataVersion = 3u;
 constexpr std::size_t kMaxVisibilityMeshlets = kVirtualVisibilityMeshletMask;
 constexpr std::uint64_t kHeaderSize = 128u;
 constexpr std::uint64_t kPageDirectoryEntrySize = 32u;
@@ -444,7 +444,12 @@ Halcyon::Result<std::vector<std::byte>> serializeResidentMetadata(
             !fits32(asset.dagNodes.size()) || !fits32(asset.dagEdges.size()) ||
             !fits32(boundaryCount) || !fits32(adjacencyCount) ||
             !fits32(layout.nodeDependencies.size()) ||
-            !fits32(layout.dependencyPageIndices.size()))
+            !fits32(layout.dependencyPageIndices.size()) ||
+            !fits32(layout.meshletAddresses.size()) ||
+            !fits32(layout.pages.size()) ||
+            !fits32(layout.pageMeshlets.size()) ||
+            layout.meshletAddresses.size() != asset.meshlets.size() ||
+            layout.pages.size() != layout.pageCount)
             return typedCacheError<std::vector<std::byte>>(
                 "resident metadata table exceeds the cache integer range");
 
@@ -491,6 +496,7 @@ Halcyon::Result<std::vector<std::byte>> serializeResidentMetadata(
         append32(payload, layout.pageCount);
         append32(payload, static_cast<std::uint32_t>(layout.nodeDependencies.size()));
         append32(payload, static_cast<std::uint32_t>(layout.dependencyPageIndices.size()));
+        append32(payload, static_cast<std::uint32_t>(layout.pageMeshlets.size()));
 
         for (const auto& meshlet : asset.meshlets)
         {
@@ -549,6 +555,24 @@ Halcyon::Result<std::vector<std::byte>> serializeResidentMetadata(
         }
         for (const auto page : layout.dependencyPageIndices)
             append32(payload, page);
+        for (const auto& address : layout.meshletAddresses)
+        {
+            append32(payload, address.pageIndex);
+            append32(payload, address.vertexOffset);
+            append32(payload, address.triangleOffset);
+        }
+        for (const auto& page : layout.pages)
+        {
+            append32(payload, page.meshletOffset); append32(payload, page.meshletCount);
+            append32(payload, page.vertexCount); append32(payload, page.meshletVertexCount);
+            append32(payload, page.triangleByteCount);
+        }
+        for (const auto& packed : layout.pageMeshlets)
+        {
+            append32(payload, packed.meshletIndex);
+            append32(payload, packed.vertexOffset);
+            append32(payload, packed.triangleOffset);
+        }
         if (payload.size() > kMaxResidentMetadataBytes)
             return typedCacheError<std::vector<std::byte>>(
                 "resident metadata exceeds the supported size");
@@ -573,7 +597,7 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
     std::uint32_t clusterCount = 0u, dagNodeCount = 0u, dagEdgeCount = 0u;
     std::uint32_t boundaryCount = 0u, adjacencyCount = 0u, metisVersion = 0u;
     std::uint32_t storedDagChecksum = 0u, dependencyRangeCount = 0u;
-    std::uint32_t dependencyPageCount = 0u;
+    std::uint32_t dependencyPageCount = 0u, pageMeshletCount = 0u;
     auto& build = result.options.build;
     auto& layout = result.pageLayout;
     if (!reader.read32(magic) || !reader.read32(version) ||
@@ -604,7 +628,8 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
         !reader.read64(layout.meshletTriangles.size) ||
         !reader.read64(layout.indices.offset) || !reader.read64(layout.indices.size) ||
         !reader.read32(layout.pageSize) || !reader.read32(layout.pageCount) ||
-        !reader.read32(dependencyRangeCount) || !reader.read32(dependencyPageCount))
+        !reader.read32(dependencyRangeCount) || !reader.read32(dependencyPageCount) ||
+        !reader.read32(pageMeshletCount))
         return cacheVoidError("resident metadata header is truncated");
     if (magic != kResidentMetadataMagic || version != kResidentMetadataVersion)
         return cacheVoidError("resident metadata version is incompatible");
@@ -618,23 +643,15 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
         primitiveCount > 1000000u || clusterCount > 1000000u ||
         dagNodeCount > 2000000u || dagEdgeCount > 4000000u ||
         boundaryCount > 100000000u || adjacencyCount > 100000000u ||
-        dependencyRangeCount != dagNodeCount || dependencyPageCount > 100000000u)
+        dependencyRangeCount != dagNodeCount || dependencyPageCount > 100000000u ||
+        pageMeshletCount > 100000000u)
         return cacheVoidError("resident metadata counts are unreasonable");
 
-    std::uint64_t expected = 0u;
-    std::uint64_t cursor = 0u;
     const auto validateStream = [&](VirtualGeometryStreamRange range,
                                     std::uint64_t count, std::uint64_t stride)
     {
         std::uint64_t size = 0u;
-        if (!tableByteSize(count, stride, size) || range.size != size ||
-            range.offset != cursor || range.offset % layout.pageSize != 0u)
-            return false;
-        if (!checkedAdd(range.offset, range.size, expected))
-            return false;
-        cursor = (expected + layout.pageSize - 1u) &
-            ~static_cast<std::uint64_t>(layout.pageSize - 1u);
-        return true;
+        return tableByteSize(count, stride, size) && range.size == size;
     };
     if (layout.pageSize != result.options.pageSize || layout.pageSize == 0u ||
         layout.pageCount == 0u ||
@@ -643,7 +660,12 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
         !validateStream(layout.meshletVertices, meshletVertexCount, sizeof(std::uint32_t)) ||
         !validateStream(layout.meshletTriangles, triangleByteCount, sizeof(std::uint8_t)) ||
         !validateStream(layout.indices, indexCount, sizeof(std::uint32_t)) ||
-        cursor != layout.rawSize)
+        layout.vertices.offset != 0u ||
+        layout.meshletVertices.offset != layout.vertices.size ||
+        layout.meshletTriangles.offset !=
+            layout.vertices.size + layout.meshletVertices.size ||
+        layout.indices.offset != layout.vertices.size + layout.meshletVertices.size +
+            layout.meshletTriangles.size)
         return cacheVoidError("resident virtual-address layout is invalid");
 
     auto& asset = result.residentAsset;
@@ -657,6 +679,9 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
         asset.dagEdges.resize(dagEdgeCount);
         layout.nodeDependencies.resize(dependencyRangeCount);
         layout.dependencyPageIndices.resize(dependencyPageCount);
+        layout.meshletAddresses.resize(meshletCount);
+        layout.pages.resize(layout.pageCount);
+        layout.pageMeshlets.resize(pageMeshletCount);
     }
     catch (const std::bad_alloc&)
     {
@@ -736,6 +761,19 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
     for (auto& page : layout.dependencyPageIndices)
         if (!reader.read32(page))
             return cacheVoidError("resident page dependency table is truncated");
+    for (auto& address : layout.meshletAddresses)
+        if (!reader.read32(address.pageIndex) || !reader.read32(address.vertexOffset) ||
+            !reader.read32(address.triangleOffset))
+            return cacheVoidError("resident Meshlet page addresses are truncated");
+    for (auto& page : layout.pages)
+        if (!reader.read32(page.meshletOffset) || !reader.read32(page.meshletCount) ||
+            !reader.read32(page.vertexCount) || !reader.read32(page.meshletVertexCount) ||
+            !reader.read32(page.triangleByteCount))
+            return cacheVoidError("resident page descriptors are truncated");
+    for (auto& packed : layout.pageMeshlets)
+        if (!reader.read32(packed.meshletIndex) || !reader.read32(packed.vertexOffset) ||
+            !reader.read32(packed.triangleOffset))
+            return cacheVoidError("resident page Meshlet table is truncated");
     if (reader.offset != bytes.size() || observedBoundaryCount != boundaryCount ||
         observedAdjacencyCount != adjacencyCount || !validateVirtualGeometryDag(asset) ||
         storedDagChecksum != dagChecksum(asset))
@@ -754,6 +792,17 @@ Halcyon::Result<void> deserializeResidentMetadata(std::span<const std::byte> byt
                 return cacheVoidError("resident page dependencies are not sorted and valid");
         }
     }
+    if (layout.meshletAddresses.size() != meshletCount ||
+        layout.pages.size() != layout.pageCount)
+        return cacheVoidError("resident page address tables are incomplete");
+    for (const auto& address : layout.meshletAddresses)
+        if (address.pageIndex >= layout.pageCount)
+            return cacheVoidError("resident Meshlet page address is out of range");
+    for (const auto& page : layout.pages)
+        if (static_cast<std::size_t>(page.meshletOffset) > layout.pageMeshlets.size() ||
+            static_cast<std::size_t>(page.meshletCount) >
+                layout.pageMeshlets.size() - page.meshletOffset)
+            return cacheVoidError("resident page Meshlet range is invalid");
     return Halcyon::Result<void>::success();
 }
 
@@ -1678,33 +1727,15 @@ Halcyon::Result<VirtualGeometryAsset> readVirtualGeometryCache(
     {
         return cacheAllocationError();
     }
-    const auto copyOverlap = [](std::span<const std::byte> page,
-                                std::uint64_t pageOffset,
-                                VirtualGeometryStreamRange range,
-                                void* destination)
-    {
-        const std::uint64_t pageEnd = pageOffset + page.size();
-        const std::uint64_t rangeEnd = range.offset + range.size;
-        const std::uint64_t begin = std::max(pageOffset, range.offset);
-        const std::uint64_t end = std::min(pageEnd, rangeEnd);
-        if (begin >= end)
-            return;
-        std::memcpy(static_cast<std::byte*>(destination) + (begin - range.offset),
-            page.data() + (begin - pageOffset), static_cast<std::size_t>(end - begin));
-    };
     for (std::uint32_t pageIndex = 0u; pageIndex < cacheMetadata->pages.size(); ++pageIndex)
     {
         auto page = readVirtualGeometryCachePage(path, cacheMetadata.value(), pageIndex);
         if (!page)
             return Halcyon::Result<VirtualGeometryAsset>::failure(page.error());
-        const std::uint64_t pageOffset =
-            static_cast<std::uint64_t>(pageIndex) * layout.pageSize;
-        copyOverlap(page.value(), pageOffset, layout.vertices, asset.vertices.data());
-        copyOverlap(page.value(), pageOffset, layout.meshletVertices,
-            asset.meshletVertices.data());
-        copyOverlap(page.value(), pageOffset, layout.meshletTriangles,
-            asset.meshletTriangles.data());
-        copyOverlap(page.value(), pageOffset, layout.indices, asset.indices.data());
+        const auto unpacked = unpackVirtualGeometryPage(
+            asset, layout, pageIndex, page.value());
+        if (!unpacked)
+            return Halcyon::Result<VirtualGeometryAsset>::failure(unpacked.error());
     }
     if (const auto invalid = validateAsset(asset, cacheMetadata->options.build))
         return cacheError(std::string(*invalid));

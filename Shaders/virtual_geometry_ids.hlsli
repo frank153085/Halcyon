@@ -43,7 +43,8 @@ struct MeshletMeta
     float4 sphere;
     float4 cone;
     float geometricError;
-    float3 padding;
+    uint pageIndex;
+    float2 padding;
 };
 
 struct Vertex

@@ -2003,27 +2003,6 @@ struct Renderer::Impl
         stats.virtualGeometryResidentPages = streamingStats.residentPages;
         stats.virtualGeometryEvictedPages = streamingStats.evictedPages;
         stats.virtualGeometryUploadedBytes = sceneResources.virtualGeometryUploadedBytes();
-        const auto streamingResult =
-            sceneResources.serviceVirtualGeometryStreaming(packet.frameIndex);
-        if (!streamingResult)
-        {
-            setError(streamingResult.error().describe());
-            if (streamingResult.error().code == Halcyon::ErrorCode::DeviceLost)
-            {
-                deviceLost = true;
-                initialized = false;
-                fatalError = true;
-                stats.deviceLost = true;
-                stats.fatalError = true;
-                stats.cpuFrameMs = elapsedMilliseconds(begin);
-                return stats;
-            }
-        }
-        stats.virtualGeometryStreamingPressure = sceneResources.virtualGeometryStreamingPressure();
-        streamingStats = sceneResources.virtualGeometryStreamingStats();
-        stats.virtualGeometryResidentPages = streamingStats.residentPages;
-        stats.virtualGeometryEvictedPages = streamingStats.evictedPages;
-        stats.virtualGeometryUploadedBytes = sceneResources.virtualGeometryUploadedBytes();
         if (frame.submitted && config.enableGpuDrivenScene &&
             currentFrame < gpuVisibilityReadbacks.size() &&
             currentFrame < gpuVisibilityValid.size() && gpuVisibilityValid[currentFrame])
@@ -2507,6 +2486,16 @@ VoidResult Renderer::Impl::recordFrame(
     }
     if (currentFrame >= frameUploadBuffers.size())
         return fail("GPU scene upload frame slot is out of range");
+
+    std::uint64_t completedTimeline = 0;
+    if (vkGetSemaphoreCounterValue(
+            device, frameContext.timelineSemaphore, &completedTimeline) != VK_SUCCESS)
+        completedTimeline = 0;
+    const auto streamingResult = sceneResources.serviceVirtualGeometryStreaming(
+        packet.frameIndex, frame.commandBuffer, frameUploadBuffers[currentFrame],
+        completedTimeline, frameContext.nextTimelineValue);
+    if (!streamingResult)
+        return fail(streamingResult.error().describe());
 
     RendererConfig passConfig = config;
     if (config.renderPath == Halcyon::Renderer::Scene::RenderPathMode::VirtualGeometryIndexed ||

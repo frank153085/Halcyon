@@ -29,29 +29,21 @@ VSOut main(uint vertexId : SV_VertexID, uint drawToken : SV_InstanceID)
     const uint meshletId = vgDrawTokenMeshlet(drawToken);
     const uint instanceIndex = vgDrawTokenInstance(drawToken);
     const GeometryPageInfo pageInfo = geometryPageInfoBuffer[0];
-    if (meshletId >= constants.meshletCount || instanceIndex >= constants.instanceCount ||
-        vertexId >= pageInfo.indexCount)
+    if (meshletId >= constants.meshletCount || instanceIndex >= constants.instanceCount)
         return o;
     MeshletMeta m = meshlets[meshletId];
     if (m.vertexCount == 0u || m.vertexCount > VG_MESHLET_MAX_VERTICES ||
         m.triangleCount == 0u || m.triangleCount > VG_MESHLET_MAX_TRIANGLES ||
-        m.indexCount != m.triangleCount * 3u ||
-        m.vertexOffset >= pageInfo.meshletVertexCount ||
-        m.vertexCount > pageInfo.meshletVertexCount - m.vertexOffset)
+        m.indexCount != m.triangleCount * 3u)
         return o;
-    // Validate the first meshlet-local vertex through the metadata stream as
-    // well. The indexed draw still supplies the global vertex ID; this read
-    // keeps the meshlet table and visibility ABI coupled in the shader.
-    uint firstMeshletVertex = 0u;
-    if (!vgLoadMeshletVertex(m.vertexOffset, firstMeshletVertex) ||
-        firstMeshletVertex >= pageInfo.vertexCount)
-        return o;
+    (void)pageInfo;
     // The bound index buffer is a shared 0..371 sequence. vertexOffset carries
-    // the meshlet's virtual index-stream offset, so SV_VertexID is translated
+    // the meshlet's page-local index-stream offset, so SV_VertexID is translated
     // through the resident page table here.
     uint vertexIndex = 0u;
     Vertex v;
-    if (!vgLoadIndex(vertexId, vertexIndex) || !vgLoadVertex(vertexIndex, v))
+    if (!vgLoadIndex(m.pageIndex, vertexId, vertexIndex) ||
+        !vgLoadVertex(m.pageIndex, vertexIndex, v))
         return o;
     const float4x4 model = transforms[instanceIndex].model;
     o.position = mul(constants.viewProjection, mul(model, float4(v.position, 1.0)));

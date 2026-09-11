@@ -46,7 +46,9 @@ public:
     [[nodiscard]] Halcyon::Result<void> releaseAsset(
         const Halcyon::Renderer::Scene::SceneImportResult& imported);
     [[nodiscard]] Halcyon::Result<void> serviceVirtualGeometryStreaming(
-        std::uint64_t frameIndex);
+        std::uint64_t frameIndex, VkCommandBuffer commandBuffer,
+        std::vector<BufferAllocation>& frameUploads,
+        std::uint64_t completedTimeline, std::uint64_t publishTimeline);
     [[nodiscard]] float virtualGeometryStreamingPressure() const;
     [[nodiscard]] Halcyon::Renderer::Scene::VirtualGeometryStreamingStats
         virtualGeometryStreamingStats() const;
@@ -169,7 +171,8 @@ public:
         glm::vec4 sphere{0.0f};
         glm::vec4 cone{0.0f};
         float geometricError = 0.0f;
-        std::array<float, 3> padding{};
+        std::uint32_t pageIndex = 0u;
+        std::array<float, 2> padding{};
     };
     static_assert(sizeof(VirtualGeometryGpuMeshlet) == 80);
     struct alignas(16) VirtualGeometryGpuCluster

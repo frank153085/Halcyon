@@ -622,42 +622,38 @@ void streamerTests()
     EXPECT(built);
     if (!built)
         return;
-    const auto pageLayout = buildVirtualGeometryPageLayout(built.value(), 4096u);
+    const auto pageLayout = buildVirtualGeometryPageLayout(built.value(), 8192u);
     EXPECT(pageLayout);
     if (!pageLayout)
         return;
     EXPECT(pageLayout->pageCount > 1u);
     EXPECT(pageLayout->nodeDependencies.size() == built->dagNodes.size());
     EXPECT(!pageLayout->rootPageIndices.empty());
+    EXPECT(pageLayout->meshletAddresses.size() == built->meshlets.size());
+    EXPECT(pageLayout->pages.size() == pageLayout->pageCount);
     EXPECT(!buildVirtualGeometryPageLayout(built.value(), 5000u));
 
-    std::vector<std::byte> pageableBytes(
-        static_cast<std::size_t>(pageLayout->rawSize), std::byte{0});
+    VirtualGeometryAsset reconstructed = built.value();
+    reconstructed.vertices.assign(built->vertices.size(), {});
+    reconstructed.meshletVertices.assign(built->meshletVertices.size(), 0u);
+    reconstructed.meshletTriangles.assign(built->meshletTriangles.size(), 0u);
+    reconstructed.indices.assign(built->indices.size(), 0u);
     for (std::uint32_t pageIndex = 0u; pageIndex < pageLayout->pageCount; ++pageIndex)
     {
         const auto page = serializeVirtualGeometryPage(
             built.value(), pageLayout.value(), pageIndex);
         EXPECT(page);
-        if (page)
-            std::copy(page->begin(), page->end(),
-                pageableBytes.begin() + static_cast<std::size_t>(pageIndex) *
-                    pageLayout->pageSize);
+        if (!page)
+            continue;
+        EXPECT(unpackVirtualGeometryPage(
+            reconstructed, pageLayout.value(), pageIndex, page.value()));
     }
-    const auto matchesStream = [&](VirtualGeometryStreamRange range,
-                                   const void* source, std::size_t size)
-    {
-        return range.size == size &&
-            std::memcmp(pageableBytes.data() + static_cast<std::size_t>(range.offset),
-                source, size) == 0;
-    };
-    EXPECT(matchesStream(pageLayout->vertices, built->vertices.data(),
-        built->vertices.size() * sizeof(built->vertices[0])));
-    EXPECT(matchesStream(pageLayout->meshletVertices, built->meshletVertices.data(),
-        built->meshletVertices.size() * sizeof(built->meshletVertices[0])));
-    EXPECT(matchesStream(pageLayout->meshletTriangles, built->meshletTriangles.data(),
-        built->meshletTriangles.size() * sizeof(built->meshletTriangles[0])));
-    EXPECT(matchesStream(pageLayout->indices, built->indices.data(),
-        built->indices.size() * sizeof(built->indices[0])));
+    EXPECT(reconstructed.vertices.size() == built->vertices.size());
+    EXPECT(std::memcmp(reconstructed.vertices.data(), built->vertices.data(),
+        built->vertices.size() * sizeof(built->vertices[0])) == 0);
+    EXPECT(reconstructed.meshletVertices == built->meshletVertices);
+    EXPECT(reconstructed.meshletTriangles == built->meshletTriangles);
+    EXPECT(reconstructed.indices == built->indices);
     EXPECT(!serializeVirtualGeometryPage(
         built.value(), pageLayout.value(), pageLayout->pageCount));
     for (std::uint32_t nodeIndex = 0u; nodeIndex < built->dagNodes.size(); ++nodeIndex)
@@ -688,7 +684,7 @@ void streamerTests()
                 pageLayout->dependencyPageIndices[dependency.offset + i]));
     }
     VirtualGeometryCacheOptions cacheOptions{};
-    cacheOptions.pageSize = 4096u;
+    cacheOptions.pageSize = 8192u;
     const Sha256Digest hash{};
     EXPECT(writeVirtualGeometryCache(path, built.value(), hash, cacheOptions));
     const auto metadata = readVirtualGeometryCacheMetadata(path, &hash, &cacheOptions);
@@ -698,8 +694,8 @@ void streamerTests()
     EXPECT(metadata->pages.size() > 1u);
 
     VirtualGeometryStreamingConfig streamingConfig{};
-    streamingConfig.cpuStagingBudgetBytes = 16u * 4096u;
-    streamingConfig.maxUploadBytesPerFrame = 4096u;
+    streamingConfig.cpuStagingBudgetBytes = 16u * 8192u;
+    streamingConfig.maxUploadBytesPerFrame = 8192u;
     streamingConfig.maxUploadPagesPerFrame = 1u;
     auto streamer = VirtualGeometryStreamer::open(
         path, &hash, &cacheOptions, streamingConfig);

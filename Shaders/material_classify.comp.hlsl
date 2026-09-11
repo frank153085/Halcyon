@@ -55,12 +55,6 @@ struct Constants
     if (meshlet.vertexCount == 0u || meshlet.vertexCount > VG_MESHLET_MAX_VERTICES ||
         meshlet.triangleCount == 0u || meshlet.triangleCount > VG_MESHLET_MAX_TRIANGLES ||
         meshlet.indexCount != meshlet.triangleCount * 3u ||
-        meshlet.vertexOffset > constants.meshletVertexCount ||
-        meshlet.vertexCount > constants.meshletVertexCount - meshlet.vertexOffset ||
-        meshlet.triangleOffset > constants.indexCount ||
-        meshlet.triangleCount * 3u > constants.indexCount - meshlet.triangleOffset ||
-        meshlet.indexOffset > constants.indexCount ||
-        meshlet.indexCount > constants.indexCount - meshlet.indexOffset ||
         triangleEncoded > meshlet.triangleCount)
     {
         materialIds[pixel] = 0xffffffffu;
@@ -76,7 +70,7 @@ struct Constants
     for (uint corner = 0u; corner < 3u; ++corner)
     {
         uint localIndex = 0u;
-        if (!vgLoadTriangleByte(triangleBase + corner, localIndex) ||
+        if (!vgLoadTriangleByte(meshlet.pageIndex, triangleBase + corner, localIndex) ||
             localIndex >= meshlet.vertexCount)
         {
             materialIds[pixel] = 0xffffffffu;

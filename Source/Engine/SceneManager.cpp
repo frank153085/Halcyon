@@ -285,23 +285,25 @@ Result<SceneAssetHandle> SceneManager::createAsset(std::string name, StaticScene
                 {
                     virtualGeometryStreamer = std::shared_ptr<Renderer::Scene::VirtualGeometryStreamer>(
                         std::move(streamed).value());
+                    virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
+                        virtualGeometryStreamer->metadata().residentAsset);
                 }
                 else
                 {
                     HALCYON_LOG_WARN("Virtual Geometry streamer unavailable for ",
                         sourcePath.string(), ": ", streamed.error().describe());
+                    auto cached = Renderer::Scene::readVirtualGeometryCache(
+                        sidecar, &sourceHash.value(), nullptr, &cacheOptions);
+                    if (!cached)
+                    {
+                        HALCYON_LOG_WARN("Virtual Geometry cache unavailable for ",
+                            sourcePath.string(), ": ", cached.error().describe(),
+                            "; run HalcyonCooker to generate a v5 sidecar; using indexed fallback");
+                    }
+                    if (cached)
+                        virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
+                            std::move(cached).value());
                 }
-                auto cached = Renderer::Scene::readVirtualGeometryCache(
-                    sidecar, &sourceHash.value(), nullptr, &cacheOptions);
-                if (!cached)
-                {
-                    HALCYON_LOG_WARN("Virtual Geometry cache unavailable for ",
-                        sourcePath.string(), ": ", cached.error().describe(),
-                        "; run HalcyonCooker to generate a v5 sidecar; using indexed fallback");
-                }
-                if (cached)
-                    virtualGeometry = std::make_shared<Renderer::Scene::VirtualGeometryAsset>(
-                        std::move(cached).value());
             }
             else
             {
